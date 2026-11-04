@@ -201,8 +201,13 @@ void HWDrawInfo::ClearBuffers()
 //
 //-----------------------------------------------------------------------------
 
+EXTERN_CVAR(Bool, r_isometric)
+extern bool gIsoActive;
+extern DVector3 gIsoCamRender;
+extern DVector3 gIsoSpriteView;
 angle_t HWDrawInfo::FrustumAngle()
 {
+	if (r_isometric) return 0xffffffff; // isometric view: process all directions around the player
 	float WidescreenRatio = (float)screen->GetWidth() / screen->GetHeight();
 	float tilt = fabs(Viewpoint.HWAngles.Pitch.Degrees());
 
@@ -389,7 +394,8 @@ void HWDrawInfo::CreateScene(bool portal)
 
 	SetupSprite.Clock();
 	// vp is in render space, so we must convert back.
-	gi->processSprites(tsprites, DVector3(vp.Pos.X, -vp.Pos.Y, -vp.Pos.Z), DAngle::fromBam(vp.RotAngle), vp.TicFrac);
+	const DVector3 sprView = (gIsoActive && !portal) ? gIsoSpriteView : DVector3(vp.Pos);
+	gi->processSprites(tsprites, DVector3(sprView.X, -sprView.Y, -sprView.Z), DAngle::fromBam(vp.RotAngle), vp.TicFrac);
 	DispatchSprites();
 	SetupSprite.Unclock();
 

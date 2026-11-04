@@ -42,6 +42,7 @@ int GameMain();
 int GetAutomapZoom(int gZoom);
 
 void DrawCrosshair(int health, double xdelta, double ydelta, double scale, DAngle angle, PalEntry color = 0xffffffff);
+void DrawIsoAimMarker(int health, double xpos, double ypos); // blood2d isometric experiment (viewport-relative pixels)
 void updatePauseStatus();
 void DeferredStartGame(MapRecord* map, int skill, bool nostopsound = false);
 void ChangeLevel(MapRecord* map, int skill, bool bossexit = false);

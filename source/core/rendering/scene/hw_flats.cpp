@@ -40,6 +40,15 @@
 #include "texturemanager.h"
 #include "buildtiles.h"
 
+// blood2d isometric experiment: height used for plane-facing tests. In the main iso pass the
+// camera sits far above the player, so floors above the player's eye are still visible.
+extern bool gIsoActive;
+extern DVector3 gIsoCamRender;
+static inline double isoEyeZ(HWDrawInfo* di)
+{
+	return (gIsoActive && di->mCurrentPortal == nullptr) ? gIsoCamRender.Z : di->Viewpoint.Pos.Z;
+}
+
 #ifdef _DEBUG
 CVAR(Int, gl_breaksec, -1, 0)
 #endif
@@ -332,7 +341,8 @@ void HWFlat::ProcessSector(HWDrawInfo *di, sectortype * frontsector, int section
 	//
 	//
 	//
-	if ((which & SSRF_RENDERFLOOR) && !(frontsector->floorstat & CSTAT_SECTOR_SKY) && florz <= vp.Pos.Z)
+	const double eyeZ = isoEyeZ(di); // iso: the camera, not the player eye, decides which side of a plane is visible
+	if ((which & SSRF_RENDERFLOOR) && !(frontsector->floorstat & CSTAT_SECTOR_SKY) && florz <= eyeZ)
 	{
 		// process the original floor first.
 
@@ -371,7 +381,7 @@ void HWFlat::ProcessSector(HWDrawInfo *di, sectortype * frontsector, int section
 	//
 	// 
 	//
-	if ((which & SSRF_RENDERCEILING) && !(frontsector->ceilingstat & CSTAT_SECTOR_SKY) && ceilz >= vp.Pos.Z)
+	if ((which & SSRF_RENDERCEILING) && !(frontsector->ceilingstat & CSTAT_SECTOR_SKY) && ceilz >= eyeZ)
 	{
 		// process the original ceiling first.
 
@@ -423,7 +433,8 @@ void HWFlat::ProcessFlatSprite(HWDrawInfo* di, tspritetype* sprite, sectortype* 
 		sprite->pos.Z = sprite->sectp->floorz;
 	}
 	z = -sprite->pos.Z;
-	if (z == di->Viewpoint.Pos.Z) return; // looking right at the edge.
+	const double eyeZ = isoEyeZ(di);
+	if (z == eyeZ) return; // looking right at the edge.
 	dynlightindex = -1;
 
 	visibility = sectorVisibility(sector) *(4.f / 5.f); // The factor comes directly from Polymost. What is it with Build and these magic factors?
@@ -434,7 +445,7 @@ void HWFlat::ProcessFlatSprite(HWDrawInfo* di, tspritetype* sprite, sectortype* 
 		DVector2 pos = { di->Viewpoint.Pos.X, -di->Viewpoint.Pos.Y };
 
 		double myz = !(sprite->clipdist & TSPR_SLOPESPRITE) ? z : -spriteGetZOfSlopef(sprite, pos, tspriteGetSlope(sprite));
-		if ((di->Viewpoint.Pos.Z < myz) == ((sprite->cstat & CSTAT_SPRITE_YFLIP) == 0))
+		if ((eyeZ < myz) == ((sprite->cstat & CSTAT_SPRITE_YFLIP) == 0))
 			return;
 	}
 
@@ -449,6 +460,6 @@ void HWFlat::ProcessFlatSprite(HWDrawInfo* di, tspritetype* sprite, sectortype* 
 		SetSpriteTranslucency(sprite, alpha, RenderStyle);
 		if (belowfloor) alpha *= 0.33f;
 
-		PutFlat(di, z > di->Viewpoint.Pos.Z);
+		PutFlat(di, z > eyeZ);
 	}
 }

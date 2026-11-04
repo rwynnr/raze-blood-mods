@@ -32,6 +32,7 @@
 #include "v_video.h"
 #include "m_png.h"
 #include "i_time.h"
+#include "inputstate.h"
 #include "hw_dynlightdata.h"
 #include "hw_clock.h"
 #include "flatvertices.h"
@@ -51,6 +52,7 @@
 #include "render.h"
 #include "gamestruct.h"
 #include "gamehud.h"
+#include "c_dispatch.h"
 
 EXTERN_CVAR(Bool, cl_capfps)
 
@@ -66,6 +68,92 @@ CUSTOM_CVARD(Bool, hw_useindexedcolortextures, false, CVAR_ARCHIVE | CVAR_GLOBAL
 	if (screen) screen->SetTextureFilterMode();
 }
 CVARD(Bool, hw_models, false, CVAR_ARCHIVE | CVAR_GLOBALCONFIG, "enable/disable model rendering")
+
+// blood2d isometric experiment
+CVARD(Bool, r_isometric, false, CVAR_ARCHIVE, "enable orthographic isometric camera")
+CVARD(Bool, r_iso_longaim, false, 0, "isometric: long-range aim mode (zoomed-out camera, extended auto-aim range)")
+CVARD(Float, r_iso_longzoom, 1.8f, CVAR_ARCHIVE, "isometric: zoom-out factor in long-range aim mode")
+CVARD(Bool, r_iso_fixedcam, false, CVAR_ARCHIVE, "isometric: camera keeps a fixed world angle; movement keys become screen-relative")
+CVARD(Bool, r_iso_spritestretch, true, CVAR_ARCHIVE, "isometric: stretch upright sprites by 1/cos(pitch) so they keep their drawn proportions")
+CVARD(Float, r_iso_fixedyaw, 45.f, CVAR_ARCHIVE, "isometric: world yaw of the fixed camera, degrees")
+float gIsoSizeEff = 320.f; // effective half-height this frame (includes long-aim zoom easing); the Blood overlay projects with it
+
+EXTERN_CVAR(Float, r_iso_yaw)
+CVARD(Bool, r_iso_cursoraim, true, CVAR_ARCHIVE, "isometric fixed camera: mouse moves an aim cursor and the player faces it")
+CVARD(Float, r_iso_cursorspeed, 1.f, CVAR_ARCHIVE, "isometric: aim cursor mouse speed")
+CVARD(Bool, r_iso_cursorinvert, false, CVAR_ARCHIVE, "isometric: invert aim cursor vertical movement")
+
+// Fixed-camera yaw actually used this frame: eased toward r_iso_fixedyaw so 90-degree snaps turn smoothly.
+static double isoFixedYawEased = 45.;
+static bool isoFixedYawValid = false;
+static void isoUpdateFixedYaw(double dt)
+{
+	if (!isoFixedYawValid) { isoFixedYawEased = r_iso_fixedyaw; isoFixedYawValid = true; return; }
+	double d = remainder(r_iso_fixedyaw - isoFixedYawEased, 360.);
+	isoFixedYawEased += (fabs(d) < 0.05) ? d : d * std::min(1., dt * 10.);
+}
+
+// Yaw (Build convention) the iso camera looks along, given the player's yaw.
+DAngle isoCameraYaw(DAngle playerYaw)
+{
+	return (r_iso_fixedcam ? DAngle::fromDeg(isoFixedYawEased) : playerYaw) + DAngle::fromDeg(r_iso_yaw);
+}
+
+// Aim cursor, in units of the iso view's half-height relative to the screen center (+Y = up).
+DVector2 gIsoCursor(0., 0.4);
+bool gIsoLockActive = false; // set by the game while a target lock is held
+bool isoCursorAimActive() { return r_isometric && r_iso_fixedcam && r_iso_cursoraim; }
+// Mouse doesn't turn the player while the cursor or a target lock is steering.
+bool isoMouseCaptured() { return r_isometric && ((r_iso_fixedcam && r_iso_cursoraim) || gIsoLockActive); }
+
+CCMD(iso_rotleft)
+{
+	r_iso_fixedyaw = (float)remainder(r_iso_fixedyaw + 90., 360.);
+}
+
+CCMD(iso_rotright)
+{
+	r_iso_fixedyaw = (float)remainder(r_iso_fixedyaw - 90., 360.);
+}
+
+CCMD(iso_longaim)
+{
+	r_iso_longaim = !r_iso_longaim;
+	Printf(PRINT_NOTIFY, "%s\n", r_iso_longaim ? "Long-range aim ON" : "Long-range aim OFF");
+}
+
+CCMD(iso_fixedcam)
+{
+	r_iso_fixedcam = !r_iso_fixedcam;
+	Printf(PRINT_NOTIFY, "%s\n", r_iso_fixedcam ? "Fixed camera (screen-relative movement)" : "Follow camera");
+}
+
+CCMD(iso_toggle)
+{
+	r_isometric = !r_isometric;
+	Printf(PRINT_NOTIFY, "%s\n", r_isometric ? "Isometric view" : "First-person view");
+}
+CVARD(Float, r_iso_pitch, 35.f, CVAR_ARCHIVE, "isometric camera downward pitch in degrees")
+CVARD(Float, r_iso_size, 320.f, CVAR_ARCHIVE, "isometric half-height of visible area in world units (zoom)")
+CVARD(Float, r_iso_dist, 2048.f, CVAR_ARCHIVE, "isometric camera distance from the player")
+CVARD(Float, r_iso_yaw, 0.f, CVAR_ARCHIVE, "isometric camera yaw offset from player facing, degrees")
+CVARD(Float, r_iso_cut, 16.f, CVAR_ARCHIVE, "isometric cutaway: hide geometry this far above the player eye (world units); negative disables")
+CVARD(Int, r_iso_cutmode, 1, CVAR_ARCHIVE, "isometric cutaway: 0 = fixed r_iso_cut above eye, 1 = just under current sector ceiling (incl. sky sectors)")
+CVARD(Float, r_iso_cutmargin, 2.f, CVAR_ARCHIVE, "isometric auto cutaway: distance below the ceiling to cut (world units)")
+CVARD(Float, r_iso_lookpitch, 15.f, CVAR_ARCHIVE, "isometric: camera pitch while holding Look_Up")
+CVARD(Float, r_iso_lookcut, 160.f, CVAR_ARCHIVE, "isometric: extra cutaway height while holding Look_Up (world units)")
+CVARD(Float, r_iso_aimdist, 96.f, CVAR_ARCHIVE, "isometric aim marker distance ahead of the player (world units)")
+CVARD(Int, r_iso_sky, 1, CVAR_ARCHIVE, "isometric sky: 0 = black, 1 = perspective backdrop")
+CVARD(Float, r_iso_skypitch, -15.f, CVAR_ARCHIVE, "isometric sky backdrop pitch (negative looks up)")
+CVARD(Float, r_iso_skyfov, 90.f, CVAR_ARCHIVE, "isometric sky backdrop horizontal field of view")
+
+// Set while the main isometric view is being processed so sprite rotation frames are picked
+// from the camera instead of the player position (render-space coordinates).
+bool gIsoActive = false;
+DVector3 gIsoCamRender;
+DVector3 gIsoSpriteView; // render space: far point along the camera line, for sprite rotation frames
+float gIsoLookAmt = 0.f;   // 0..1, eased while Look_Up is held
+float gIsoPitchDeg = 35.f; // effective camera pitch this frame (the Blood overlay projects with it)
 
 
 
@@ -152,8 +240,29 @@ void RenderViewpoint(FRenderViewpoint& mainvp, IntRect* bounds, float fov, float
 		float flash = 8.f / (r_scenebrightness + 8.f);
 		di->Viewpoint.FieldOfView = FAngle::fromDeg(fov);	// Set the real FOV for the current scene (it's not necessarily the same as the global setting in r_viewpoint)
 
+		const bool iso = r_isometric && mainview && toscreen && eyeCount == 1;
+
 		// Stereo mode specific perspective projection
-		di->VPUniforms.mProjectionMatrix = eye.GetProjection(fov, ratio, fovratio, false);
+		if (iso)
+		{
+			// Orthographic: r_iso_size is the half-height of the visible area in world units.
+			// Depth range spans both sides of the camera so nothing gets near-clipped.
+			static uint64_t zoomLastMs = 0;
+			static float longAmt = 0.f;
+			uint64_t zNow = I_msTime();
+			double zdt = zoomLastMs ? std::min((zNow - zoomLastMs) / 1000., 0.1) : 0.;
+			zoomLastMs = zNow;
+			longAmt += float(((r_iso_longaim ? 1. : 0.) - longAmt) * std::min(1., zdt * 6.));
+			float h = std::max((float)r_iso_size, 16.f) * (1.f + (std::max((float)r_iso_longzoom, 1.f) - 1.f) * longAmt);
+			gIsoSizeEff = h;
+			float w = h * ratio;
+			float depth = 65536.f;
+			VSMatrix m(1);
+			m.ortho(-w, w, -h, h, -depth, depth);
+			di->VPUniforms.mProjectionMatrix = m;
+		}
+		else
+			di->VPUniforms.mProjectionMatrix = eye.GetProjection(fov, ratio, fovratio, false);
 
 		// Stereo mode specific viewpoint adjustment
 		if (eye.mShiftFactor != 0)
@@ -164,8 +273,72 @@ void RenderViewpoint(FRenderViewpoint& mainvp, IntRect* bounds, float fov, float
 			vp.SectCount = sectindex(sect);
 		}
 
-		di->SetupView(RenderState, vp.Pos.X, vp.Pos.Y, vp.Pos.Z, false, false);
+		if (iso)
+		{
+			// Visibility traversal (vp.Pos / vp.SectCount) stays at the player so the
+			// Build sector walk works; only the view matrix comes from the camera
+			// placed up and behind the player.
+			// Hold Look_Up (PgUp by default): ease the camera flatter and lift the cutaway to see above the player.
+			static uint64_t isoLastMs = 0;
+			uint64_t nowMs = I_msTime();
+			double dt = isoLastMs ? std::min((nowMs - isoLastMs) / 1000., 0.1) : 0.;
+			isoLastMs = nowMs;
+			double target = buttonMap.ButtonDown(gamefunc_Look_Up) ? 1. : 0.;
+			gIsoLookAmt += float((target - gIsoLookAmt) * std::min(1., dt * 8.));
+			gIsoPitchDeg = std::clamp((float)r_iso_pitch + ((float)r_iso_lookpitch - (float)r_iso_pitch) * gIsoLookAmt, 5.f, 89.f);
+			vp.HWAngles.Pitch = FAngle::fromDeg(gIsoPitchDeg);
+			vp.HWAngles.Roll = nullFAngle;
+			isoUpdateFixedYaw(dt);
+			if (r_iso_fixedcam) vp.HWAngles.Yaw = FAngle::fromDeg(float(isoFixedYawEased) - 90.f + r_iso_yaw); // HW yaw = build yaw - 90
+			else vp.HWAngles.Yaw += FAngle::fromDeg(r_iso_yaw);
+			{
+				// Face sprites billboard along ViewVector, which was set from the player's yaw. Point it
+				// along the camera instead, or sprites turn edge-on (invisible) when the camera doesn't
+				// look where the player faces (fixed camera, r_iso_yaw).
+				double FocalTangent = tan(vp.FieldOfView.Radians() / 2);
+				DAngle an = DAngle::fromDeg(270. - vp.HWAngles.Yaw.Degrees());
+				vp.TanSin = FocalTangent * an.Sin();
+				vp.TanCos = FocalTangent * an.Cos();
+				vp.ViewVector = an.ToVector();
+			}
+			// render space: X = build X, Y = -build Y, Z = height. HW yaw = build yaw - 90.
+			double yaw = (vp.HWAngles.Yaw.Degrees() + 90.) * (pi::pi() / 180.);
+			double pitch = vp.HWAngles.Pitch.Radians();
+			double d = r_iso_dist;
+			double horiz = d * cos(pitch);
+			float cx = float(vp.Pos.X - cos(yaw) * horiz);
+			float cy = float(vp.Pos.Y + sin(yaw) * horiz);
+			float cz = float(vp.Pos.Z + d * sin(pitch));
+			// Cutaway: clip geometry above a height so roofs and upper walls don't block the view.
+			// Mode 1 (auto): just under the ceiling of the player's current sector; none under open sky.
+			// Mode 0: fixed r_iso_cut above the eye. Eased so stepping between rooms doesn't pop.
+			static double isoCutEased = 0; static bool isoCutValid = false;
+			double cutTarget = vp.Pos.Z + r_iso_cut;
+			bool cutOn = r_iso_cut >= 0;
+			if (r_iso_cutmode == 1 && vp.SectCount >= 0 && vp.SectCount < (int)sector.Size())
+			{
+				auto sec = &sector[vp.SectCount];
+				// Sky sectors get cut at their ceiling too: leaving the sky plane in place makes it
+				// cover the floor when viewed from above.
+				cutTarget = -getceilzofslopeptr(sec, vp.Pos.X, -vp.Pos.Y) - r_iso_cutmargin; // build Z is down
+				cutOn = true;
+			}
+			if (!isoCutValid) isoCutEased = cutTarget;
+			isoCutEased += (cutTarget - isoCutEased) * std::min(1., dt * 10.);
+			isoCutValid = true;
+			if (cutOn) di->SetClipHeight(float(isoCutEased + r_iso_lookcut * gIsoLookAmt), -1.f);
+			di->SetupView(RenderState, cx, cy, cz, false, false);
+			gIsoActive = true;
+			gIsoCamRender = DVector3(cx, cy, cz);
+			// Rotation frames: in ortho every sprite is seen from the same direction, so pick frames from
+			// a point far back along the camera's line, not the camera's actual (finite) position.
+			const double isoFar = 65536.;
+			gIsoSpriteView = DVector3(vp.Pos.X - cos(yaw) * isoFar, vp.Pos.Y + sin(yaw) * isoFar, cz);
+		}
+		else
+			di->SetupView(RenderState, vp.Pos.X, vp.Pos.Y, vp.Pos.Z, false, false);
 		di->ProcessScene(toscreen);
+		gIsoActive = false;
 
 		if (mainview)
 		{

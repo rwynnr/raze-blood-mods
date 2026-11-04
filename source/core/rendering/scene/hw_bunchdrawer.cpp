@@ -48,6 +48,11 @@
 #include "texinfo.h"
 #include "buildtiles.h"
 
+// blood2d isometric experiment: from above you can see past walls the player can't,
+// so the main iso pass skips occlusion culling and draws every connected sector.
+extern bool gIsoActive;
+CVARD(Bool, r_iso_fullvis, true, CVAR_ARCHIVE, "isometric: draw sectors hidden from the player's eye (no occlusion culling)")
+
 //#define DEBUG_CLIPPER
 //==========================================================================
 //
@@ -231,6 +236,7 @@ int BunchDrawer::ClipLine(int aline, bool portal)
 	int section = cline->section;
 	int line = cline->wall;
 
+	const bool isoNoOcclusion = gIsoActive && r_iso_fullvis && !portal;
 	auto startAngleBam = ClipAngle(cline->startpoint);
 	auto endAngleBam = ClipAngle(cline->endpoint);
 
@@ -256,7 +262,7 @@ int BunchDrawer::ClipLine(int aline, bool portal)
 	// Note: These walls may be excluded from the clipper, but not from being drawn!
 	// if sectors got dragged around there may be overlaps which this code does not handle well do it may not run on such sectors.
 	bool dontclip = false;
-	if (sectStartAngle != -1 && !(sector[sections[section].sector].exflags & SECTOREX_DRAGGED)) 
+	if (sectStartAngle != -1 && !isoNoOcclusion && !(sector[sections[section].sector].exflags & SECTOREX_DRAGGED)) 
 	{
 		if ((sectStartAngle > endAngle || sectEndAngle < startAngle))
 		{
@@ -270,7 +276,7 @@ int BunchDrawer::ClipLine(int aline, bool portal)
 		}
 	}
 
-	if (!portal && !clipper->IsRangeVisible(startAngle, endAngle))
+	if (!portal && !isoNoOcclusion && !clipper->IsRangeVisible(startAngle, endAngle))
 	{
 		//Printf("\nWall %d from %2.3f - %2.3f (clipped away)\n", line, DAngle::fromBam(startAngle).Degrees(), DAngle::fromBam(endAngle).Degrees());
 		return CL_Skip;
@@ -280,7 +286,7 @@ int BunchDrawer::ClipLine(int aline, bool portal)
 	if (line >= 0 && (cline->partner == -1 || (wall[line].cstat & CSTAT_WALL_1WAY) || CheckClip(&wall[line], &topclip, &bottomclip)))
 	{
 		// one-sided
-		if (!portal && !dontclip && !(sector[sections[section].sector].exflags & SECTOREX_DONTCLIP))
+		if (!portal && !dontclip && !isoNoOcclusion && !(sector[sections[section].sector].exflags & SECTOREX_DONTCLIP))
 		{
 			clipper->AddClipRange(startAngle, endAngle);
 			//Printf("\nWall %d from %2.3f - %2.3f (blocking)\n", line, DAngle::fromBam(startAngle).Degrees(), DAngle::fromBam(endAngle).Degrees());
@@ -295,7 +301,7 @@ int BunchDrawer::ClipLine(int aline, bool portal)
 			if (portal) clipper->RemoveClipRange(startAngle, endAngle);
 			else
 			{
-				if ((topclip < FLT_MAX || bottomclip > -FLT_MAX) && !dontclip)
+				if ((topclip < FLT_MAX || bottomclip > -FLT_MAX) && !dontclip && !isoNoOcclusion)
 				{
 					clipper->AddWindowRange(startAngle, endAngle, topclip, bottomclip, viewz);
 					//Printf("\nWall %d from %2.3f - %2.3f, (%2.3f, %2.3f) (passing)\n", line, DAngle::fromBam(startAngle).Degrees(), DAngle::fromBam(endAngle).Degrees(), topclip, bottomclip);

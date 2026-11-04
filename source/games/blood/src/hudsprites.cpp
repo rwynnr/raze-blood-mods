@@ -37,6 +37,8 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "v_video.h"
 #include "gamehud.h"
 
+EXTERN_CVAR(Bool, r_isometric)
+
 BEGIN_BLD_NS
 
 
@@ -102,7 +104,7 @@ static void viewBurnTime(int gScale)
 
 void hudDraw(DBloodPlayer* pPlayer, sectortype* pSector, double bobx, double boby, double zDelta, DAngle angle, int basepal, double interpfrac)
 {
-	if (gViewPos == 0)
+	if (gViewPos == 0 && !r_isometric)
 	{
 		// Nullify incoming roll angle for now as it doesn't draw weapons made up of parts correctly.
 		angle = nullAngle;

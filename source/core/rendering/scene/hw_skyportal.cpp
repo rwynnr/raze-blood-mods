@@ -26,7 +26,15 @@
 #include "hw_renderstate.h"
 #include "skyboxtexture.h"
 
+#include "v_draw.h"
+
 CVAR(Float, skyoffsettest, 0.f, 0)
+
+// blood2d isometric experiment
+extern bool gIsoActive;
+EXTERN_CVAR(Int, r_iso_sky)
+EXTERN_CVAR(Float, r_iso_skypitch)
+EXTERN_CVAR(Float, r_iso_skyfov)
 
 //-----------------------------------------------------------------------------
 //
@@ -35,6 +43,25 @@ CVAR(Float, skyoffsettest, 0.f, 0)
 //-----------------------------------------------------------------------------
 void HWSkyPortal::DrawContents(HWDrawInfo *di, FRenderState &state)
 {
+	if (gIsoActive)
+	{
+		// The sky dome is built for a perspective camera at its center; under the
+		// isometric ortho projection it smears. Draw it as a perspective backdrop
+		// looking at the horizon (same yaw as the iso camera), only inside the
+		// stencilled sky area. di is a per-portal copy, so this doesn't leak.
+		if (r_iso_sky == 0) return; // leave sky areas black
+		di->Viewpoint.HWAngles.Pitch = FAngle::fromDeg(std::clamp((float)r_iso_skypitch, -89.f, 89.f));
+		di->Viewpoint.HWAngles.Roll = nullFAngle;
+		di->VPUniforms.mClipHeightDirection = 0.f;    // no cutaway plane for the dome
+		di->VPUniforms.mClipLine.X = -10000000.0f;
+		float ratio = ActiveRatio(screen->GetWidth(), screen->GetHeight());
+		float fovx = std::clamp((float)r_iso_skyfov, 30.f, 150.f);
+		const double d2r = pi::pi() / 180.;
+		float fovy = (float)(2 * atan(tan(fovx * d2r / 2) / ratio) / d2r);
+		di->VPUniforms.mProjectionMatrix.loadIdentity();
+		di->VPUniforms.mProjectionMatrix.perspective(fovy, ratio, 5.f, 65536.f);
+	}
+
 	int indexed = hw_int_useindexedcolortextures;
 	hw_int_useindexedcolortextures = false; // this code does not work with indexed textures.
 

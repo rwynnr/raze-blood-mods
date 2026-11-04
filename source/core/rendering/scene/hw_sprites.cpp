@@ -47,6 +47,10 @@
 #include "hw_viewpointbuffer.h"
 #include "hw_voxels.h"
 #include "buildtiles.h"
+EXTERN_CVAR(Bool, r_isometric)
+EXTERN_CVAR(Bool, r_iso_spritestretch)
+extern bool gIsoActive;
+extern float gIsoPitchDeg;
 
 //==========================================================================
 //
@@ -340,7 +344,7 @@ void HWSprite::Process(HWDrawInfo* di, tspritetype* spr, sectortype* sector, int
 	y = -spr->pos.Y;
 	auto vp = di->Viewpoint;
 
-	if ((vp.Pos.XY() - DVector2(x, y)).LengthSquared() < 0.125) return;
+	if (!r_isometric && (vp.Pos.XY() - DVector2(x, y)).LengthSquared() < 0.125) return; // iso: the player sprite sits at the view origin and must be drawn
 
 	if (modelframe == 0)
 	{
@@ -376,6 +380,10 @@ void HWSprite::Process(HWDrawInfo* di, tspritetype* spr, sectortype* sector, int
 		// convert to render space.
 		float sx = (float)spr->scale.X * 0.8f; // weird Build fuckery. Face sprites are rendered at 80% width only.
 		float sy = (float)spr->scale.Y;
+		// iso: an upright quad seen from a camera pitched down by p is foreshortened to cos(p) of its
+		// height. Stretch it back so characters keep the proportions they were drawn with (anchored at
+		// the feet; same on-screen result as tilting toward the camera, but it can't lean into walls).
+		if (gIsoActive && r_iso_spritestretch) sy /= std::max(cosf(std::clamp(gIsoPitchDeg, 0.f, 60.f) * float(pi::pi() / 180.)), 0.5f);
 		float width = xsize * sx;
 		float height = ysize * sy;
 		float xoff = tilexoff * sx;

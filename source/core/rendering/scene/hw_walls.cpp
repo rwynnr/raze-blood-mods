@@ -920,8 +920,34 @@ void HWWall::DoMidTexture(HWDrawInfo* di, walltype* wal,
 // 
 //
 //==========================================================================
+// blood2d isometric experiment: hide walls between the camera and the player.
+// A wall whose front faces away from the camera is only ever seen from behind in the
+// iso view; when it is also on the camera side of the player it blocks the view.
+extern bool gIsoActive;
+extern DVector3 gIsoCamRender;
+CVARD(Bool, r_iso_hidewalls, true, CVAR_ARCHIVE, "isometric: hide back-facing walls between the camera and the player")
+CVARD(Float, r_iso_hidemargin, 24.f, CVAR_ARCHIVE, "isometric: how far ahead of the player (world units) a wall may be and still get hidden")
+
+static bool IsoHideWall(HWDrawInfo* di, walltype* wal)
+{
+	if (!gIsoActive || !r_iso_hidewalls || di->mCurrentPortal != nullptr) return false;
+	// Build-space positions (render Y is negated).
+	DVector2 player(di->Viewpoint.Pos.X, -di->Viewpoint.Pos.Y);
+	DVector2 cam(gIsoCamRender.X, -gIsoCamRender.Y);
+	DVector2 fwd = player - cam;
+	double len = fwd.Length();
+	if (len < 1) return false;
+	fwd /= len;
+	// Camera side of the wall: test a point far back along the view direction (ortho camera ~ at infinity).
+	DVector2 farCam = player - fwd * 100000.;
+	if (PointOnLineSide(farCam, wal) < 0) return false; // camera is in front of this wall: it faces the camera, keep it
+	DVector2 mid = (wal->pos + wal->point2Wall()->pos) * 0.5;
+	return (mid - player).dot(fwd) < r_iso_hidemargin; // behind (camera side of) the player
+}
+
 void HWWall::Process(HWDrawInfo* di, walltype* wal, sectortype* frontsector, sectortype* backsector)
 {
+	if (IsoHideWall(di, wal)) return;
 	auto backwall = wal->twoSided()? wal->nextWall() : nullptr;
 	auto p2wall = wal->point2Wall();
 

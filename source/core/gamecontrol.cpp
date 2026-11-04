@@ -1459,6 +1459,14 @@ void DrawCrosshair(int health, double xdelta, double ydelta, double scale, DAngl
 	}
 }
 
+// blood2d isometric experiment: aim marker at a viewport-relative pixel position.
+void DrawIsoAimMarker(int health, double xpos, double ypos)
+{
+	if (automapMode != am_off || !cl_crosshair) return;
+	ST_LoadCrosshair(crosshair == 0 ? 2 : *crosshair, false);
+	ST_DrawCrosshair(health, xpos, ypos, 1, nullAngle);
+}
+
 bool M_Active()
 {
 	return CurrentMenu != nullptr || ConsoleState == c_down || ConsoleState == c_falling;

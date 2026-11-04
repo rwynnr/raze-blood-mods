@@ -31,6 +31,10 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //
 //---------------------------------------------------------------------------
 
+bool isoMouseCaptured(); bool isoCursorAimActive(); // hw_entrypoint.cpp (blood2d iso)
+extern DVector2 gIsoCursor;
+EXTERN_CVAR(Float, r_iso_cursorspeed)
+EXTERN_CVAR(Bool, r_iso_cursorinvert)
 CVAR(Bool, cl_noturnscaling, false, CVAR_GLOBALCONFIG | CVAR_ARCHIVE);
 CVAR(Float, m_pitch, 1.f, CVAR_GLOBALCONFIG | CVAR_ARCHIVE)
 CVAR(Float, m_yaw, 1.f, CVAR_GLOBALCONFIG | CVAR_ARCHIVE)
@@ -140,13 +144,23 @@ void GameInput::processMovement(const double turnscale, const bool allowstrafe, 
 		buttonMap.ButtonDown(gamefunc_Move_Down) +
 		joyAxes[JOYAXIS_Up] * scaleAdjust;
 
+	// blood2d iso: mouse drives the aim cursor (fixed camera) instead of turning; the game turns the
+	// player toward the cursor / locked target itself.
+	const bool isoMouse = isoMouseCaptured();
+	if (isoCursorAimActive())
+	{
+		const double k = MOUSE_SCALE.Degrees() * 0.02 * r_iso_cursorspeed;
+		gIsoCursor.X = clamp(gIsoCursor.X + mouseInput.X * k, -2.5, 2.5);
+		gIsoCursor.Y = clamp(gIsoCursor.Y + mouseInput.Y * k * (r_iso_cursorinvert ? -1 : 1), -1., 1.);
+	}
+
 	// process player yaw input.
 	if (!(buttonMap.ButtonDown(gamefunc_Strafe) && allowstrafe))
 	{
 		const double turndir = clamp(turning + strafing * !allowstrafe, -1., 1.);
 		const double tttscale = (cl_noturnscaling || isTurboTurnTime()) ? 1 : PRETURBOTURNSCALE;
 		const DAngle turnspeed = getTicrateAngle(YAW_TURNSPEEDS[keymove] * tttscale);
-		thisInput.ang.Yaw += MOUSE_SCALE * mouseInput.X * m_yaw;
+		if (!isoMouse) thisInput.ang.Yaw += MOUSE_SCALE * mouseInput.X * m_yaw;
 		thisInput.ang.Yaw -= hidspeed * joyAxes[JOYAXIS_Yaw] * scaleAdjust;
 		thisInput.ang.Yaw += turnspeed * turndir * scaleAdjust;
 		thisInput.ang.Yaw *= turnscale;
@@ -154,7 +168,7 @@ void GameInput::processMovement(const double turnscale, const bool allowstrafe, 
 	}
 	else
 	{
-		thisInput.vel.Y += mouseInput.X * MOUSE_SCALE.Degrees() * m_side;
+		if (!isoMouse) thisInput.vel.Y += mouseInput.X * MOUSE_SCALE.Degrees() * m_side;
 		thisInput.vel.Y -= joyAxes[JOYAXIS_Yaw] * keymove * scaleAdjust;
 		thisInput.vel.Y += turning * keymove * scaleAdjust;
 	}
@@ -162,13 +176,13 @@ void GameInput::processMovement(const double turnscale, const bool allowstrafe, 
 	// process player pitch input.
 	if (!(inputBuffer.actions & SB_AIMMODE))
 	{
-		thisInput.ang.Pitch -= MOUSE_SCALE * mouseInput.Y * m_pitch;
+		if (!isoMouse) thisInput.ang.Pitch -= MOUSE_SCALE * mouseInput.Y * m_pitch;
 		thisInput.ang.Pitch -= hidspeed * joyAxes[JOYAXIS_Pitch] * scaleAdjust;
 		thisInput.ang.Pitch *= turnscale;
 	}
 	else
 	{
-		thisInput.vel.X += mouseInput.Y * MOUSE_SCALE.Degrees() * m_forward;
+		if (!isoMouse) thisInput.vel.X += mouseInput.Y * MOUSE_SCALE.Degrees() * m_forward;
 		thisInput.vel.X += joyAxes[JOYAXIS_Pitch] * keymove * scaleAdjust;
 	}
 
