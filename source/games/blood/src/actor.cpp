@@ -2733,6 +2733,9 @@ static DBloodActor* actSpawnFloor(DBloodActor* actor)
 	auto pSector = actor->sector();
 	auto pos = actor->spr.pos;
 	updatesector(pos, &pSector);
+	// blood2d fix: a dying actor blasted outside every sector (e.g. into a wall) made updatesector return
+	// null and crashed here (crash report 2026-11-04). Drop the item in the actor's own sector instead.
+	if (!pSector) pSector = actor->sector();
 	double zFloor = getflorzofslopeptr(pSector, pos.X, pos.Y);
 	auto spawned = actSpawnSprite(pSector, DVector3(pos.XY(), zFloor), 3, 0);
 	if (spawned) spawned->spr.cstat &= ~CSTAT_SPRITE_BLOCK_ALL;
