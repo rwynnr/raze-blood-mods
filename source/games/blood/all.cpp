@@ -63,6 +63,8 @@
 #include "src/view.cpp"
 #include "src/warp.cpp"
 #include "src/weapon.cpp"
+#include "src/bloodmod.cpp" // blood2d mod base (after all game code)
+#include "src/chaos.cpp"    // blood2d chaos mode
 
 // This includes the VM so it is last
 #include "src/vmexports.cpp"

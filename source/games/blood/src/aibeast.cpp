@@ -274,7 +274,7 @@ static void beastThinkChase(DBloodActor* actor)
 						}
 					}
 				}
-				if (nDist < 57.5625 && abs(nDeltaAngle) < mapangle(28))
+				if (nDist < bmod::MeleeRange(actor, 57.5625) && abs(nDeltaAngle) < mapangle(28))
 				{
 					int hit = HitScan(actor, actor->spr.pos.Z, DVector3(dv, 0), CLIPMASK1, 0);
 					switch (hit)
@@ -371,7 +371,7 @@ static void beastThinkSwimChase(DBloodActor* actor)
 			if (nDist < pDudeInfo->SeeDist() && nDeltaAngle <= pDudeInfo->Periphery())
 			{
 				aiSetTarget(actor, actor->GetTarget());
-				if (nDist < 64 && nDeltaAngle < DAngle15)
+				if (nDist < bmod::MeleeRange(actor, 64) && nDeltaAngle < DAngle15)
 					aiNewState(actor, &beastSwimSlash);
 				else
 				{
@@ -399,7 +399,7 @@ static void beastMoveForward(DBloodActor* actor)
 		return;
 	auto dvec = actor->xspr.TargetPos.XY() - actor->spr.pos.XY();
 	double nDist = dvec.Length();
-	if (nDist <= 0x40 && Random(64) < 32)
+	if (nDist <= bmod::MeleeRange(actor, 0x40) && Random(64) < 32)
 		return;
 	actor->vel += actor->spr.Angles.Yaw.ToVector() * pDudeInfo->FrontSpeed();
 }
@@ -418,7 +418,7 @@ static void sub_628A0(DBloodActor* actor)
 		actor->spr.Angles.Yaw += DAngle45;
 	auto dvec = actor->xspr.TargetPos.XY() - actor->spr.pos.XY();
 	double nDist = dvec.Length();
-	if (Random(64) < 32 && nDist <= 0x40)
+	if (Random(64) < 32 && nDist <= bmod::MeleeRange(actor, 0x40))
 		return;
 	AdjustVelocity(actor, ADJUSTER{
 		if (actor->GetTarget() == nullptr)
@@ -448,7 +448,7 @@ static void sub_62AE0(DBloodActor* actor)
 	auto dvec = actor->xspr.TargetPos.XY() - actor->spr.pos.XY();
 	double nDist = dvec.Length();
 
-	if (Chance(0x600) && nDist <= 0x40)
+	if (Chance(0x600) && nDist <= bmod::MeleeRange(actor, 0x40))
 		return;
 	AdjustVelocity(actor, ADJUSTER{
 		t1 += nAccel;
@@ -478,7 +478,7 @@ static void sub_62D7C(DBloodActor* actor)
 	auto dvec = actor->xspr.TargetPos.XY() - actor->spr.pos.XY();
 	double nDist = dvec.Length();
 
-	if (Chance(0x4000) && nDist <= 0x40)
+	if (Chance(0x4000) && nDist <= bmod::MeleeRange(actor, 0x40))
 		return;
 	AdjustVelocity(actor, ADJUSTER{
 		t1 += nAccel * 0.5;

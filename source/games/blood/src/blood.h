@@ -138,3 +138,5 @@ struct GameInterface : public ::GameInterface
 };
 
 END_BLD_NS
+
+#include "bloodmod.h" // blood2d mod base

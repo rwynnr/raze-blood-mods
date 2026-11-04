@@ -107,7 +107,7 @@ static void ratThinkChase(DBloodActor* actor)
 			if (nDist < pDudeInfo->SeeDist() && abs(nDeltaAngle) <= pDudeInfo->Periphery())
 			{
 				aiSetTarget(actor, actor->GetTarget());
-				if (nDist < 57.5625 && nDeltaAngle < DAngle15)
+				if (nDist < bmod::MeleeRange(actor, 57.5625) && nDeltaAngle < DAngle15)
 					aiNewState(actor, &ratBite);
 				return;
 			}

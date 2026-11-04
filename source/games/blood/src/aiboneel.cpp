@@ -287,9 +287,9 @@ static void eelThinkChase(DBloodActor* actor)
 			if (nDist < pDudeInfo->SeeDist() && nDeltaAngle <= pDudeInfo->Periphery())
 			{
 				aiSetTarget(actor, actor->GetTarget());
-				if (nDist < 57.5625 && top2 > top && nDeltaAngle < DAngle15)
+				if (nDist < bmod::MeleeRange(actor, 57.5625) && top2 > top && nDeltaAngle < DAngle15)
 					aiNewState(actor, &eelSwoop);
-				else if (nDist <= 57.5625 && nDeltaAngle < DAngle15)
+				else if (nDist <= bmod::MeleeRange(actor, 57.5625) && nDeltaAngle < DAngle15)
 					aiNewState(actor, &eelBite);
 				else if (bottom2 > top && nDeltaAngle < DAngle15)
 					aiNewState(actor, &eelSwoop);
@@ -318,7 +318,7 @@ static void eelMoveForward(DBloodActor* actor)
 		actor->spr.Angles.Yaw += DAngle45;
 	auto dvec = actor->xspr.TargetPos.XY() - actor->spr.pos.XY();
 	double nDist = dvec.Length();
-	if (nDist <= 57.5625)
+	if (nDist <= bmod::MeleeRange(actor, 57.5625))
 		return;
 	AdjustVelocity(actor, ADJUSTER{
 		if (actor->GetTarget() == nullptr)
@@ -341,7 +341,7 @@ static void eelMoveSwoop(DBloodActor* actor)
 		return;
 	auto dvec = actor->xspr.TargetPos.XY() - actor->spr.pos.XY();
 	double nDist = dvec.Length();
-	if (Chance(0x8000) && nDist <= 57.5625)
+	if (Chance(0x8000) && nDist <= bmod::MeleeRange(actor, 57.5625))
 		return;
 	AdjustVelocity(actor, ADJUSTER{
 		t1 += nAccel * 0.5;
@@ -362,7 +362,7 @@ static void eelMoveAscend(DBloodActor* actor)
 		return;
 	auto dvec = actor->xspr.TargetPos.XY() - actor->spr.pos.XY();
 	double nDist = dvec.Length();
-	if (Chance(0x4000) && nDist <= 57.5625)
+	if (Chance(0x4000) && nDist <= bmod::MeleeRange(actor, 57.5625))
 		return;
 	AdjustVelocity(actor, ADJUSTER{
 		t1 += nAccel * 0.5;

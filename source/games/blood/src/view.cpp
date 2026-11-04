@@ -870,6 +870,7 @@ static void SetupView(DBloodPlayer* pPlayer, DVector3& cPos, DRotator& cAngles, 
 	}
 
 	viewUpdateShake(pPlayer, cPos, cAngles, shakeX, shakeY);
+	bmod::ModifyView(cPos, cAngles, interpfrac);
 
 	if (r_isometric)
 	{
@@ -1147,7 +1148,8 @@ void viewDrawScreen(bool sceneonly)
 	{
 		DrawMap(pPlayer, interpfrac);
 	}
-	UpdateStatusBar(pPlayer);
+	if (!bmod::mods.hideHud) UpdateStatusBar(pPlayer);
+	bmod::OnDrawOverlay(pPlayer);
 
 	viewDrawAimedPlayerName(pPlayer);
 	if (paused)

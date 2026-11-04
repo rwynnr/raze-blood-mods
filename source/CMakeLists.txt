@@ -662,7 +662,9 @@ set( NOT_COMPILED_SOURCE_FILES
 	games/blood/src/asound.cpp
 	games/blood/src/barf.cpp
 	games/blood/src/blood.cpp
+	games/blood/src/bloodmod.cpp
 	games/blood/src/callback.cpp
+	games/blood/src/chaos.cpp
 	games/blood/src/choke.cpp
 	games/blood/src/db.cpp
 	games/blood/src/dude.cpp

@@ -141,7 +141,7 @@ static void zombaThinkChase(DBloodActor* actor)
 			if (nDeltaAngle <= pDudeInfo->Periphery())
 			{
 				aiSetTarget(actor, actor->GetTarget());
-				if (nDist < 0x40 && nDeltaAngle < DAngle15)
+				if (nDist < bmod::MeleeRange(actor, 0x40) && nDeltaAngle < DAngle15)
 					aiNewState(actor, &zombieAHack);
 				return;
 			}
@@ -188,7 +188,7 @@ static void zombaThinkPonder(DBloodActor* actor)
 			if (nDeltaAngle <= pDudeInfo->Periphery())
 			{
 				aiSetTarget(actor, actor->GetTarget());
-				if (nDist < 0x40)
+				if (nDist < bmod::MeleeRange(actor, 0x40))
 				{
 					if (nDeltaAngle < DAngle15)
 					{

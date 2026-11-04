@@ -761,6 +761,7 @@ void GameInterface::SerializeGameState(FSerializer& arc)
 		viewSetErrorMessage("");
 		paused = 0;
 		Mus_ResumeSaved();
+		bmod::OnSaveLoaded();
 	}
 	validateLinks();
 }

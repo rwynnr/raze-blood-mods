@@ -32,6 +32,7 @@ BEGIN_BLD_NS
 
 void GameInterface::LevelCompleted(MapRecord* map, int skill)
 {
+	bmod::OnLevelEnd();
 	// Save the player state before taking down anything.
 	for (int i = connecthead; i >= 0; i = connectpoint2[i])
 	{
@@ -68,6 +69,7 @@ bool AllowedKillType(DBloodActor* actor)
 
 void AddKill(DBloodActor* killer, DBloodActor* killed)
 {
+	bmod::OnKill(killer, killed);
 	if (AllowedKillType(killed))
 	{
 		int playernum = killer->IsPlayerActor() ? killer->GetType() - kDudePlayer1 : -1;

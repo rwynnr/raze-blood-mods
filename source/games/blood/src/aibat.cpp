@@ -274,7 +274,7 @@ static void batThinkChase(DBloodActor* actor)
 				double floorDelta = floorZ - bottom;
 				double heightDelta = height2 - height;
 				bool angWithinRange = nDeltaAngle < DAngle15;
-				if (heightDelta < 32 && nDist < 0x20 && angWithinRange)
+				if (heightDelta < 32 && nDist < bmod::MeleeRange(actor, 0x20) && angWithinRange)
 					aiNewState(actor, &batBite);
 				else if ((heightDelta > 80 || floorDelta > 80) && nDist < 0x140 && nDist > 0x80 && angWithinRange)
 					aiNewState(actor, &batSwoop);
@@ -308,7 +308,7 @@ static void batMoveForward(DBloodActor* actor)
 		actor->spr.Angles.Yaw += DAngle45;
 	auto dvec = actor->xspr.TargetPos.XY() - actor->spr.pos.X;
 	double nDist = dvec.Length();
-	if ((unsigned int)Random(64) < 32 && nDist <= 0x20)
+	if ((unsigned int)Random(64) < 32 && nDist <= bmod::MeleeRange(actor, 0x20))
 		return;
 	
 	AdjustVelocity(actor, ADJUSTER{
@@ -334,7 +334,7 @@ static void batMoveSwoop(DBloodActor* actor)
 	}
 	auto dvec = actor->xspr.TargetPos.XY() - actor->spr.pos.X;
 	double nDist = dvec.Length();
-	if (Chance(0x600) && nDist <= 0x20)
+	if (Chance(0x600) && nDist <= bmod::MeleeRange(actor, 0x20))
 		return;
 	
 	AdjustVelocity(actor, ADJUSTER{
@@ -358,7 +358,7 @@ static void batMoveFly(DBloodActor* actor)
 	}
 	auto dvec = actor->xspr.TargetPos.XY() - actor->spr.pos.X;
 	double nDist = dvec.Length();
-	if (Chance(0x4000) && nDist <= 0x20)
+	if (Chance(0x4000) && nDist <= bmod::MeleeRange(actor, 0x20))
 		return;
 	AdjustVelocity(actor, ADJUSTER{
 		t1 += nAccel * 0.5;
