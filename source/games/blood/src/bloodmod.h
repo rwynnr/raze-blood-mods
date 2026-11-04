@@ -98,14 +98,16 @@ namespace bmod
 		const char* (*titleNow)();   // optional; title decided at pick time
 		void (*suspend)();           // optional; undo saved-data changes while a save is written
 		void (*resume)();            // optional; redo them afterwards
+		const char* group;           // optional; effects in the same group change the same state and never run together
 	};
 
 	int NumEffects();
 	const Effect& GetEffect(int i);
 	const Effect* FindEffect(const char* name);
 	const char* EffectTitle(const Effect* e);
+	bool Rivals(const Effect* a, const Effect* b); // different effects of the same group
 	bool CanStart(const Effect* e);
-	bool StartEffect(const Effect* e);
+	bool StartEffect(const Effect* e);           // ends any active rival first
 	void StopEffect(const Effect* e);
 	void StopAllEffects();
 	bool IsActive(const Effect* e);
