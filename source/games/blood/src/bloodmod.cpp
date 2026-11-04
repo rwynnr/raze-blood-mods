@@ -645,15 +645,17 @@ bool RemapMissile(DBloodActor* shooter, double xyoff, double zoff, const DVector
 
 static const Effect effects[] =
 {
-	// name, title, category, oneShot, fixedSeconds, start, stop, tick, available, titleNow, suspend, resume
+	// name, title, category, oneShot, fixedSeconds, start, stop, tick, available, titleNow, suspend, resume, group
+	// Groups: "size" = giant, tiny and the shuffles (a shuffle retypes enemies, which would clash with the
+	// sizes giant/tiny restore); "enemyspeed" = slowmo, fast.
 
 	{ "giant", "Giant enemies", Category::Silly, false, 0,
 		[] { SizeStart(2., false); }, SizeStop, nullptr, HasEnemies, nullptr,
-		[] { SizeApplyAll(false); }, [] { SizeApplyAll(true); } },
+		[] { SizeApplyAll(false); }, [] { SizeApplyAll(true); }, "size" },
 
 	{ "tiny", "Tiny enemies", Category::Silly, false, 0,
 		[] { SizeStart(0.5, true); }, SizeStop, nullptr, HasEnemies, nullptr,
-		[] { SizeApplyAll(false); }, [] { SizeApplyAll(true); } },
+		[] { SizeApplyAll(false); }, [] { SizeApplyAll(true); }, "size" },
 
 	{ "drunk", "Drunk camera", Category::Silly, false, 0,
 		[] { mods.drunk = 0.; }, [] { mods.drunk = 0.; },
@@ -695,10 +697,12 @@ static const Effect effects[] =
 		[] { mods.splashScale = 2.; }, [] { mods.splashScale = 1.; }, nullptr, nullptr, nullptr, nullptr, nullptr },
 
 	{ "slowmo", "Slow-motion enemies", Category::Twist, false, 0,
-		[] { mods.enemyTimeScale = 0.5; }, [] { mods.enemyTimeScale = 1.; }, nullptr, HasEnemies, nullptr, nullptr, nullptr },
+		[] { mods.enemyTimeScale = 0.5; }, [] { mods.enemyTimeScale = 1.; }, nullptr, HasEnemies, nullptr, nullptr, nullptr,
+		"enemyspeed" },
 
 	{ "fast", "Fast enemies", Category::Twist, false, 0,
-		[] { mods.enemyTimeScale = 2.; }, [] { mods.enemyTimeScale = 1.; }, nullptr, HasEnemies, nullptr, nullptr, nullptr },
+		[] { mods.enemyTimeScale = 2.; }, [] { mods.enemyTimeScale = 1.; }, nullptr, HasEnemies, nullptr, nullptr, nullptr,
+		"enemyspeed" },
 
 	{ "nohud", "No HUD", Category::Nasty, false, 0,
 		[] { mods.hideHud = true; }, [] { mods.hideHud = false; }, nullptr, nullptr, nullptr, nullptr, nullptr },
@@ -717,11 +721,11 @@ static const Effect effects[] =
 	// one-shots: the shuffled enemies stay shuffled (like any normal game event)
 	{ "enemyshuffle", "Enemy shuffle", Category::Twist, true, 0,
 		EnemyShuffle, nullptr, nullptr,
-		[] { int types; return CountShuffleable(false, &types) >= 2 && types >= 2; }, nullptr, nullptr, nullptr },
+		[] { int types; return CountShuffleable(false, &types) >= 2 && types >= 2; }, nullptr, nullptr, nullptr, "size" },
 
 	{ "cultistshuffle", "Cultist shuffle", Category::Twist, true, 0,
 		CultistShuffle, nullptr, nullptr,
-		[] { return CountShuffleable(true, nullptr) >= 1; }, nullptr, nullptr, nullptr },
+		[] { return CountShuffleable(true, nullptr) >= 1; }, nullptr, nullptr, nullptr, "size" },
 
 	{ "bomber", "Bomber zombies", Category::Twist, false, 0,
 		[] { mods.bomberZombies = true; }, [] { mods.bomberZombies = false; }, nullptr, HasZombies, nullptr, nullptr, nullptr },
@@ -745,6 +749,11 @@ const Effect* FindEffect(const char* name)
 const char* EffectTitle(const Effect* e) { return e->titleNow ? e->titleNow() : e->title; }
 bool CanStart(const Effect* e) { return e && !IsActive(e) && (!e->available || e->available()); }
 
+bool Rivals(const Effect* a, const Effect* b)
+{
+	return a && b && a != b && a->group && b->group && !strcmp(a->group, b->group);
+}
+
 bool IsActive(const Effect* e)
 {
 	for (auto& a : active) if (a.effect == e) return true;
@@ -754,6 +763,9 @@ bool IsActive(const Effect* e)
 bool StartEffect(const Effect* e)
 {
 	if (!CanStart(e)) return false;
+	// Effects of one group change the same state: the newcomer replaces a running rival.
+	for (unsigned i = active.Size(); i-- > 0; )
+		if (Rivals(active[i].effect, e)) StopEffect(active[i].effect);
 	if (e->start) e->start();
 	if (!e->oneShot) active.Push({ e, PlayClock });
 	if (mod_eventlog) Printf("mod effect: start %s\n", e->name);
