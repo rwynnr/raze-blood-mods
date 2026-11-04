@@ -4,11 +4,11 @@
 //
 // blood2d shared mod base: game event hooks + a registry of temporary effects.
 //
-// Stock Blood code calls the On* functions through one-line hooks. Effects
-// change behavior only through the Modifiers below (read by other one-line
-// hooks) or through flags they restore on stop, so a save made while an effect
-// is running never contains the effect. Modules (chaos, ...) register
-// listeners, tickers and overlay drawers.
+// Stock Blood code calls the On* functions and the helpers below through
+// one-line hooks. Effects change behavior through the Modifiers (read by
+// those hooks) or by changing actor data that they restore on stop - and also
+// while a savegame is being written (suspend/resume), so saves never contain
+// an effect. Modules (chaos, ...) register listeners, tickers and drawers.
 //
 //---------------------------------------------------------------------------
 
@@ -53,16 +53,28 @@ namespace bmod
 	struct Modifiers
 	{
 		double gravityScale = 1;     // MoveThing / MoveDude
-		double enemyDrawScale = 1;   // non-player dude sprites (visual only)
 		double damageDealtScale = 1; // player -> anything else
 		double damageTakenScale = 1; // anything -> player
 		double drunk = 0;            // 0..1 camera sway
 		bool hideHud = false;        // status bar
+		double spreadDegrees = 0;    // extra random spread on every hitscan shot
+		double splashScale = 1;      // explosion radius/damage
+		double enemyTimeScale = 1;   // enemy AI, movement and animation speed
 	};
 	extern Modifiers mods;
 
 	int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage);
-	void ModifyView(DRotator& angles, double interpfrac);
+	void ModifyView(DVector3& pos, DRotator& angles, double interpfrac); // also drives shader effects
+	void ModifyShot(DBloodActor* shooter, DVector3& dv);                // actFireVector, before normalizing
+	double ScaleRange(DBloodActor* shooter, double range);               // actFireVector reach
+	double MeleeRange(DBloodActor* actor, double dist);                  // AI melee distance checks
+	void ScaleSplash(int& radius, int& baseDmg, int& distDmg);           // actRadiusDamage
+	void BeginEnemyTic();                                                // actProcessSprites, first thing
+	int EnemyPasses();                                                   // how many AI passes this tic
+	void NextAiPass();
+	int AiFrame();                                                       // frame counter the AI paces on
+	int DudeMoveSteps(DBloodActor* actor);                               // MoveDude calls this tic
+	int SeqTicks(DBloodActor* owner, int nTicks);                        // seqProcess per instance
 
 	// ---- effects ----
 	enum class Category { Silly, Twist, Nasty };
@@ -79,6 +91,8 @@ namespace bmod
 		void (*tick)(double secs);   // optional; seconds since start
 		bool (*available)();         // optional; false = can't run right now
 		const char* (*titleNow)();   // optional; title decided at pick time
+		void (*suspend)();           // optional; undo saved-data changes while a save is written
+		void (*resume)();            // optional; redo them afterwards
 	};
 
 	int NumEffects();

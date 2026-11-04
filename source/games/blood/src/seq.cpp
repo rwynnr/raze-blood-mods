@@ -703,7 +703,7 @@ void seqProcess(int nTicks)
 
 		assert(pInst->frameIndex < pSeq->nFrames);
 
-		pInst->timeCounter -= nTicks;
+		pInst->timeCounter -= bmod::SeqTicks(target.isActor() ? target.actor() : nullptr, nTicks);
 		while (pInst->timeCounter < 0)
 		{
 			pInst->timeCounter += pSeq->ticksPerFrame;

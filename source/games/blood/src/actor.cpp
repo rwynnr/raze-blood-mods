@@ -2630,6 +2630,7 @@ DVector4 actFloorBounceVector(DBloodActor* actor, double oldz, sectortype* pSect
 
 void actRadiusDamage(DBloodActor* source, const DVector3& pos, sectortype* pSector, int nDist, int baseDmg, int distDmg, DAMAGE_TYPE dmgType, int flags, int burn)
 {
+	bmod::ScaleSplash(nDist, baseDmg, distDmg);
 	auto pOwner = source->GetOwner();
 	const bool newSectCheckMethod = !cl_bloodvanillaexplosions && pOwner && pOwner->IsDudeActor() && !VanillaMode(); // use new sector checking logic
 	auto sectorMap = GetClosestSpriteSectors(pSector, pos.XY(), nDist, nullptr, newSectCheckMethod);
@@ -6060,7 +6061,7 @@ static void actCheckDudes()
 		}
 
 		if ((actor->spr.flags & 4) || !actor->vel.isZero() || actor->sector()->velFloor || actor->sector()->velCeil)
-			MoveDude(actor);
+			for (int n = bmod::DudeMoveSteps(actor); n > 0; n--) MoveDude(actor);
 	}
 }
 
@@ -6113,6 +6114,7 @@ void actProcessSprites(void)
 #ifdef NOONE_EXTENSIONS
 	if (gModernMap) nnExtProcessSuperSprites();
 #endif
+	bmod::BeginEnemyTic();
 
 	actCheckProximity();
 	actCheckThings();
@@ -6121,7 +6123,7 @@ void actProcessSprites(void)
 	actCheckTraps();
 	actCheckDudes();
 	actCheckFlares();
-	aiProcessDudes();
+	for (int n = bmod::EnemyPasses(); n > 0; n--) { bmod::NextAiPass(); aiProcessDudes(); }
 	gFX.fxProcess();
 }
 
@@ -6611,10 +6613,12 @@ bool actCanSplatWall(walltype* pWall)
 void actFireVector(DBloodActor* shooter, double offset, double zoffset, DVector3 dv, VECTOR_TYPE vectorType, double nRange)
 {
 	// this function expects a vector with unit length in XY. Let's not depend on all callers doing it.
+	bmod::ModifyShot(shooter, dv);
 	dv /= dv.XY().Length(); 
 	assert(vectorType >= 0 && vectorType < kVectorMax);
 	const VECTORDATA* pVectorData = &gVectorData[vectorType];
 	if (nRange < 0) nRange = pVectorData->fMaxDist();
+	nRange = bmod::ScaleRange(shooter, nRange);
 	// The vector for hitscan must be longer than what we got here as long as it works with integers.
 	int hit = VectorScan(shooter, offset, zoffset, dv, nRange, 1);
 	if (hit == 3)

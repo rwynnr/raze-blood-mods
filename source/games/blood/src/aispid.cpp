@@ -218,18 +218,18 @@ static void spidThinkChase(DBloodActor* actor)
 
 				switch (actor->spr.type) {
 				case kDudeSpiderRed:
-					if (nDist < 57.5625 && nDeltaAngle < DAngle15)
+					if (nDist < bmod::MeleeRange(actor, 57.5625) && nDeltaAngle < DAngle15)
 						aiNewState(actor, &spidBite);
 					break;
 				case kDudeSpiderBrown:
 				case kDudeSpiderBlack:
-					if (nDist < 115.1875 && nDist > 57.5625 && nDeltaAngle < DAngle15)
+					if (nDist < bmod::MeleeRange(actor, 115.1875) && nDist > bmod::MeleeRange(actor, 57.5625) && nDeltaAngle < DAngle15)
 						aiNewState(actor, &spidJump);
-					else if (nDist < 57.5625 && nDeltaAngle < DAngle15)
+					else if (nDist < bmod::MeleeRange(actor, 57.5625) && nDeltaAngle < DAngle15)
 						aiNewState(actor, &spidBite);
 					break;
 				case kDudeSpiderMother:
-					if (nDist < 115.1875 && nDist > 57.5625 && nDeltaAngle < DAngle15)
+					if (nDist < bmod::MeleeRange(actor, 115.1875) && nDist > bmod::MeleeRange(actor, 57.5625) && nDeltaAngle < DAngle15)
 						aiNewState(actor, &spidJump);
 					else if (Chance(0x8000))
 						aiNewState(actor, &spidBirth);

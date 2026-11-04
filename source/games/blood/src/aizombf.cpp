@@ -172,7 +172,7 @@ static void zombfThinkChase(DBloodActor* actor)
 						break;
 					}
 				}
-				else if (nDist < 0x40 && nDeltaAngle < DAngle15)
+				else if (nDist < bmod::MeleeRange(actor, 0x40) && nDeltaAngle < DAngle15)
 				{
 					int hit = HitScan(actor, actor->spr.pos.Z, DVector3(dv.XY(), 0), CLIPMASK1, 0);
 					switch (hit)

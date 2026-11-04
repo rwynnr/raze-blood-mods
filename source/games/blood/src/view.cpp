@@ -467,7 +467,7 @@ static void SetupView(DBloodPlayer* pPlayer, DVector3& cPos, DRotator& cAngles, 
 	}
 
 	viewUpdateShake(pPlayer, cPos, cAngles, shakeX, shakeY);
-	bmod::ModifyView(cAngles, interpfrac);
+	bmod::ModifyView(cPos, cAngles, interpfrac);
 
 	if (gViewPos == 0)
 	{

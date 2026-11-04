@@ -31,6 +31,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 //
 //---------------------------------------------------------------------------
 
+bool gModInvertControls; // blood2d mod: set by the "inverted controls" effect
 CVAR(Bool, cl_noturnscaling, false, CVAR_GLOBALCONFIG | CVAR_ARCHIVE);
 CVAR(Float, m_pitch, 1.f, CVAR_GLOBALCONFIG | CVAR_ARCHIVE)
 CVAR(Float, m_yaw, 1.f, CVAR_GLOBALCONFIG | CVAR_ARCHIVE)
@@ -182,6 +183,8 @@ void GameInput::processMovement(const double turnscale, const bool allowstrafe, 
 	{
 		thisInput.vel.Y += drink_amt & 1 ? -thisInput.vel.X : thisInput.vel.X;
 	}
+
+	if (gModInvertControls) { thisInput.vel.X = -thisInput.vel.X; thisInput.vel.Y = -thisInput.vel.Y; thisInput.ang.Yaw = -thisInput.ang.Yaw; }
 
 	// add collected input to game's local input accumulation packet.
 	inputBuffer.vel += thisInput.vel;

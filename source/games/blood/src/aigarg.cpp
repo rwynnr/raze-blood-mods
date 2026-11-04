@@ -362,7 +362,7 @@ static void gargThinkChase(DBloodActor* actor)
 							break;
 						}
 					}
-					else if (nDist < 0x40 && angWithinRange)
+					else if (nDist < bmod::MeleeRange(actor, 0x40) && angWithinRange)
 					{
 						int hit = HitScan(actor, actor->spr.pos.Z, DVector3(dxy, 0), CLIPMASK1, 0);
 						switch (hit)
@@ -421,7 +421,7 @@ static void gargThinkChase(DBloodActor* actor)
 							break;
 						}
 					}
-					else if (nDist < 0x40 && angWithinRange)
+					else if (nDist < bmod::MeleeRange(actor, 0x40) && angWithinRange)
 					{
 						int hit = HitScan(actor, actor->spr.pos.Z, DVector3(dxy, 0), CLIPMASK1, 0);
 						switch (hit)
@@ -498,7 +498,7 @@ static void gargMoveForward(DBloodActor* actor)
 		actor->spr.Angles.Yaw += DAngle45;
 	auto dvec = actor->xspr.TargetPos.XY() - actor->spr.pos.XY();
 	double nDist = dvec.Length();
-	if ((unsigned int)Random(64) < 32 && nDist <= 0x40)
+	if ((unsigned int)Random(64) < 32 && nDist <= bmod::MeleeRange(actor, 0x40))
 		return;
 	AdjustVelocity(actor, ADJUSTER{
 		if (actor->GetTarget() == nullptr)
@@ -527,7 +527,7 @@ static void gargMoveSlow(DBloodActor* actor)
 	}
 	auto dvec = actor->xspr.TargetPos.XY() - actor->spr.pos.XY();
 	double nDist = dvec.Length();
-	if (Chance(0x600) && nDist <= 0x40)
+	if (Chance(0x600) && nDist <= bmod::MeleeRange(actor, 0x40))
 		return;
 	AdjustVelocity(actor, ADJUSTER{
 		t1 += nAccel * 0.5;
@@ -562,7 +562,7 @@ static void gargMoveSwoop(DBloodActor* actor)
 	}
 	auto dvec = actor->xspr.TargetPos.XY() - actor->spr.pos.XY();
 	double nDist = dvec.Length();
-	if (Chance(0x600) && nDist <= 0x40)
+	if (Chance(0x600) && nDist <= bmod::MeleeRange(actor, 0x40))
 		return;
 
 	AdjustVelocity(actor, ADJUSTER{
@@ -597,7 +597,7 @@ static void gargMoveFly(DBloodActor* actor)
 	}
 	auto dvec = actor->xspr.TargetPos.XY() - actor->spr.pos.XY();
 	double nDist = dvec.Length();
-	if (Chance(0x4000) && nDist <= 0x40)
+	if (Chance(0x4000) && nDist <= bmod::MeleeRange(actor, 0x40))
 		return;
 	
 	AdjustVelocity(actor, ADJUSTER{
