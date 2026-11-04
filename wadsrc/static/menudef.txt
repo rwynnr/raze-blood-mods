@@ -493,6 +493,10 @@ OptionMenu "OptionsMenu" protected
 	Submenu "$OPTMNU_DISPLAY",			"VideoOptions"
 	Submenu "$OPTMNU_VIDEO",			"VideoModeMenu"
 	Submenu "$OPTMNU_GAMEPLAY",			"GameplayOptions"
+	ifgame(Blood)
+	{
+		Submenu "Chaos mode",			"ChaosOptions"	// blood2d chaos mode (games/blood/src/chaos.cpp)
+	}
 	Submenu "$OPTMNU_MISCELLANEOUS",	"MiscOptions"
 	StaticText " "
 	Submenu "$OS_TITLE", "os_Menu"
@@ -751,6 +755,15 @@ OptionMenu "OtherControlsMenu" protected
 	StaticText ""
 	Control    "$CNTRLMNU_QUICKSAVE"       , "quicksave"
 	Control    "$CNTRLMNU_QUICKLOAD"       , "quickload"
+
+	ifgame(Blood)
+	{
+		StaticText ""
+		Control    "Chaos mode on/off"         , "chaos_toggle"
+		Control    "Chaos settings"            , "openmenu ChaosOptions"
+		Control    "Chaos effects more often"  , "chaos_faster"
+		Control    "Chaos effects less often"  , "chaos_slower"
+	}
 }
 
 
@@ -2166,3 +2179,56 @@ OptionMenu "EngineCredits3"
 	StaticText "Pär \"Parkar\" Karlsson", 0
 }
 
+
+//-------------------------------------------------------------------------------------------
+//
+// blood2d chaos mode (games/blood/src/chaos.cpp; reached from the options menu in Blood only)
+//
+//-------------------------------------------------------------------------------------------
+
+OptionMenu "ChaosOptions" protected
+{
+	Title "Chaos Mode"
+	Option "Chaos mode",					"chaos", "OnOff"
+	StaticText ""
+	Slider "New effect every (seconds)",	"chaos_interval", 5, 120, 5, 0
+	Slider "Effect length (seconds)",		"chaos_duration", 5, 60, 5, 0
+	Slider "Effects at once",				"chaos_maxactive", 1, 4, 1, 0
+	Option "Random timing",					"chaos_random", "OnOff"
+	Slider "Warning (seconds)",				"chaos_warning", 0, 5, 1, 0
+	StaticText ""
+	Submenu "Choose effects",				"ChaosEffects"
+	StaticText ""
+	StaticText "N: chaos on/off    H: this menu"
+}
+
+OptionMenu "ChaosEffects" protected
+{
+	Title "Chaos Effects"
+	StaticText "Silly", 1
+	Option "Giant enemies",					"chaos_fx_giant", "OnOff"
+	Option "Tiny enemies",					"chaos_fx_tiny", "OnOff"
+	Option "Drunk camera",					"chaos_fx_drunk", "OnOff"
+	Option "Bird's eye / ground level",		"chaos_fx_birdseye", "OnOff"
+	Option "Acid trip",						"chaos_fx_acid", "OnOff"
+	StaticText ""
+	StaticText "Twist", 1
+	Option "Low gravity",					"chaos_fx_lowgrav", "OnOff"
+	Option "Infinite ammo",					"chaos_fx_infammo", "OnOff"
+	Option "Glass cannon",					"chaos_fx_glasscannon", "OnOff"
+	Option "Weapon swap",					"chaos_fx_weaponswap", "OnOff"
+	Option "Spray and pray",				"chaos_fx_spread", "OnOff"
+	Option "Big explosions",				"chaos_fx_bigboom", "OnOff"
+	Option "Slow-motion enemies",			"chaos_fx_slowmo", "OnOff"
+	Option "Fast enemies",					"chaos_fx_fast", "OnOff"
+	Option "Enemy shuffle",					"chaos_fx_enemyshuffle", "OnOff"
+	Option "Cultist shuffle",				"chaos_fx_cultistshuffle", "OnOff"
+	Option "Bomber zombies",				"chaos_fx_bomber", "OnOff"
+	Option "Bullet shuffle",				"chaos_fx_bulletshuffle", "OnOff"
+	StaticText ""
+	StaticText "Nasty", 1
+	Option "No HUD",						"chaos_fx_nohud", "OnOff"
+	Option "Inverted controls",				"chaos_fx_invert", "OnOff"
+	Option "Upside down",					"chaos_fx_upsidedown", "OnOff"
+	Option "Mirror world",					"chaos_fx_mirror", "OnOff"
+}
