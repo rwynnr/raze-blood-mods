@@ -375,6 +375,7 @@ void StartLevel(MapRecord* level, bool newgame)
 	levelTryPlayMusic();
 	gChoke.reset();
 	setLevelStarted(level);
+	bmod::OnLevelStart();
 }
 
 
@@ -473,6 +474,7 @@ void GameInterface::Ticker()
 		mciActor->oviewzoffset = mciActor->viewzoffset;
 		mciActor->viewzoffset = mciPlayer->zView - mciActor->spr.pos.Z;
 
+		bmod::OnTick();
 		gFrameCount++;
 		PlayClock += kTicsPerFrame;
 		if (PlayClock == 8) gameaction = ga_autosave;	// let the game run for 1 frame before saving.
@@ -686,6 +688,7 @@ void sndPlaySpecialMusicOrNothing(int nMusic)
 
 void GameInterface::FreeLevelData()
 {
+	bmod::OnFreeLevelData();
 	EndLevel();
 	::GameInterface::FreeLevelData();
 }

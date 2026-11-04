@@ -1352,6 +1352,7 @@ void PickUp(DBloodPlayer* pPlayer, DBloodActor* actor)
 		if (pickedUp && customMsg == -1) msg = GStrings.GetString(FStringf("TXTB_WPN%02d", int(nType - kItemWeaponBase + 1)));
 	}
 
+	if (pickedUp) bmod::OnPickup(pPlayer, nType);
 	if (!pickedUp) return;
 	else if (actor->hasX())
 	{
@@ -2128,6 +2129,7 @@ int playerDamageSprite(DBloodActor* source, DBloodPlayer* pPlayer, DAMAGE_TYPE n
 			if (pPlayer->hasFlag & 2) flagDropped(pPlayer, kItemFlagB);
 		}
 		pPlayer->deathTime = 0;
+		bmod::OnPlayerDeath(pPlayer);
 		pPlayer->qavLoop = 0;
 		pPlayer->curWeapon = kWeapNone;
 		pPlayer->fragger = source;

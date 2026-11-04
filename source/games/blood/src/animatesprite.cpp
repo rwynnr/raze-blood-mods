@@ -828,6 +828,7 @@ void viewProcessSprites(tspriteArray& tsprites, const DVector3& cPos, DAngle cA,
 		}
 		case kStatDude:
 		{
+			if (!IsPlayerSprite(pTSprite)) pTSprite->scale *= bmod::mods.enemyDrawScale;
 			if (pTSprite->type == kDudeHand && owneractor->hasX() && owneractor->xspr.aiState == &hand13A3B4)
 			{
 				auto target = owneractor->GetTarget();

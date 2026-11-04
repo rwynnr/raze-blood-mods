@@ -3738,6 +3738,7 @@ int actDamageSprite(DBloodActor* source, DBloodActor* actor, DAMAGE_TYPE damageT
 		return 0;
 
 	if (source == nullptr) source = actor;
+	damage = bmod::ScaleDamage(source, actor, damage);
 
 	DBloodPlayer* pSourcePlayer = nullptr;
 	if (source->IsPlayerActor()) pSourcePlayer = getPlayer(source->spr.type - kDudePlayer1);
@@ -4554,8 +4555,8 @@ static Collision MoveThing(DBloodActor* actor)
 
 	if ((actor->spr.flags & 2) && bottom < floorZ)
 	{
-		actor->spr.pos.Z += FixedToFloat<8>(455);
-		actor->vel.Z += FixedToFloat(58254);
+		actor->spr.pos.Z += FixedToFloat<8>(455) * bmod::mods.gravityScale;
+		actor->vel.Z += FixedToFloat(58254) * bmod::mods.gravityScale;
 		if (actor->spr.type == kThingZombieHead)
 		{
 			auto* fxActor = gFX.fxSpawnActor(FX_27, actor->sector(), actor->spr.pos);
@@ -4842,7 +4843,7 @@ void MoveDude(DBloodActor* actor)
 
 	if (actor->spr.flags & 2)
 	{
-		double vc = FixedToFloat(58254);
+		double vc = FixedToFloat(58254) * bmod::mods.gravityScale;
 		if (bDepth)
 		{
 			if (bUnderwater)
