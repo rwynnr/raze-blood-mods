@@ -60,6 +60,7 @@ namespace bmod
 		double spreadDegrees = 0;    // extra random spread on every hitscan shot
 		double splashScale = 1;      // explosion radius/damage
 		double enemyTimeScale = 1;   // enemy AI, movement and animation speed
+		bool bomberZombies = false;  // zombie melee attacks become explosions
 	};
 	extern Modifiers mods;
 
@@ -75,6 +76,10 @@ namespace bmod
 	int AiFrame();                                                       // frame counter the AI paces on
 	int DudeMoveSteps(DBloodActor* actor);                               // MoveDude calls this tic
 	int SeqTicks(DBloodActor* owner, int nTicks);                        // seqProcess per instance
+	bool BomberAttack(DBloodActor* actor);                               // zombie hack callbacks: true = exploded instead
+	// Bullet shuffle: true = the shot was replaced (the caller must not fire the original).
+	bool RemapVector(DBloodActor* shooter, double offset, double zoffset, const DVector3& dv, int vectorType);
+	bool RemapMissile(DBloodActor* shooter, double xyoff, double zoff, const DVector3& dv, int nType);
 
 	// ---- effects ----
 	enum class Category { Silly, Twist, Nasty };

@@ -50,6 +50,7 @@ void zombfHackSeqCallback(int, DBloodActor* actor)
 	if (actor->spr.type != kDudeZombieButcher)
 		return;
 	if (!actor->ValidateTarget(__FUNCTION__)) return;
+	if (bmod::BomberAttack(actor)) return;
 	auto target = actor->GetTarget();
 	DUDEINFO* pDudeInfo = getDudeInfo(actor->spr.type);
 	double height = pDudeInfo->eyeHeight * actor->spr.scale.Y * 0.25;
