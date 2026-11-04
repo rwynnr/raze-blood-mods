@@ -42,7 +42,36 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "texinfo.h"
 #include "models/modeldata.h"
 
+EXTERN_CVAR(Bool, r_isometric)
+EXTERN_CVAR(Bool, r_iso_headicon)
+// blood2d iso: hide enemies the player has no line of sight to
+CVARD(Bool, r_iso_los, true, CVAR_ARCHIVE, "isometric: only draw enemies the player can see")
+CVARD(Int, r_iso_losgrace, 30, CVAR_ARCHIVE, "isometric: keep enemies drawn this many 1/120s ticks after losing sight")
+
 BEGIN_BLD_NS
+
+// true if the player's eye has a clear line to the dude's head, middle or feet.
+// Remembers the last tick each dude was seen so it doesn't flicker at corners.
+bool isoPlayerCanSee(DBloodPlayer* pPlayer, DBloodActor* actor)
+{
+	static TMap<DBloodActor*, int> lastSeen;
+	auto pa = pPlayer->GetActor();
+	if (!pa || !pa->sector() || !actor->sector()) return true;
+	DVector3 eye(pa->spr.pos.XY(), pPlayer->zView);
+	double top, bottom;
+	GetActorExtents(actor, &top, &bottom);
+	const double zs[3] = { top + 2, (top + bottom) * 0.5, bottom - 4 };
+	for (double z : zs)
+	{
+		if (cansee(eye, pa->sector(), DVector3(actor->spr.pos.XY(), z), actor->sector()))
+		{
+			lastSeen.Insert(actor, PlayClock);
+			return true;
+		}
+	}
+	int* t = lastSeen.CheckKey(actor);
+	return t && *t <= PlayClock && PlayClock - *t <= r_iso_losgrace;
+}
 
 static DAngle gCameraAng;
 DAngle random_angles[16][3];
@@ -581,6 +610,12 @@ void viewProcessSprites(tspriteArray& tsprites, const DVector3& cPos, DAngle cA,
 			pTSprite->pos = owneractor->interpolatedpos(interpfrac);
 			pTSprite->Angles.Yaw = owneractor->interpolatedyaw(interpfrac);
 		}
+		if (r_isometric && r_iso_los && owneractor->spr.statnum == kStatDude && pPlayer
+			&& owneractor != pPlayer->GetActor() && !isoPlayerCanSee(pPlayer, owneractor))
+		{
+			pTSprite->scale = DVector2(0, 0);
+			continue;
+		}
 		int nAnim = 0;
 		int nAnimType = GetExtInfo(nTex).picanm.extra & 7;
 		switch (nAnimType)
@@ -859,11 +894,11 @@ void viewProcessSprites(tspriteArray& tsprites, const DVector3& cPos, DAngle cA,
 					viewAddEffect(tsprites, nTSprite, kViewEffectReflectiveBall);
 				}
 
-				if (cl_showweapon && gGameOptions.nGameType > 0 && pPlayer) {
+				if (pPlayer && ((cl_showweapon && gGameOptions.nGameType > 0) || (r_isometric && r_iso_headicon))) { // iso: optional weapon icon over the player
 					viewAddEffect(tsprites, nTSprite, kViewEffectShowWeapon);
 				}
 
-				if (thisPlayer->flashEffect && (pPlayer != thisPlayer || gViewPos != viewFirstPerson)) {
+				if (thisPlayer->flashEffect && (pPlayer != thisPlayer || gViewPos != viewFirstPerson || r_isometric)) {
 					auto pNTSprite = viewAddEffect(tsprites, nTSprite, kViewEffectShoot);
 					if (pNTSprite) {
 						POSTURE* pPosture = &thisPlayer->pPosture[thisPlayer->lifeMode][thisPlayer->posture];
@@ -892,7 +927,7 @@ void viewProcessSprites(tspriteArray& tsprites, const DVector3& cPos, DAngle cA,
 				}
 			}
 
-			if (pTSprite->ownerActor != pPlayer->GetActor() || gViewPos != viewFirstPerson) {
+			if (pTSprite->ownerActor != pPlayer->GetActor() || gViewPos != viewFirstPerson || r_isometric) {
 				if (getflorzofslopeptr(pTSprite->sectp, pTSprite->pos) >= cPos.Z)
 				{
 					viewAddEffect(tsprites, nTSprite, kViewEffectShadow);

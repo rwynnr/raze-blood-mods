@@ -30,7 +30,14 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "blood.h"
 #include "bloodactor.h"
 
+EXTERN_CVAR(Bool, r_isometric)
+EXTERN_CVAR(Bool, r_iso_longaim)
+CVARD(Float, g_iso_longrange, 2.5f, CVAR_ARCHIVE, "isometric: auto-aim range multiplier in long-range aim mode")
+CVARD(Float, g_iso_aimassist, 2.f, CVAR_ARCHIVE, "isometric: multiplier on the horizontal auto-aim cone")
+
 BEGIN_BLD_NS
+
+DBloodActor* isoGetLockTarget(DBloodPlayer* pPlayer);
 
 void FirePitchfork(int, DBloodPlayer* pPlayer);
 void FireSpray(int, DBloodPlayer* pPlayer);
@@ -446,7 +453,7 @@ void UpdateAimVector(DBloodPlayer* pPlayer)
 	WEAPONTRACK* pWeaponTrack = &gWeaponTrack[pPlayer->curWeapon];
 	DBloodActor* targetactor = nullptr;
 	pPlayer->aimTargetsCount = 0;
-	int autoaim = Autoaim(pPlayer->pnum);
+	int autoaim = r_isometric ? 1 : Autoaim(pPlayer->pnum); // iso: no free aim possible, always auto-aim
 	if (autoaim == 1 || (autoaim == 2 && !pWeaponTrack->bIsProjectile) || pPlayer->curWeapon == kWeapVoodooDoll || pPlayer->curWeapon == kWeapLifeLeech)
 	{
 		double nClosest = 0x7fffffff;
@@ -464,7 +471,8 @@ void UpdateAimVector(DBloodPlayer* pPlayer)
 
 			auto pos2 = actor->spr.pos;
 			double nDist = (pos2.XY() - pos.XY()).Length();
-			if (nDist == 0 || nDist > 3200)
+			const double aimRange = (r_isometric && r_iso_longaim) ? 3200. * std::max((double)g_iso_longrange, 1.) : 3200.;
+			if (nDist == 0 || nDist > aimRange)
 				continue;
 
 			if (pWeaponTrack->seeker)
@@ -482,7 +490,7 @@ void UpdateAimVector(DBloodPlayer* pPlayer)
 
 			DAngle angle = (pos2 - pos).Angle();
 			DAngle deltaangle = absangle(angle, plActor->spr.Angles.Yaw);
-			if (deltaangle > DAngle::fromBuild(pWeaponTrack->angleRange))
+			if (deltaangle > DAngle::fromBuild(pWeaponTrack->angleRange) * (r_isometric ? (double)g_iso_aimassist : 1.))
 				continue;
 			if (pPlayer->aimTargetsCount < 16 && cansee(pos, plActor->sector(), pos2, actor->sector()))
 				pPlayer->aimTargets[pPlayer->aimTargetsCount++] = actor;
@@ -546,6 +554,20 @@ void UpdateAimVector(DBloodPlayer* pPlayer)
 					targetactor = actor;
 				}
 			}
+		}
+	}
+	// iso target lock (iso_target): fire at the locked enemy wherever it is, as long as it's in sight.
+	if (auto lock = isoGetLockTarget(pPlayer))
+	{
+		auto pos2 = lock->spr.pos;
+		double nDist = (pos2.XY() - pos.XY()).Length();
+		if (nDist > 0 && cansee(pos, plActor->sector(), pos2, lock->sector()))
+		{
+			DUDEINFO* pDudeInfo = getDudeInfo(lock->spr.type);
+			double center = (lock->spr.scale.Y * pDudeInfo->aimHeight);
+			Aim.SetXY((pos2 - pos).Angle().ToVector());
+			Aim.Z = ((pos2.Z - center) - pos.Z) / nDist;
+			targetactor = lock;
 		}
 	}
 	DVector3 Aim2(Aim);
@@ -3047,6 +3069,113 @@ void teslaHit(DBloodActor* missileactor, int a2)
 			}
 		}
 	}
+}
+
+//---------------------------------------------------------------------------
+//
+// blood2d isometric experiment: expose lit-explosive state for the HUD.
+// Returns true while a TNT bundle or spray-can bomb is lit in hand.
+// fuseFrac: remaining fuse 0..1, fuseSecs: seconds until it blows in hand,
+// charging: fire is held and throw power is building (throwPower 0..1).
+//
+//---------------------------------------------------------------------------
+
+bool isoGetLitExplosive(DBloodPlayer* pPlayer, double& fuseFrac, double& fuseSecs, bool& charging)
+{
+	int fuseQav;
+	if (pPlayer->curWeapon == kWeapDynamite && pPlayer->weaponState >= 4 && pPlayer->weaponState <= 6)
+	{
+		fuseQav = kQAVBUNFUSE;
+		charging = pPlayer->weaponState == 6;
+	}
+	else if (pPlayer->curWeapon == kWeapSpraycan && pPlayer->weaponState >= 5 && pPlayer->weaponState <= 7)
+	{
+		fuseQav = kQAVCANFIRE2;
+		charging = pPlayer->weaponState == 7;
+	}
+	else return false;
+	auto pQAV = getQAV(qavGetCorrectID(fuseQav));
+	double total = pQAV ? std::max(1, pQAV->duration) : 1.;
+	fuseFrac = std::clamp(pPlayer->weaponTimer / total, 0., 1.);
+	fuseSecs = pPlayer->weaponTimer / 120.; // weaponTimer is in 1/120 s
+	return true;
+}
+
+END_BLD_NS
+
+//---------------------------------------------------------------------------
+//
+// blood2d iso: target lock. iso_target cycles through the enemies you can see
+// (nearest first); cycling past the last one clears the lock. The lock is held
+// as a raw pointer but only ever used after finding it in the live dude list.
+//
+//---------------------------------------------------------------------------
+
+EXTERN_CVAR(Float, r_iso_markrange)
+extern bool gIsoLockActive; // hw_entrypoint.cpp: tells input code to stop mouse turning while locked
+BEGIN_BLD_NS
+
+bool isoPlayerCanSee(DBloodPlayer* pPlayer, DBloodActor* actor); // animatesprite.cpp
+
+static DBloodActor* isoLock;
+static int isoLockLostTime;
+
+static double isoTargetRange()
+{
+	return std::max((double)r_iso_markrange, r_iso_longaim ? 3200. * std::max((double)g_iso_longrange, 1.) : 3200.);
+}
+
+static bool isoTargetable(DBloodPlayer* pPlayer, DBloodActor* actor)
+{
+	auto pa = pPlayer->GetActor();
+	if (actor == pa || !actor->hasX() || actor->xspr.health <= 0) return false;
+	if (!(actor->spr.flags & 8) || (actor->spr.flags & 32)) return false;
+	if (!gGameOptions.bFriendlyFire && IsTargetTeammate(pPlayer, actor)) return false;
+	return (actor->spr.pos.XY() - pa->spr.pos.XY()).Length() <= isoTargetRange();
+}
+
+DBloodActor* isoGetLockTarget(DBloodPlayer* pPlayer)
+{
+	if (!isoLock) { gIsoLockActive = false; return nullptr; }
+	bool found = false;
+	BloodStatIterator it(kStatDude);
+	while (auto actor = it.Next()) if (actor == isoLock) { found = true; break; }
+	if (!r_isometric || !found || !pPlayer || !isoTargetable(pPlayer, isoLock))
+	{
+		isoLock = nullptr; gIsoLockActive = false; return nullptr;
+	}
+	// Drop the lock after ~1s out of sight.
+	if (isoPlayerCanSee(pPlayer, isoLock)) isoLockLostTime = 0;
+	else if (!isoLockLostTime) isoLockLostTime = PlayClock;
+	else if (PlayClock - isoLockLostTime > 120) { isoLock = nullptr; gIsoLockActive = false; return nullptr; }
+	gIsoLockActive = true;
+	return isoLock;
+}
+
+CCMD(iso_target)
+{
+	if (!r_isometric || gamestate != GS_LEVEL) return;
+	auto pPlayer = getPlayer(myconnectindex);
+	auto pa = pPlayer ? pPlayer->GetActor() : nullptr;
+	if (!pa) return;
+	TArray<DBloodActor*> list;
+	BloodStatIterator it(kStatDude);
+	while (auto actor = it.Next())
+		if (isoTargetable(pPlayer, actor) && isoPlayerCanSee(pPlayer, actor)) list.Push(actor);
+	std::sort(list.begin(), list.end(), [=](DBloodActor* a, DBloodActor* b) {
+		return (a->spr.pos.XY() - pa->spr.pos.XY()).LengthSquared() < (b->spr.pos.XY() - pa->spr.pos.XY()).LengthSquared(); });
+	int cur = -1;
+	for (unsigned i = 0; i < list.Size(); i++) if (list[i] == isoLock) cur = i;
+	if (cur + 1 >= (int)list.Size())
+	{
+		isoLock = nullptr; gIsoLockActive = false;
+		Printf(PRINT_NOTIFY, "%s\n", list.Size() ? "Target lock off" : "No targets in sight");
+		return;
+	}
+	isoLock = list[cur + 1];
+	isoLockLostTime = 0;
+	gIsoLockActive = true;
+	Printf(PRINT_NOTIFY, "Target %d/%d\n", cur + 2, (int)list.Size());
 }
 
 END_BLD_NS

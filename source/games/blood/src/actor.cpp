@@ -6607,6 +6607,8 @@ bool actCanSplatWall(walltype* pWall)
 //
 //---------------------------------------------------------------------------
 
+void isoRecordTracer(const DVector3& a, const DVector3& b, bool fromPlayer); // view.cpp (blood2d iso)
+
 void actFireVector(DBloodActor* shooter, double offset, double zoffset, DVector3 dv, VECTOR_TYPE vectorType, double nRange)
 {
 	// this function expects a vector with unit length in XY. Let's not depend on all callers doing it.
@@ -6616,6 +6618,12 @@ void actFireVector(DBloodActor* shooter, double offset, double zoffset, DVector3
 	if (nRange < 0) nRange = pVectorData->fMaxDist();
 	// The vector for hitscan must be longer than what we got here as long as it works with integers.
 	int hit = VectorScan(shooter, offset, zoffset, dv, nRange, 1);
+	if (vectorType >= kVectorShell && vectorType <= kVectorTommyRegular) // firearms only: isometric tracer overlay
+	{
+		auto start = shooter->spr.pos.plusZ(zoffset) + (shooter->spr.Angles.Yaw + DAngle90).ToVector() * offset;
+		auto end = hit >= 0 ? gHitInfo.hitpos : start + dv * (nRange > 0 ? nRange : 1024.);
+		isoRecordTracer(start, end, shooter->IsPlayerActor());
+	}
 	if (hit == 3)
 	{
 		auto hitactor = gHitInfo.actor();

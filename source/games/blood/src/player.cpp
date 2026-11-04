@@ -32,7 +32,15 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "gamestate.h"
 #include "automap.h"
 
+EXTERN_CVAR(Bool, r_isometric)
+EXTERN_CVAR(Bool, r_iso_fixedcam)
+DAngle isoCameraYaw(DAngle playerYaw); // hw_entrypoint.cpp
+bool isoCursorAimActive(); // hw_entrypoint.cpp
+
 BEGIN_BLD_NS
+
+DBloodActor* isoGetLockTarget(DBloodPlayer* pPlayer); // weapon.cpp
+extern DVector2 gIsoCursorWorld; extern bool gIsoCursorValid; // view.cpp
 
 bool gBlueFlagDropped = false;
 bool gRedFlagDropped = false;
@@ -1564,14 +1572,34 @@ void ProcessInput(DBloodPlayer* pPlayer)
 	if (!pInput->vel.XY().isZero() && (pPlayer->posture == 1 || actor->xspr.height < 256))
 	{
 		const double speed = pPlayer->posture == 1? 1. : 1. - (actor->xspr.height * (1. / 256.) * (actor->xspr.height < 256));
+		if (r_isometric && r_iso_fixedcam)
+		{
+			// Fixed iso camera: keys move relative to the screen (up = away from camera), same speed every direction.
+			pInput->vel.X *= pPosture->frontAccel;
+			pInput->vel.Y *= pPosture->frontAccel;
+			actor->vel += pInput->vel.XY().Rotated(isoCameraYaw(actor->spr.Angles.Yaw)) * speed;
+		}
+		else
+		{
 		pInput->vel.X *= pInput->vel.X > 0 ? pPosture->frontAccel : pPosture->backAccel;
 		pInput->vel.Y *= pPosture->sideAccel;
 		actor->vel += pInput->vel.XY().Rotated(actor->spr.Angles.Yaw) * speed;
+		}
 		pPlayer->RollVel += pInput->vel.Y * speed;
 	}
 
 	pPlayer->doViewYaw();
 	pPlayer->doYawInput();
+
+	// blood2d iso: face the locked target, else (fixed camera) the aim cursor.
+	if (r_isometric)
+	{
+		DVector2 face; bool doFace = false;
+		if (auto lock = isoGetLockTarget(pPlayer)) { face = lock->spr.pos.XY(); doFace = true; }
+		else if (isoCursorAimActive() && gIsoCursorValid) { face = gIsoCursorWorld; doFace = true; }
+		if (doFace && (face - actor->spr.pos.XY()).LengthSquared() > 16.)
+			actor->spr.Angles.Yaw = (face - actor->spr.pos.XY()).Angle();
+	}
 
 	if (!(pInput->actions & SB_JUMP))
 		pPlayer->cantJump = 0;
@@ -1698,6 +1726,8 @@ void ProcessInput(DBloodPlayer* pPlayer)
 
 	pPlayer->doViewPitch();
 	pPlayer->doPitchInput();
+	if (r_isometric) // iso: pitch is invisible from above, so keep it level; auto-aim handles height
+		pPlayer->GetActor()->spr.Angles.Pitch = pPlayer->ViewAngles.Pitch = nullAngle;
 
 	pPlayer->slope = pPlayer->GetActor()->spr.Angles.Pitch.Tan();
 	if (pInput->actions & SB_INVPREV)
