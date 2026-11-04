@@ -1608,7 +1608,7 @@ void aiProcessDudes(void)
 			if (actor->xspr.aiState->moveFunc)
 				actor->xspr.aiState->moveFunc(actor);
 
-			if (actor->xspr.aiState->thinkFunc && (gFrameCount & 3) == (actor->GetIndex() & 3))
+			if (actor->xspr.aiState->thinkFunc && (bmod::AiFrame() & 3) == (actor->GetIndex() & 3))
 				actor->xspr.aiState->thinkFunc(actor);
 		}
 

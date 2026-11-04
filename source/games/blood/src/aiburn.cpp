@@ -201,7 +201,7 @@ static void burnThinkChase(DBloodActor* actor)
 			if (nDist < pDudeInfo->SeeDist() && nDeltaAngle <= pDudeInfo->Periphery())
 			{
 				aiSetTarget(actor, actor->GetTarget());
-				if (nDist < 51.1875 && nDeltaAngle < DAngle15)
+				if (nDist < bmod::MeleeRange(actor, 51.1875) && nDeltaAngle < DAngle15)
 				{
 					switch (actor->spr.type)
 					{

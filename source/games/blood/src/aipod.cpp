@@ -112,12 +112,12 @@ void sub_70284(int, DBloodActor* actor)
 	default: // ???
 		nBurn = 0;
 		dmgType = kDamageBullet;
-		nDist = 50;
+		nDist = int(bmod::MeleeRange(actor, 50));
 		break;
 	case kDudeTentacleFire: // ???
 		nBurn = (gGameOptions.nDifficulty * 120) >> 2;
 		dmgType = kDamageExplode;
-		nDist = 75;
+		nDist = int(bmod::MeleeRange(actor, 75));
 		break;
 	}
 	actRadiusDamage(actor, actor->spr.pos, actor->sector(), nDist, 1, 5 * (1 + gGameOptions.nDifficulty), dmgType, 2, nBurn);

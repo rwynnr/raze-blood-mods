@@ -110,7 +110,7 @@ static void handThinkChase(DBloodActor* actor)
 			if (nDist < pDudeInfo->SeeDist() && abs(nDeltaAngle) <= pDudeInfo->Periphery())
 			{
 				aiSetTarget(actor, actor->GetTarget());
-				if (nDist < 35.1875 && nDeltaAngle < DAngle15 && gGameOptions.nGameType == 0)
+				if (nDist < bmod::MeleeRange(actor, 35.1875) && nDeltaAngle < DAngle15 && gGameOptions.nGameType == 0)
 					aiNewState(actor, &handJump);
 				return;
 			}

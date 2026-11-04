@@ -189,6 +189,8 @@ CVAR(Bool, save_formatted, false, 0)	// should be set to false once the conversi
 //
 //=============================================================================
 
+void (*gModSaveHook)(bool before); // blood2d mod: undo/redo effect changes around the save
+
 bool WriteSavegame(const char* filename, const char *name)
 {
 	BufferWriter savepic;
@@ -231,6 +233,7 @@ bool WriteSavegame(const char* filename, const char *name)
 
 
 	// Save the game state
+	if (gModSaveHook) gModSaveHook(true);
 	savegamesession.OpenWriter(save_formatted);
 	SerializeSession(savegamesession);
 
@@ -253,6 +256,7 @@ bool WriteSavegame(const char* filename, const char *name)
 	savegame_content.Push(savegameinfo.GetCompressedOutput());
 	savegame_filenames.Push("info.json");
 	savegame_content.Push(savegamesession.GetCompressedOutput());
+	if (gModSaveHook) gModSaveHook(false);
 	savegame_filenames.Push("session.json");
 	for (unsigned i = 0; i < savegame_content.Size(); i++)
 		savegame_content[i].filename = savegame_filenames[i].GetChars();

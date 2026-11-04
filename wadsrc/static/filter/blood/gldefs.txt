@@ -1,0 +1,18 @@
+// blood2d mod base: post-process effects driven from bloodmod.cpp (disabled until an effect enables them).
+// "scene" runs on the 3D view before the HUD is drawn, so the HUD is never distorted or flipped.
+
+HardwareShader PostProcess scene
+{
+	Name "bmod_acid"
+	Shader "shaders/pp/bmod_acid.fp" 330
+	Uniform float amount
+	Uniform float timer
+}
+
+HardwareShader PostProcess scene
+{
+	Name "bmod_flip"
+	Shader "shaders/pp/bmod_flip.fp" 330
+	Uniform float flipx
+	Uniform float flipy
+}

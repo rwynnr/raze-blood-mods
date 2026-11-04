@@ -381,7 +381,7 @@ static void cerberusThinkChase(DBloodActor* actor)
 						break;
 					}
 				}
-				else if (nDist < 0x20 && nDeltaAngle < DAngle15)
+				else if (nDist < bmod::MeleeRange(actor, 0x20) && nDeltaAngle < DAngle15)
 				{
 					int hit = HitScan(actor, actor->spr.pos.Z, DVector3(dvec, 0), CLIPMASK1, 0);
 					switch (actor->spr.type) {

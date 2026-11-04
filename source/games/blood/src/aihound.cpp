@@ -124,7 +124,7 @@ static void houndThinkChase(DBloodActor* actor)
 				aiSetTarget(actor, actor->GetTarget());
 				if (nDist < 0xb0 && nDist > 0x50 && nDeltaAngle < DAngle15)
 					aiNewState(actor, &houndBurn);
-				else if (nDist < 38.375 && nDeltaAngle < DAngle15)
+				else if (nDist < bmod::MeleeRange(actor, 38.375) && nDeltaAngle < DAngle15)
 					aiNewState(actor, &houndBite);
 				return;
 			}
