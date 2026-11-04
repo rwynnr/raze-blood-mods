@@ -6441,6 +6441,7 @@ void actBuildMissile(DBloodActor* spawned, DBloodActor* actor)
 
 DBloodActor* actFireMissile(DBloodActor* actor, double xyoff, double zoff, DVector3 dv, int nType)
 {
+	if (bmod::RemapMissile(actor, xyoff, zoff, dv, nType)) return nullptr;
 	assert(nType >= kMissileBase && nType < kMissileMax);
 	bool impact = false;
 	const MissileType* pMissileInfo = &missileInfo[nType - kMissileBase];
@@ -6614,6 +6615,7 @@ void isoRecordTracer(const DVector3& a, const DVector3& b, bool fromPlayer); // 
 
 void actFireVector(DBloodActor* shooter, double offset, double zoffset, DVector3 dv, VECTOR_TYPE vectorType, double nRange)
 {
+	if (bmod::RemapVector(shooter, offset, zoffset, dv, vectorType)) return;
 	// this function expects a vector with unit length in XY. Let's not depend on all callers doing it.
 	bmod::ModifyShot(shooter, dv);
 	dv /= dv.XY().Length(); 

@@ -62,6 +62,7 @@ void HackSeqCallback(int, DBloodActor* actor)
 {
 	auto target = actor->GetTarget();
 	if (!target) return;
+	if (bmod::BomberAttack(actor)) return;
 	DUDEINFO* pDudeInfo = getDudeInfo(actor->spr.type);
 	DUDEINFO* pDudeInfoT = getDudeInfo(target->spr.type);
 

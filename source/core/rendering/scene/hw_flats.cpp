@@ -225,6 +225,8 @@ void HWFlat::MakeVertices(HWDrawInfo* di)
 //
 //
 //==========================================================================
+bool ModTexWarpBegin(FRenderState& state); void ModTexWarpEnd(FRenderState& state); // hw_walls.cpp (blood2d mod)
+
 void HWFlat::DrawFlat(HWDrawInfo *di, FRenderState &state, bool translucent)
 {
 	rendered_flats++;
@@ -266,7 +268,9 @@ void HWFlat::DrawFlat(HWDrawInfo *di, FRenderState &state, bool translucent)
 	state.SetMaterial(texture, UF_Texture, 0, Sprite == nullptr? CLAMP_NONE : CLAMP_XY, TRANSLATION(Translation_Remap + curbasepal, palette).index(), -1);
 
 	state.SetLightIndex(dynlightindex);
+	bool warp = Sprite == nullptr && ModTexWarpBegin(state);
 	state.Draw(DT_Triangles, vertindex, vertcount);
+	if (warp) ModTexWarpEnd(state);
 	vertexcount += vertcount;
 
 	if (translucent) state.SetRenderStyle(LegacyRenderStyles[STYLE_Translucent]);

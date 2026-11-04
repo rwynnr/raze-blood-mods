@@ -185,6 +185,29 @@ void HWWall::RenderMirrorSurface(HWDrawInfo *di, FRenderState &state)
 //
 //==========================================================================
 
+// blood2d mod: texture tessellation warp for the "acid trip" effect. The game module sets these per
+// frame; walls and flats apply them through the texture matrix (sprites and sky are left alone).
+bool gModTexWarpOn;
+float gModTexWarp[4] = { 1.f, 0.f, 0.f, 0.f }; // scale, rotation (degrees), u offset, v offset
+
+bool ModTexWarpBegin(FRenderState& state)
+{
+	if (!gModTexWarpOn) return false;
+	auto& m = state.mTextureMatrix;
+	m.loadIdentity();
+	m.translate(gModTexWarp[2], gModTexWarp[3], 0.f);
+	m.rotate(gModTexWarp[1], 0.f, 0.f, 1.f);
+	m.scale(gModTexWarp[0], gModTexWarp[0], 1.f);
+	state.EnableTextureMatrix(true);
+	return true;
+}
+
+void ModTexWarpEnd(FRenderState& state)
+{
+	state.EnableTextureMatrix(false);
+	state.mTextureMatrix.loadIdentity();
+}
+
 void HWWall::RenderTexturedWall(HWDrawInfo *di, FRenderState &state, int rflags)
 {
 	SetLightAndFog(di, state, fade, palette, shade, visibility, alpha);
@@ -210,7 +233,9 @@ void HWWall::RenderTexturedWall(HWDrawInfo *di, FRenderState &state, int rflags)
 				state.SetNpotEmulation(float(h2) / h, xOffset);
 			}
 		}
+		bool warp = !(flags & (HWF_CLAMPX | HWF_CLAMPY)) && ModTexWarpBegin(state);
 		RenderWall(di, state, rflags);
+		if (warp) ModTexWarpEnd(state);
 	}
 	else if (!(rflags & RWF_TRANS))
 	{
