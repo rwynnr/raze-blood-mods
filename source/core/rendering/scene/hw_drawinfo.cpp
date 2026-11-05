@@ -147,6 +147,11 @@ void HWDrawInfo::StartScene(FRenderViewpoint& parentvp, HWViewpointUniforms* uni
 		if (isBuildSoftwareLighting()) VPUniforms.mPalLightLevels |= (5 << 16);
 
 		VPUniforms.mClipLine.X = -10000000.0f;
+		// blood2d iso: draw infos are recycled frame to frame, and the iso view sets a cutaway clip
+		// height on the main view. Start every main view without one, or first person keeps cutting
+		// the world (and the sky) at the height where the iso view was left.
+		VPUniforms.mClipHeight = 0.f;
+		VPUniforms.mClipHeightDirection = 0.f;
 		VPUniforms.mShadowmapFilter = gl_shadowmap_filter;
 	}
 
