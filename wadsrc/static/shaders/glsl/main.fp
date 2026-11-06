@@ -311,7 +311,7 @@ float R_DoomLightingEquation(float light)
 #ifndef PALETTE_EMULATION
 	// z is the depth in view space, positive going into the screen
 	float z;
-	if (((uPalLightLevels >> 8)  & 0xff) == 2)
+	if (((uPalLightLevels >> 8)  & 0xff) >= 2) // 2 = radial fog; 3 = blood2d isometric view (always radial)
 	{
 		z = distance(pixelpos.xyz, uCameraPos.xyz);
 	}

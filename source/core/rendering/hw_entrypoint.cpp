@@ -327,6 +327,12 @@ void RenderViewpoint(FRenderViewpoint& mainvp, IntRect* bounds, float fov, float
 			isoCutEased += (cutTarget - isoCutEased) * std::min(1., dt * 10.);
 			isoCutValid = true;
 			if (cutOn) di->SetClipHeight(float(isoCutEased + r_iso_lookcut * gIsoLookAmt), -1.f);
+			// Light falls off with distance from the player, not from the far-off ortho camera. The shaders
+			// measure from uCameraPos (SetupView puts it at the player) only for radial fog; the indexed
+			// colour (paletted) shader never did, which left the iso view near black indoors with
+			// hw_useindexedcolortextures on. Fog mode byte 3 = radial in both shaders; portals copy it, and
+			// the next main view's StartScene puts the real gl_fogmode back.
+			di->VPUniforms.mPalLightLevels = (di->VPUniforms.mPalLightLevels & ~0xff00) | (3 << 8);
 			di->SetupView(RenderState, cx, cy, cz, false, false);
 			gIsoActive = true;
 			gIsoCamRender = DVector3(cx, cy, cz);
