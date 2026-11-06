@@ -372,14 +372,22 @@ static int SwapCandidates(int* out)
 
 //---------------------------------------------------------------------------
 //
-// weapon roulette (one-shot, effect name "weaponswap"): every weapon but the
-// pitchfork is a coin flip, whatever you had before. Ammo is left alone: a gun
-// you lose keeps its ammo for when you find it again, a gun you win may have
-// none yet. With few weapons (early) that's mostly a gain, with a full arsenal
-// (late) mostly a loss. Then you're handed a random gun from the new set that
-// has ammo. Like the shuffles, the result stays.
+// weapon roulette (one-shot, effect name "weaponswap"): every gun is a coin
+// flip, whatever you had before. Ammo is left alone: a gun you lose keeps its
+// ammo for when you find it again, a gun you win may have none yet. With few
+// guns (early) that's mostly a gain, with a full arsenal (late) mostly a loss.
+// Then you're handed a random weapon from the new set that has ammo. Like the
+// shuffles, the result stays.
+//
+// Only the guns spin. Dynamite, the spray can, the bombs and the voodoo doll
+// come with their own ammo pickups (picking up TNT is what gives you dynamite),
+// and Blood picks slot 6 by ammo and then refuses a weapon you don't own: when
+// the roulette took dynamite away, the sticks you still had couldn't be
+// selected until you picked up more TNT. They stay as they are, like the ammo.
 //
 //---------------------------------------------------------------------------
+
+static const int rouletteWeapons[] = { kWeapFlareGun, kWeapShotgun, kWeapTommyGun, kWeapNapalm, kWeapTeslaCannon, kWeapLifeLeech };
 
 static const char* const rouletteNames[kWeapMax] = { "", "Pitchfork", "Flare gun", "Shotgun", "Tommy gun",
 	"Napalm launcher", "Dynamite", "Spray can", "Tesla cannon", "Life leech", "Voodoo doll", "Proximity bombs",
@@ -400,10 +408,10 @@ static void RouletteSpin()
 	bool had[kWeapMax];
 	for (int w = 0; w < kWeapMax; w++) had[w] = pPlayer->hasWeapon[w];
 
-	bool changed = false; // spin again in the 1-in-2048 case where nothing changed
+	bool changed = false; // spin again in the 1-in-64 case where nothing changed
 	for (int tries = 0; tries < 8 && !changed; tries++)
 	{
-		for (int w = kWeapPitchFork + 1; w < kWeapBeast; w++)
+		for (int w : rouletteWeapons)
 		{
 			pPlayer->hasWeapon[w] = (rand() & 1) != 0;
 			if (pPlayer->hasWeapon[w] != had[w]) changed = true;
@@ -420,7 +428,7 @@ static void RouletteSpin()
 	else if (pPlayer->curWeapon == kWeapNone || !pPlayer->hasWeapon[pPlayer->curWeapon]) pPlayer->newWeapon = kWeapPitchFork;
 
 	FString won, lost;
-	for (int w = kWeapPitchFork + 1; w < kWeapBeast; w++)
+	for (int w : rouletteWeapons)
 	{
 		if (pPlayer->hasWeapon[w] == had[w]) continue;
 		FString& s = pPlayer->hasWeapon[w] ? won : lost;
