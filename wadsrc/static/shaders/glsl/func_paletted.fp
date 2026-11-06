@@ -17,7 +17,8 @@ vec4 ProcessTexel()
 	vec2 newCoord;
 
 	// z is the depth in view space, positive going into the screen
-	float z = abs(pixelpos.w);
+	// (blood2d isometric view: fog mode byte 3 = distance from uCameraPos, the player, since the ortho camera is far away)
+	float z = (((uPalLightLevels >> 8) & 0xff) == 3) ? distance(pixelpos.xyz, uCameraPos.xyz) : abs(pixelpos.w);
 
 #ifdef NPOT_EMULATION
 	// Coordinate adjustment for NPOT textures. It is somehow fitting that Build games exploited this texture wrapping quirk of the software rendering engine...
