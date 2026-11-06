@@ -351,7 +351,7 @@ static void SetIso(bool on)
 
 static DBloodPlayer* LocalPlayer() { return getPlayer(myconnectindex); }
 
-// Weapons the local player could be swapped to right now.
+// Weapons the local player could switch to right now (owned, loaded, allowed underwater), other than the one in hand.
 static int SwapCandidates(int* out)
 {
 	auto pPlayer = LocalPlayer();
@@ -368,6 +368,70 @@ static int SwapCandidates(int* out)
 		n++;
 	}
 	return n;
+}
+
+//---------------------------------------------------------------------------
+//
+// weapon roulette (one-shot, effect name "weaponswap"): every weapon but the
+// pitchfork is a coin flip, whatever you had before. Ammo is left alone: a gun
+// you lose keeps its ammo for when you find it again, a gun you win may have
+// none yet. With few weapons (early) that's mostly a gain, with a full arsenal
+// (late) mostly a loss. Then you're handed a random gun from the new set that
+// has ammo. Like the shuffles, the result stays.
+//
+//---------------------------------------------------------------------------
+
+static const char* const rouletteNames[kWeapMax] = { "", "Pitchfork", "Flare gun", "Shotgun", "Tommy gun",
+	"Napalm launcher", "Dynamite", "Spray can", "Tesla cannon", "Life leech", "Voodoo doll", "Proximity bombs",
+	"Remote bombs", "" };
+
+static bool RouletteAvailable()
+{
+	auto pPlayer = LocalPlayer();
+	if (!pPlayer || !pPlayer->GetActor() || pPlayer->GetActor()->xspr.health <= 0) return false;
+	// never yank a lit explosive out of your hand; leave the beast's claws alone
+	return !checkLitSprayOrTNT(pPlayer) && pPlayer->curWeapon != kWeapBeast;
+}
+
+static void RouletteSpin()
+{
+	if (!RouletteAvailable()) return;
+	auto pPlayer = LocalPlayer();
+	bool had[kWeapMax];
+	for (int w = 0; w < kWeapMax; w++) had[w] = pPlayer->hasWeapon[w];
+
+	bool changed = false; // spin again in the 1-in-2048 case where nothing changed
+	for (int tries = 0; tries < 8 && !changed; tries++)
+	{
+		for (int w = kWeapPitchFork + 1; w < kWeapBeast; w++)
+		{
+			pPlayer->hasWeapon[w] = (rand() & 1) != 0;
+			if (pPlayer->hasWeapon[w] != had[w]) changed = true;
+		}
+	}
+	if (!pPlayer->hasWeapon[pPlayer->nextWeapon]) pPlayer->nextWeapon = kWeapNone; // a switch queued by a pickup
+
+	// A random gun from the new set that has ammo; the pitchfork only when nothing else is loaded and the
+	// weapon in your hand is gone.
+	int list[kWeapMax];
+	int n = SwapCandidates(list), guns = 0;
+	for (int i = 0; i < n; i++) if (list[i] != kWeapPitchFork) list[guns++] = list[i];
+	if (guns > 0) pPlayer->newWeapon = list[rand() % guns];
+	else if (pPlayer->curWeapon == kWeapNone || !pPlayer->hasWeapon[pPlayer->curWeapon]) pPlayer->newWeapon = kWeapPitchFork;
+
+	FString won, lost;
+	for (int w = kWeapPitchFork + 1; w < kWeapBeast; w++)
+	{
+		if (pPlayer->hasWeapon[w] == had[w]) continue;
+		FString& s = pPlayer->hasWeapon[w] ? won : lost;
+		int ammo = weaponModes[w].ammoType;
+		bool empty = pPlayer->hasWeapon[w] && ammo >= 0 && pPlayer->ammoCount[ammo] <= 0;
+		s.AppendFormat("%s%s%s", s.IsEmpty() ? "" : ", ", rouletteNames[w], empty ? " (no ammo)" : "");
+	}
+	FString msg = "Weapon roulette:";
+	if (won.IsNotEmpty()) msg.AppendFormat(" won %s", won.GetChars());
+	if (lost.IsNotEmpty()) msg.AppendFormat("%s lost %s", won.IsNotEmpty() ? ";" : "", lost.GetChars());
+	Printf(PRINT_NOTIFY, "%s\n", msg.GetChars());
 }
 
 static bool HasEnemies()
@@ -681,14 +745,8 @@ static const Effect effects[] =
 		[] { mods.damageDealtScale = 4.; mods.damageTakenScale = 2.; },
 		[] { mods.damageDealtScale = 1.; mods.damageTakenScale = 1.; }, nullptr, nullptr, nullptr, nullptr, nullptr },
 
-	{ "weaponswap", "Weapon swap", Category::Twist, true, 0,
-		[]
-		{
-			int list[kWeapMax];
-			int n = SwapCandidates(list);
-			if (n > 0) LocalPlayer()->newWeapon = list[rand() % n];
-		},
-		nullptr, nullptr, [] { return SwapCandidates(nullptr) > 0; }, nullptr, nullptr, nullptr },
+	{ "weaponswap", "Weapon roulette", Category::Twist, true, 0,
+		RouletteSpin, nullptr, nullptr, RouletteAvailable, nullptr, nullptr, nullptr },
 
 	{ "spread", "Spray and pray", Category::Twist, false, 0,
 		[] { mods.spreadDegrees = 7.; }, [] { mods.spreadDegrees = 0.; }, nullptr, nullptr, nullptr, nullptr, nullptr },
