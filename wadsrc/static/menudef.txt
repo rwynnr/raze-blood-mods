@@ -2202,33 +2202,40 @@ OptionMenu "ChaosOptions" protected
 	StaticText "N: chaos on/off    H: this menu"
 }
 
+// Each effect's chance (chaos_chance_<name>): a weight, 0 = never. Defaults: silly 6, twist 4, nasty 2.
 OptionMenu "ChaosEffects" protected
 {
 	Title "Chaos Effects"
+	StaticText "How often each effect comes up", 1
+	StaticText "0 = never, 10 = most often"
+	StaticText ""
 	StaticText "Silly", 1
-	Option "Giant enemies",					"chaos_fx_giant", "OnOff"
-	Option "Tiny enemies",					"chaos_fx_tiny", "OnOff"
-	Option "Drunk camera",					"chaos_fx_drunk", "OnOff"
-	Option "Bird's eye / ground level",		"chaos_fx_birdseye", "OnOff"
-	Option "Acid trip",						"chaos_fx_acid", "OnOff"
+	Slider "Giant enemies",					"chaos_chance_giant", 0, 10, 1, 0
+	Slider "Tiny enemies",					"chaos_chance_tiny", 0, 10, 1, 0
+	Slider "Drunk camera",					"chaos_chance_drunk", 0, 10, 1, 0
+	Slider "Bird's eye / ground level",		"chaos_chance_birdseye", 0, 10, 1, 0
+	Slider "Acid trip",						"chaos_chance_acid", 0, 10, 1, 0
 	StaticText ""
 	StaticText "Twist", 1
-	Option "Low gravity",					"chaos_fx_lowgrav", "OnOff"
-	Option "Infinite ammo",					"chaos_fx_infammo", "OnOff"
-	Option "Glass cannon",					"chaos_fx_glasscannon", "OnOff"
-	Option "Weapon roulette",				"chaos_fx_weaponswap", "OnOff"
-	Option "Spray and pray",				"chaos_fx_spread", "OnOff"
-	Option "Big explosions",				"chaos_fx_bigboom", "OnOff"
-	Option "Slow-motion enemies",			"chaos_fx_slowmo", "OnOff"
-	Option "Fast enemies",					"chaos_fx_fast", "OnOff"
-	Option "Enemy shuffle",					"chaos_fx_enemyshuffle", "OnOff"
-	Option "Cultist shuffle",				"chaos_fx_cultistshuffle", "OnOff"
-	Option "Bomber zombies",				"chaos_fx_bomber", "OnOff"
-	Option "Bullet shuffle",				"chaos_fx_bulletshuffle", "OnOff"
+	Slider "Low gravity",					"chaos_chance_lowgrav", 0, 10, 1, 0
+	Slider "Infinite ammo",					"chaos_chance_infammo", 0, 10, 1, 0
+	Slider "Glass cannon",					"chaos_chance_glasscannon", 0, 10, 1, 0
+	Slider "Weapon roulette",				"chaos_chance_weaponswap", 0, 10, 1, 0
+	Slider "Spray and pray",				"chaos_chance_spread", 0, 10, 1, 0
+	Slider "Big explosions",				"chaos_chance_bigboom", 0, 10, 1, 0
+	Slider "Slow-motion enemies",			"chaos_chance_slowmo", 0, 10, 1, 0
+	Slider "Fast enemies",					"chaos_chance_fast", 0, 10, 1, 0
+	Slider "Enemy shuffle",					"chaos_chance_enemyshuffle", 0, 10, 1, 0
+	Slider "Cultist shuffle",				"chaos_chance_cultistshuffle", 0, 10, 1, 0
+	Slider "Bomber zombies",				"chaos_chance_bomber", 0, 10, 1, 0
+	Slider "Bullet shuffle",				"chaos_chance_bulletshuffle", 0, 10, 1, 0
 	StaticText ""
 	StaticText "Nasty", 1
-	Option "No HUD",						"chaos_fx_nohud", "OnOff"
-	Option "Inverted controls",				"chaos_fx_invert", "OnOff"
-	Option "Upside down",					"chaos_fx_upsidedown", "OnOff"
-	Option "Mirror world",					"chaos_fx_mirror", "OnOff"
+	Slider "No HUD",						"chaos_chance_nohud", 0, 10, 1, 0
+	Slider "Inverted controls",				"chaos_chance_invert", 0, 10, 1, 0
+	Slider "Upside down",					"chaos_chance_upsidedown", 0, 10, 1, 0
+	Slider "Mirror world",					"chaos_chance_mirror", 0, 10, 1, 0
+	Slider "Enemy wave",					"chaos_chance_wave", 0, 10, 1, 0
+	StaticText ""
+	SafeCommand "Reset to defaults",		"chaos_chance_reset"
 }

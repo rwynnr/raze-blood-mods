@@ -560,6 +560,116 @@ static void CultistShuffle()
 
 //---------------------------------------------------------------------------
 //
+// enemy wave (one-shot): a few enemies teleport in behind the player, copied
+// from the kinds still alive on the map (type, palette and size), so they look
+// like the level's own. A spot must be in plain sight of the player (nothing
+// spawns in a sealed room or behind a wall), on dry floor with headroom and
+// some elbow room, not far above or below the player. They count toward the
+// level's kill total and come straight for you. Only while eligible enemies
+// are alive (the shuffles' rules: no bosses, statues, hands, eels...).
+//
+//---------------------------------------------------------------------------
+
+struct WaveSpot { DVector3 pos; sectortype* sect; };
+
+static bool WaveKinds(TArray<DBloodActor*>& out)
+{
+	BloodStatIterator it(kStatDude);
+	while (auto a = it.Next()) if (ShuffleEligible(a, false)) out.Push(a);
+	return out.Size() > 0;
+}
+
+static bool FindWaveSpot(DBloodActor* pl, DBloodActor* kind, const TArray<WaveSpot>& taken, WaveSpot& out)
+{
+	auto plSect = pl->sector();
+	if (!plSect) return false;
+	double top, bottom;
+	GetActorExtents(kind, &top, &bottom);
+	double height = std::max(bottom - top, 8.);
+	double room = std::max(kind->clipdist, 4.) * 1.5;
+	DVector3 from(pl->spr.pos.XY(), pl->spr.pos.Z - height * 0.5);
+	static const double dists[] = { 160, 128, 104, 80, 64 };
+	for (double d : dists)
+	{
+		for (int k = 0; k < 8; k++)
+		{
+			// behind the player: within 75 degrees of straight back
+			DAngle ang = pl->spr.Angles.Yaw + DAngle180 + DAngle::fromDeg(double(rand() % 151 - 75));
+			DVector2 p = pl->spr.pos.XY() + ang.ToVector() * d;
+			auto sect = plSect;
+			updatesector(p, &sect);
+			if (!sect || IsUnderwaterSector(sect)) continue;
+			double cz, fz;
+			calcSlope(sect, p.X, p.Y, &cz, &fz);
+			if (fz - cz < height + 4 || std::abs(fz - pl->spr.pos.Z) > 64) continue;
+			DVector3 mid(p, fz - height * 0.5);
+			if (!cansee(from, plSect, mid, sect)) continue;
+			bool ok = true;
+			for (int q = 0; q < 4 && ok; q++)
+			{
+				DVector2 e = p + DAngle::fromDeg(q * 90.).ToVector() * room;
+				auto es = sect;
+				updatesector(e, &es);
+				ok = es && cansee(mid, sect, DVector3(e, mid.Z), es);
+			}
+			for (auto& t : taken) if (ok && (t.pos.XY() - p).LengthSquared() < room * room * 4) ok = false;
+			if (!ok) continue;
+			out = { DVector3(p, fz), sect };
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool WaveAvailable()
+{
+	auto pPlayer = LocalPlayer();
+	if (!pPlayer || !pPlayer->GetActor() || pPlayer->GetActor()->xspr.health <= 0) return false;
+	TArray<DBloodActor*> kinds;
+	if (!WaveKinds(kinds)) return false;
+	TArray<WaveSpot> none;
+	WaveSpot spot;
+	return FindWaveSpot(pPlayer->GetActor(), kinds[0], none, spot);
+}
+
+static void EnemyWave()
+{
+	auto pPlayer = LocalPlayer();
+	if (!pPlayer || !pPlayer->GetActor() || pPlayer->GetActor()->xspr.health <= 0) return;
+	auto pl = pPlayer->GetActor();
+	TArray<DBloodActor*> kinds;
+	if (!WaveKinds(kinds)) return;
+	int count = 3 + gGameOptions.nDifficulty / 2; // 3, 3, 4, 4, 5 by skill
+	TArray<WaveSpot> taken;
+	for (int i = 0; i < count; i++)
+	{
+		auto kind = kinds[rand() % kinds.Size()];
+		WaveSpot spot;
+		if (!FindWaveSpot(pl, kind, taken, spot)) continue;
+		taken.Push(spot);
+		auto a = actSpawnDude(pl, kind->spr.type, -1);
+		if (!a) continue;
+		a->spr.pal = kind->spr.pal;
+		a->spr.scale = kind->spr.scale;
+		a->vel.Zero();
+		a->spr.pos = spot.pos;
+		ChangeActorSect(a, spot.sect);
+		double top, bottom;
+		GetActorExtents(a, &top, &bottom);
+		if (bottom > spot.pos.Z) a->spr.pos.Z -= bottom - spot.pos.Z;
+		a->spr.Angles.Yaw = (pl->spr.pos.XY() - a->spr.pos.XY()).Angle(); // facing you
+		a->interpolated = false;
+		viewBackupSpriteLoc(a);
+		if (AllowedKillType(a)) Level.addKillCount();
+		aiSetTarget(a, pl);
+		aiActivateDude(a);
+		sfxPlay3DSound(a, 201, -1, 0); // teleporter
+	}
+	if (mod_eventlog) Printf("mod effect: wave spawned %d of %d\n", int(taken.Size()), count);
+}
+
+//---------------------------------------------------------------------------
+//
 // bomber zombies
 //
 //---------------------------------------------------------------------------
@@ -790,6 +900,10 @@ static const Effect effects[] =
 
 	{ "bulletshuffle", "Bullet shuffle", Category::Twist, false, 0,
 		BulletShuffleStart, [] { bulletShuffleOn = false; }, nullptr, nullptr, nullptr, nullptr, nullptr },
+
+	// one-shot: the new enemies stay, like any others
+	{ "wave", "Enemy wave", Category::Nasty, true, 0,
+		EnemyWave, nullptr, nullptr, WaveAvailable, nullptr, nullptr, nullptr },
 };
 
 struct ActiveEffect { const Effect* effect; int startClock; };
