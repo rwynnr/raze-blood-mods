@@ -2216,7 +2216,7 @@ OptionMenu "ChaosEffects" protected
 	Option "Low gravity",					"chaos_fx_lowgrav", "OnOff"
 	Option "Infinite ammo",					"chaos_fx_infammo", "OnOff"
 	Option "Glass cannon",					"chaos_fx_glasscannon", "OnOff"
-	Option "Weapon swap",					"chaos_fx_weaponswap", "OnOff"
+	Option "Weapon roulette",				"chaos_fx_weaponswap", "OnOff"
 	Option "Spray and pray",				"chaos_fx_spread", "OnOff"
 	Option "Big explosions",				"chaos_fx_bigboom", "OnOff"
 	Option "Slow-motion enemies",			"chaos_fx_slowmo", "OnOff"
