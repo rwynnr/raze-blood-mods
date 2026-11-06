@@ -1,26 +1,33 @@
 //---------------------------------------------------------------------------
 //
-// blood2d chaos mode: every so often, a random temporary effect from the mod
-// base's effect library (bloodmod.h), announced by a banner. A new effect
-// starts every chaos_interval seconds; up to chaos_maxactive run at once (when
-// a new one starts, the one closest to ending makes room). Settings menu:
-// Options > Chaos mode (wadsrc/static/menudef.txt). Design in the blood2d
-// workspace, docs/chaos.md.
+// blood2d chaos mode: every so often, a random effect from the mod base's
+// effect library (bloodmod.h). A new effect starts every chaos_interval
+// seconds, picked by each effect's chance (chaos_chance_<name>, 0-10); up to
+// chaos_maxactive run at once (when a new one starts, the one closest to
+// ending makes room). A new effect is announced with a big title at the top
+// for two seconds, then shown as a chip in a row above the status bar until it
+// ends. Settings menu: Options > Chaos mode (wadsrc/static/menudef.txt).
+// Design in the blood2d workspace, docs/chaos.md.
 //
 //---------------------------------------------------------------------------
 
 #include "ns.h"
+#include <algorithm>
+#include <climits>
 #include <random>
+#include <vector>
 #include "build.h"
 #include "blood.h"
 #include "c_cvars.h"
 #include "c_dispatch.h"
+#include "gamecvars.h"
+#include "texturemanager.h"
 #include "v_draw.h"
 #include "v_font.h"
 #include "printf.h"
 
 static bool chaosReplan;  // the interval changed: move the next effect to match
-static bool chaosRecheck; // effect switches changed: running effects that were switched off end
+static bool chaosRecheck; // effect chances changed: running effects set to 0 end
 
 CVARD(Bool, chaos, false, 0, "chaos mode: random temporary effects (toggle with chaos_toggle, bound to N)")
 CUSTOM_CVARD(Int, chaos_interval, 45, CVAR_ARCHIVE, "chaos: a new effect starts every this many seconds")
@@ -54,29 +61,43 @@ CUSTOM_CVARD(String, chaos_exclude, "", CVAR_ARCHIVE, "chaos: effects never to p
 	chaosRecheck = true;
 }
 
-// Per-effect switches (Options > Chaos mode > Choose effects). An effect without one is always allowed.
-#define CHAOS_FX(fx) CUSTOM_CVARD(Bool, chaos_fx_##fx, true, CVAR_ARCHIVE, "chaos: allow the " #fx " effect") { chaosRecheck = true; }
-CHAOS_FX(giant)
-CHAOS_FX(tiny)
-CHAOS_FX(drunk)
-CHAOS_FX(birdseye)
-CHAOS_FX(acid)
-CHAOS_FX(lowgrav)
-CHAOS_FX(infammo)
-CHAOS_FX(glasscannon)
-CHAOS_FX(weaponswap)
-CHAOS_FX(spread)
-CHAOS_FX(bigboom)
-CHAOS_FX(slowmo)
-CHAOS_FX(fast)
-CHAOS_FX(enemyshuffle)
-CHAOS_FX(cultistshuffle)
-CHAOS_FX(bomber)
-CHAOS_FX(bulletshuffle)
-CHAOS_FX(nohud)
-CHAOS_FX(invert)
-CHAOS_FX(upsidedown)
-CHAOS_FX(mirror)
+// Per-effect chance (Options > Chaos mode > Choose effects): 0 = never, otherwise a weight, so an effect at 6
+// comes up three times as often as one at 2. Defaults by category: silly 6, twist 4, nasty 2. chaos_fx_<name>
+// is the older on/off switch: switching it off (as an older config may) sets the chance to 0 and flips back on.
+#define CHAOS_FX(fx, def) \
+	CUSTOM_CVARD(Int, chaos_chance_##fx, def, CVAR_ARCHIVE, "chaos: how often the " #fx " effect comes up, 0 (never) to 10") \
+	{ \
+		if (self < 0) self = 0; \
+		else if (self > 10) self = 10; \
+		chaosRecheck = true; \
+	} \
+	CUSTOM_CVARD(Bool, chaos_fx_##fx, true, CVAR_ARCHIVE, "chaos: 0 sets the " #fx " effect's chance to 0") \
+	{ \
+		if (!self) { chaos_chance_##fx = 0; self = true; } \
+		chaosRecheck = true; \
+	}
+CHAOS_FX(giant, 6)
+CHAOS_FX(tiny, 6)
+CHAOS_FX(drunk, 6)
+CHAOS_FX(birdseye, 6)
+CHAOS_FX(acid, 6)
+CHAOS_FX(lowgrav, 4)
+CHAOS_FX(infammo, 4)
+CHAOS_FX(glasscannon, 4)
+CHAOS_FX(weaponswap, 4)
+CHAOS_FX(spread, 4)
+CHAOS_FX(bigboom, 4)
+CHAOS_FX(slowmo, 4)
+CHAOS_FX(fast, 4)
+CHAOS_FX(enemyshuffle, 4)
+CHAOS_FX(cultistshuffle, 4)
+CHAOS_FX(bomber, 4)
+CHAOS_FX(bulletshuffle, 4)
+CHAOS_FX(nohud, 2)
+CHAOS_FX(invert, 2)
+CHAOS_FX(upsidedown, 2)
+CHAOS_FX(mirror, 2)
+CHAOS_FX(wave, 2)
 #undef CHAOS_FX
 
 BEGIN_BLD_NS
@@ -84,17 +105,30 @@ BEGIN_BLD_NS
 namespace
 {
 
-constexpr int kClock = 120; // PlayClock units per second
+constexpr int kClock = 120;               // PlayClock units per second
+constexpr int kAnnounce = 2 * kClock;     // a new effect's big title, before it turns into a chip
+constexpr int kOneShotTitle = 3 * kClock; // one-shots get the big title only, shown a little longer
+constexpr int kFade = kClock / 2;         // an ending effect's chip fades out over this
 
 struct Running
 {
 	const bmod::Effect* effect;
 	FString title;
-	int start, end; // PlayClock; one-shots stay listed for a few seconds so their banner shows
+	int start, end; // PlayClock; one-shots stay listed while their title shows
+	int seq;        // order of arrival: chips run oldest first, left to right
+};
+
+struct Fading // the chip of an effect that just ended, fading where it was
+{
+	FString title;
+	bmod::Category category;
+	int seq, from;
 };
 
 bool on;                        // chaos was running last tic
 TArray<Running> running;
+TArray<Fading> fading;
+int nextSeq;
 int lastStart, nextStart;       // PlayClock: when the previous effect started, when the next one will
 bool picked;                    // the next effect has been chosen (its warning is showing)...
 const bmod::Effect* pending;    // ...and this is it (null: nothing could run this time)
@@ -140,11 +174,21 @@ bool Excluded(const char* name)
 	return false;
 }
 
+int DefaultChance(bmod::Category c)
+{
+	return c == bmod::Category::Silly ? 6 : c == bmod::Category::Twist ? 4 : 2;
+}
+
+int EffectChance(const bmod::Effect* e)
+{
+	auto cv = FindCVar(FStringf("chaos_chance_%s", e->name).GetChars(), nullptr);
+	if (!cv) return DefaultChance(e->category); // an effect added without a setting
+	return std::clamp(cv->GetGenericRep(CVAR_Int).Int, 0, 10);
+}
+
 bool Allowed(const bmod::Effect* e)
 {
-	if (Excluded(e->name)) return false;
-	auto cv = FindCVar(FStringf("chaos_fx_%s", e->name).GetChars(), nullptr);
-	return !cv || cv->GetGenericRep(CVAR_Bool).Bool;
+	return !Excluded(e->name) && EffectChance(e) > 0;
 }
 
 int TimedCount()
@@ -162,16 +206,20 @@ int SoonestEnding()
 	return best;
 }
 
-void StopRunning(unsigned i)
+// `fade`: leave the effect's chip on screen for a moment, fading (not when everything is reset at once).
+void StopRunning(unsigned i, bool fade = true)
 {
-	auto e = running[i].effect;
+	Running r = running[i];
 	running.Delete(i);
-	if (!e->oneShot && bmod::IsActive(e)) bmod::StopEffect(e);
+	if (fade && !r.effect->oneShot && PlayClock >= r.start + kAnnounce)
+		fading.Push({ r.title, r.effect->category, r.seq, PlayClock });
+	if (!r.effect->oneShot && bmod::IsActive(r.effect)) bmod::StopEffect(r.effect);
 }
 
 void EndAll()
 {
-	while (running.Size()) StopRunning(running.Size() - 1);
+	while (running.Size()) StopRunning(running.Size() - 1, false);
+	fading.Clear();
 }
 
 // The next effect starts `clocks` from now.
@@ -208,24 +256,27 @@ bool Clashes(const bmod::Effect* e)
 
 const bmod::Effect* PickEffect()
 {
-	// Pick a category by weight (silly 60 / twist 30 / nasty 10), then an effect within it.
-	TArray<const bmod::Effect*> byCat[3];
+	// Each effect that can run, by its chance (a weight). Never the same one twice in a row, unless it's the
+	// only one that can run.
+	struct Candidate { const bmod::Effect* e; int weight; };
+	TArray<Candidate> list;
+	int total = 0;
+	const bmod::Effect* repeat = nullptr;
 	for (int i = 0; i < bmod::NumEffects(); i++)
 	{
 		auto e = &bmod::GetEffect(i);
-		if (e == lastEffect || !Allowed(e) || !bmod::CanStart(e) || Clashes(e)) continue;
-		byCat[int(e->category)].Push(e);
+		if (!Allowed(e) || !bmod::CanStart(e) || Clashes(e)) continue;
+		if (e == lastEffect) { repeat = e; continue; }
+		int w = EffectChance(e);
+		list.Push({ e, w });
+		total += w;
 	}
-	static const int weights[3] = { 60, 30, 10 };
-	int total = 0;
-	for (int c = 0; c < 3; c++) if (byCat[c].Size()) total += weights[c];
-	if (total == 0) return nullptr;
+	if (total == 0) return repeat;
 	int r = RandRange(0, total - 1);
-	for (int c = 0; c < 3; c++)
+	for (auto& c : list)
 	{
-		if (!byCat[c].Size()) continue;
-		if (r < weights[c]) return byCat[c][RandRange(0, int(byCat[c].Size()) - 1)];
-		r -= weights[c];
+		if (r < c.weight) return c.e;
+		r -= c.weight;
 	}
 	return nullptr;
 }
@@ -249,13 +300,13 @@ bool Launch(const bmod::Effect* e, const char* title)
 	lastEffect = e;
 	PlanNext(Vary(chaos_interval));
 	int end;
-	if (e->oneShot) end = PlayClock + 3 * kClock; // just show the banner briefly
+	if (e->oneShot) end = PlayClock + kOneShotTitle; // just the big title
 	else
 	{
 		end = PlayClock + (e->fixedSeconds > 0 ? e->fixedSeconds * kClock : Vary(chaos_duration));
 		if (MaxActive() == 1) end = std::min(end, nextStart); // one at a time: over before the next one lands
 	}
-	running.Push({ e, FString(title), PlayClock, std::max(end, PlayClock + kClock) });
+	running.Push({ e, FString(title), PlayClock, std::max(end, PlayClock + kClock), nextSeq++ });
 	auto pPlayer = getPlayer(myconnectindex);
 	if (pPlayer && pPlayer->GetActor()) sfxPlay3DSound(pPlayer->GetActor(), 776, -1, 0); // powerup chime
 	return true;
@@ -278,7 +329,7 @@ void ChaosTick()
 	if (chaosReplan) { chaosReplan = false; Replan(); }
 	if (!LocalPlayerAlive()) return; // death ends effects (listener); wait for the reload/respawn
 
-	// Effects whose time is up, that ended elsewhere, or that were switched off in the menu.
+	// Effects whose time is up, that ended elsewhere, or whose chance was set to 0 in the menu.
 	bool recheck = chaosRecheck;
 	chaosRecheck = false;
 	for (unsigned i = running.Size(); i-- > 0; )
@@ -329,6 +380,17 @@ void ChaosEvent(const bmod::EventInfo& ev)
 	}
 }
 
+//---------------------------------------------------------------------------
+//
+// drawing: the warning and new effects' big titles at the top; a row of chips
+// just above the status bar (oldest left), each in its category's colour with
+// the seconds left and a fill that drains, then a dashed "next" chip with the
+// countdown (hidden while the warning shows). Ending chips fade out where they
+// were; the rest close the gap. With the status bar hidden (hud_size, No HUD)
+// the row sits at the bottom edge; a row too wide for the screen wraps upward.
+//
+//---------------------------------------------------------------------------
+
 void DrawCentered(FFont* font, int color, double y, const char* text, double scale, double alpha = 1.)
 {
 	double w = font->StringWidth(text) * scale;
@@ -340,13 +402,84 @@ int CategoryColor(bmod::Category c)
 	return c == bmod::Category::Silly ? CR_GREEN : c == bmod::Category::Twist ? CR_GOLD : CR_RED;
 }
 
+PalEntry CategoryRGB(bmod::Category c)
+{
+	return c == bmod::Category::Silly ? PalEntry(0xff4fdc4f) : c == bmod::Category::Twist ? PalEntry(0xfff2c230) : PalEntry(0xffff4a3a);
+}
+
+// Screen y of the top of the status bar or HUD, found the way the level stats find it (statusbar.zs,
+// PrintLevelStats, with the heights Blood's sbar.zs reports); the bottom edge when nothing is drawn there.
+double ChipsFloor()
+{
+	double h = twod->GetHeight();
+	if (bmod::mods.hideHud || hud_size == Hud_Nothing) return h;
+	double space = 28; // the fullscreen HUDs
+	if (hud_size <= Hud_StbarOverlay)
+	{
+		auto id = TexMan.CheckForTexture("Statusbar", ETextureType::Any);
+		auto tex = id.isValid() ? TexMan.GetGameTexture(id) : nullptr;
+		if (tex) space = tex->GetDisplayHeight();
+	}
+	return h * (200. - space * (double)hud_scalefactor) / 200.;
+}
+
+struct Chip
+{
+	FString text;
+	PalEntry rgb;
+	double frac;  // time left, 0..1 (the fill)
+	double alpha;
+	bool next;    // the dashed countdown chip
+	double w;
+};
+
+void DrawChip(const Chip& c, double x, double y, double h, double tsc, double padX, double padY, double sc)
+{
+	int ix = int(x), iy = int(y), iw = int(c.w), ih = int(h);
+	int bt = std::max(1, int(sc * 0.75 + 0.5)); // border thickness
+	float ba = float(0.9 * c.alpha);
+	Dim(twod, 0xff000000, float(0.55 * c.alpha), ix, iy, iw, ih);
+	if (!c.next)
+	{
+		int fw = int(iw * std::clamp(c.frac, 0., 1.));
+		if (fw > 0) Dim(twod, c.rgb, float(0.3 * c.alpha), ix, iy, fw, ih);
+		Dim(twod, c.rgb, ba, ix, iy, iw, bt);
+		Dim(twod, c.rgb, ba, ix, iy + ih - bt, iw, bt);
+		Dim(twod, c.rgb, ba, ix, iy, bt, ih);
+		Dim(twod, c.rgb, ba, ix + iw - bt, iy, bt, ih);
+	}
+	else
+	{
+		int dash = std::max(3, int(4 * sc)), space = std::max(2, int(3 * sc));
+		for (int dx = 0; dx < iw; dx += dash + space)
+		{
+			int len = std::min(dash, iw - dx);
+			Dim(twod, c.rgb, ba, ix + dx, iy, len, bt);
+			Dim(twod, c.rgb, ba, ix + dx, iy + ih - bt, len, bt);
+		}
+		for (int dy = 0; dy < ih; dy += dash + space)
+		{
+			int len = std::min(dash, ih - dy);
+			Dim(twod, c.rgb, ba, ix, iy + dy, bt, len);
+			Dim(twod, c.rgb, ba, ix + iw - bt, iy + dy, bt, len);
+		}
+	}
+	DrawText(twod, SmallFont, c.next ? CR_GRAY : CR_WHITE, x + padX, y + padY, c.text.GetChars(),
+		DTA_ScaleX, tsc, DTA_ScaleY, tsc, DTA_Alpha, c.alpha, TAG_DONE);
+}
+
+int SecondsLeft(int clocks) { return (std::max(clocks, 0) + kClock - 1) / kClock; }
+
 void ChaosDraw(DBloodPlayer*)
 {
 	if (!chaos || !on) return;
+	double W = twod->GetWidth();
 	double sc = twod->GetHeight() / 480.;
-	double y = 10 * sc;
+	for (unsigned i = fading.Size(); i-- > 0; )
+		if (PlayClock - fading[i].from >= kFade || PlayClock < fading[i].from) fading.Delete(i);
 
-	// Top line: the countdown to the next effect, or the warning naming it.
+	// Top: the warning naming the next effect, then the big titles of effects that just started.
+	double y = 10 * sc;
 	if (picked && pending)
 	{
 		// Gentle 1 Hz pulse; nothing on screen flashes faster than that.
@@ -356,29 +489,65 @@ void ChaosDraw(DBloodPlayer*)
 		DrawCentered(BigFont, CategoryColor(pending->category), y, s.GetChars(), bsc, pulse);
 		y += BigFont->GetHeight() * bsc + 4 * sc;
 	}
-	else
-	{
-		int remain = std::max(nextStart - PlayClock, 0);
-		FStringf s("Chaos: next effect in %d s", (remain + kClock - 1) / kClock);
-		double ssc = 1.5 * sc;
-		DrawCentered(SmallFont, CR_WHITE, y, s.GetChars(), ssc, 0.7);
-		y += SmallFont->GetHeight() * ssc + 4 * sc;
-	}
-
-	// Running effects, oldest first, each with a bar for the time it has left.
-	double tsc = (running.Size() > 1 ? 1.1 : 1.4) * sc;
 	for (auto& r : running)
 	{
-		DrawCentered(BigFont, CategoryColor(r.effect->category), y, r.title.GetChars(), tsc);
+		int len = r.effect->oneShot ? kOneShotTitle : kAnnounce;
+		int age = PlayClock - r.start;
+		if (age < 0 || age >= len) continue;
+		double alpha = std::clamp((len - age) / (0.4 * kClock), 0., 1.); // fades out over its last 0.4 s
+		double tsc = 1.5 * sc;
+		DrawCentered(BigFont, CategoryColor(r.effect->category), y, r.title.GetChars(), tsc, alpha);
 		y += BigFont->GetHeight() * tsc + 3 * sc;
-		if (r.effect->oneShot) continue;
-		double barW = 200 * sc, barH = 6 * sc;
-		double x = (twod->GetWidth() - barW) * 0.5;
-		double frac = r.end > r.start ? double(std::max(r.end - PlayClock, 0)) / (r.end - r.start) : 0.;
-		Dim(twod, 0xff000000, 0.6f, int(x), int(y), int(barW), int(barH));
-		int fw = int((barW - 2) * std::clamp(frac, 0., 1.));
-		if (fw > 0) Dim(twod, 0xffe0e0e0, 0.9f, int(x + 1), int(y + 1), fw, int(barH - 2));
-		y += barH + 6 * sc;
+	}
+
+	// Bottom: the chips, by order of arrival (fading ones keep their place), then the countdown.
+	std::vector<std::pair<int, Chip>> list;
+	for (auto& r : running)
+	{
+		int age = PlayClock - r.start;
+		if (r.effect->oneShot || age < kAnnounce) continue;
+		double frac = r.end > r.start ? double(r.end - PlayClock) / (r.end - r.start) : 0.;
+		double alpha = std::clamp((age - kAnnounce) / (0.25 * kClock), 0., 1.); // fades in as the title goes
+		list.push_back({ r.seq, { FStringf("%s %ds", r.title.GetChars(), SecondsLeft(r.end - PlayClock)),
+			CategoryRGB(r.effect->category), frac, alpha, false, 0 } });
+	}
+	for (auto& f : fading)
+	{
+		double alpha = 1. - double(PlayClock - f.from) / kFade;
+		list.push_back({ f.seq, { FStringf("%s 0s", f.title.GetChars()), CategoryRGB(f.category), 0., alpha, false, 0 } });
+	}
+	std::stable_sort(list.begin(), list.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+	if (!(picked && pending))
+		list.push_back({ INT_MAX, { FStringf("next %ds", SecondsLeft(nextStart - PlayClock)), PalEntry(0xff9a9a9a), 0., 0.8, true, 0 } });
+	if (list.empty()) return;
+
+	double tsc = 1.2 * sc, padX = 7 * sc, padY = 3 * sc, gap = 6 * sc;
+	double chipH = SmallFont->GetHeight() * tsc + 2 * padY;
+	double maxW = W * 0.9;
+	std::vector<std::vector<int>> lines;
+	std::vector<double> lineW;
+	for (int i = 0; i < int(list.size()); i++)
+	{
+		Chip& c = list[i].second;
+		c.w = SmallFont->StringWidth(c.text.GetChars()) * tsc + 2 * padX;
+		if (lines.empty() || lineW.back() + gap + c.w > maxW)
+		{
+			lines.push_back({});
+			lineW.push_back(-gap);
+		}
+		lines.back().push_back(i);
+		lineW.back() += gap + c.w;
+	}
+	double bottom = ChipsFloor() - 5 * sc;
+	for (size_t l = 0; l < lines.size(); l++)
+	{
+		double ly = bottom - (l + 1) * chipH - l * gap * 0.5; // the first line sits lowest; more wrap upward
+		double x = (W - lineW[l]) * 0.5;
+		for (int i : lines[l])
+		{
+			DrawChip(list[i].second, x, ly, chipH, tsc, padX, padY, sc);
+			x += list[i].second.w + gap;
+		}
 	}
 }
 
@@ -440,9 +609,31 @@ CCMD(chaos_force)
 		Restart(std::max((int)chaos_firstwait, 1) * kClock);
 	}
 	for (unsigned i = running.Size(); i-- > 0; )
-		if (running[i].effect == e) StopRunning(i); // already running: start it over
+		if (running[i].effect == e) StopRunning(i, false); // already running: start it over
 	FString title = bmod::EffectTitle(e);
 	if (!Launch(e, title.GetChars())) Printf("chaos_force: %s can't run right now\n", e->name);
+}
+
+// Every effect's chance back to its category default (Choose effects > Reset).
+CCMD(chaos_chance_reset)
+{
+	for (int i = 0; i < bmod::NumEffects(); i++)
+		if (auto cv = FindCVar(FStringf("chaos_chance_%s", bmod::GetEffect(i).name).GetChars(), nullptr)) cv->ResetToDefault();
+	Printf(PRINT_NOTIFY, "Chaos: effect chances back to their defaults\n");
+}
+
+// Lists each effect's chance and its share of the picks (when every allowed effect can run).
+CCMD(chaos_chances)
+{
+	int total = 0;
+	for (int i = 0; i < bmod::NumEffects(); i++)
+		if (Allowed(&bmod::GetEffect(i))) total += EffectChance(&bmod::GetEffect(i));
+	for (int i = 0; i < bmod::NumEffects(); i++)
+	{
+		auto e = &bmod::GetEffect(i);
+		int c = Allowed(e) ? EffectChance(e) : 0;
+		Printf("%-16s %2d  %5.1f%%\n", e->name, c, total > 0 ? 100. * c / total : 0.);
+	}
 }
 
 END_BLD_NS
