@@ -98,6 +98,24 @@ class BloodStatusBar : RazeStatusBar
 
 	//---------------------------------------------------------------------------
 	//
+	// blood2d: one number in the full status bar's ammo grid. Ammo type n belongs
+	// to weapon n + 1. When you don't have that weapon, its ammo is greyed out like
+	// a missing key, so the grid shows which weapons you own even after a mod takes
+	// guns away and leaves their ammo (the chaos weapon roulette).
+	// mod_hudweapons 0 brings back the stock look.
+	//
+	//---------------------------------------------------------------------------
+
+	void DrawAmmoAmount(String fmt, int num, BloodPlayer pPlayer, int ammoType, double x, double y)
+	{
+		if (mod_hudweapons && !pPlayer.hasWeapon[ammoType + 1])
+			DrawStatNumber(fmt, num, "SBarAmmoAmount", x, y, 40, 5); // shade 40 + GRAY.PLU, about the missing-key tint
+		else
+			DrawStatNumber(fmt, num, "SBarAmmoAmount", x, y, ammoType == pPlayer.weaponAmmo ? -128 : 32, 10);
+	}
+
+	//---------------------------------------------------------------------------
+	//
 	// 
 	//
 	//---------------------------------------------------------------------------
@@ -535,10 +553,10 @@ class BloodStatusBar : RazeStatusBar
 			int num = pPlayer.ammoCount[i];
 			if (i == 6)
 				num /= 10;
-			DrawStatNumber("%3d", num, "SBarAmmoAmount", x, y, i == pPlayer.weaponAmmo ? -128 : 32, 10);
+			DrawAmmoAmount("%3d", num, pPlayer, i, x, y);
 		}
-		DrawStatNumber("%2d", pPlayer.ammoCount[10], "SBarAmmoAmount", 291, 194, pPlayer.weaponAmmo == 10 ? -128 : 32, 10);
-		DrawStatNumber("%2d", pPlayer.ammoCount[11], "SBarAmmoAmount", 309, 194, pPlayer.weaponAmmo == 11 ? -128 : 32, 10);
+		DrawAmmoAmount("%2d", pPlayer.ammoCount[10], pPlayer, 10, 291, 194);
+		DrawAmmoAmount("%2d", pPlayer.ammoCount[11], pPlayer, 11, 309, 194);
 
 		if (pPlayer.armor[1])
 		{
