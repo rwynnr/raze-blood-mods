@@ -4848,13 +4848,15 @@ void MoveDude(DBloodActor* actor)
 	if (actor->spr.flags & 2)
 	{
 		double vc = FixedToFloat(58254) * bmod::mods.gravityScale;
+		// blood2d: the buoyancy at a water surface scales with gravity too (as real buoyancy does). Scaling
+		// only gravity floated you a quarter submerged under low gravity, short of where CheckLink takes you under.
 		if (bDepth)
 		{
 			if (bUnderwater)
 			{
 				double cz = getceilzofslopeptr(pSector, actor->spr.pos);
 				if (cz > top)
-					vc += ((bottom - cz) * -FixedToFloat(80099)) / (bottom - top);
+					vc += ((bottom - cz) * -FixedToFloat(80099)) / (bottom - top) * bmod::mods.gravityScale;
 				else
 					vc = 0;
 			}
@@ -4862,7 +4864,7 @@ void MoveDude(DBloodActor* actor)
 			{
 				double fz = getflorzofslopeptr(pSector, actor->spr.pos);
 				if (fz < bottom)
-					vc += ((bottom - fz) * -FixedToFloat(80099)) / (bottom - top);
+					vc += ((bottom - fz) * -FixedToFloat(80099)) / (bottom - top) * bmod::mods.gravityScale;
 			}
 		}
 		else
