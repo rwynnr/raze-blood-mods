@@ -17,6 +17,8 @@
 
 CVARD(Bool, mod_eventlog, false, 0, "print each mod-base game event to the console")
 CVARD(Float, mod_drunk_strength, 1.f, CVAR_ARCHIVE, "drunk camera effect strength multiplier")
+// Read by the full status bar (sbar.zs DrawAmmoAmount), so the HUD keeps up when an effect takes weapons away.
+CVARD(Bool, mod_hudweapons, true, CVAR_ARCHIVE, "status bar: grey out the ammo of weapons you don't have (0 = stock look)")
 
 // Core-side hooks (gameinput.cpp, savegamehelp.cpp).
 extern bool gModInvertControls;
