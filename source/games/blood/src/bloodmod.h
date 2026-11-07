@@ -52,7 +52,7 @@ namespace bmod
 	// ---- modifiers read by stock code; effects set them, stopping resets them ----
 	struct Modifiers
 	{
-		double gravityScale = 1;     // MoveThing / MoveDude
+		double gravityScale = 1;     // MoveThing / MoveDude (gravity and the buoyancy at water surfaces)
 		double damageDealtScale = 1; // player -> anything else
 		double damageTakenScale = 1; // anything -> player
 		double drunk = 0;            // 0..1 camera sway
