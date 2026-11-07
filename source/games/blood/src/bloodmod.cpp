@@ -195,6 +195,13 @@ double ScaleRange(DBloodActor* shooter, double range)
 int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
 {
 	if (!target) return damage;
+	// Damage from a thing, missile or explosion counts as its owner's: the blast of your TNT is your damage
+	// (actCheckExplosion names the explosion sprite as the source of its concussion).
+	if (source && !source->IsDudeActor())
+	{
+		auto owner = source->GetOwner();
+		if (owner && owner->IsPlayerActor()) source = owner;
+	}
 	if (mods.damageDealtScale != 1 && source && source != target && source->IsPlayerActor() && !target->IsPlayerActor())
 		damage = int(damage * mods.damageDealtScale);
 	if (mods.damageTakenScale != 1 && target->IsPlayerActor())
@@ -220,6 +227,20 @@ void ScaleSplash(int& radius, int& baseDmg, int& distDmg)
 	radius = int(radius * (1. + (s - 1.) * 0.5));
 	baseDmg = int(baseDmg * s);
 	distDmg = int(distDmg * s);
+}
+
+// Explosion sprites (TNT, bombs, barrels, napalm) do their damage in actCheckExplosion, not actRadiusDamage, so
+// they get the same scaling here: the radius grows by half the factor, the damage by the whole factor.
+int ScaleBlastRadius(int radius)
+{
+	if (mods.splashScale == 1) return radius;
+	return int(radius * (1. + (mods.splashScale - 1.) * 0.5));
+}
+
+int ScaleBlast(int damage)
+{
+	if (mods.splashScale == 1) return damage;
+	return int(damage * mods.splashScale);
 }
 
 // Enemy time scale: run enemy AI / movement N times per tic (accumulated), and scale
