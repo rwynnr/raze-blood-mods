@@ -5746,6 +5746,7 @@ static void actCheckExplosion()
 		if (gModernMap && actor->xspr.data4 > 0)
 			radius = actor->xspr.data4;
 #endif
+		radius = bmod::ScaleBlastRadius(radius); // blood2d: chaos "Big explosions" grows TNT, bomb and barrel blasts too
 
 		// GetClosestSpriteSectors() has issues checking some sectors due to optimizations
 		// the new flag newSectCheckMethod for GetClosestSpriteSectors() does rectify these issues, but this may cause unintended side effects for level scripted explosions
@@ -5771,9 +5772,9 @@ static void actCheckExplosion()
 					if (pExplodeInfo->dmg && actor->explosionhackflag)
 					{
 						actor->explosionhackflag = false;
-						actDamageSprite(Owner, dudeactor, kDamageFall, (pExplodeInfo->dmg + Random(pExplodeInfo->dmgRng)) << 4);
+						actDamageSprite(Owner, dudeactor, kDamageFall, bmod::ScaleBlast((pExplodeInfo->dmg + Random(pExplodeInfo->dmgRng)) << 4));
 					}
-					if (pExplodeInfo->dmgType) ConcussSprite(actor, dudeactor, apos, pExplodeInfo->dmgType);
+					if (pExplodeInfo->dmgType) ConcussSprite(actor, dudeactor, apos, bmod::ScaleBlast(pExplodeInfo->dmgType));
 
 					if (pExplodeInfo->burnTime && dudeactor->hasX())
 					{
@@ -5795,7 +5796,7 @@ static void actCheckExplosion()
 				{
 					if (!thingactor->xspr.locked)
 					{
-						if (pExplodeInfo->dmgType) ConcussSprite(Owner, thingactor, apos, pExplodeInfo->dmgType);
+						if (pExplodeInfo->dmgType) ConcussSprite(Owner, thingactor, apos, bmod::ScaleBlast(pExplodeInfo->dmgType));
 
 						if (pExplodeInfo->burnTime)
 						{

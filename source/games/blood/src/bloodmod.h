@@ -70,6 +70,8 @@ namespace bmod
 	double ScaleRange(DBloodActor* shooter, double range);               // actFireVector reach
 	double MeleeRange(DBloodActor* actor, double dist);                  // AI melee distance checks
 	void ScaleSplash(int& radius, int& baseDmg, int& distDmg);           // actRadiusDamage
+	int ScaleBlastRadius(int radius);                                    // actCheckExplosion (TNT, bombs, barrels)
+	int ScaleBlast(int damage);                                          // actCheckExplosion damage and concussion
 	void BeginEnemyTic();                                                // actProcessSprites, first thing
 	int EnemyPasses();                                                   // how many AI passes this tic
 	void NextAiPass();
