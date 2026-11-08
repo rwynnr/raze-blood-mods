@@ -2660,6 +2660,14 @@ bool OnUse(DBloodPlayer* pPlayer)
 	return true;
 }
 
+// The Forge's state at work (its functions are further down, after the champion hooks).
+struct ForgeAim { bool missile; int type; double off, zoff; DVector3 dv; };
+static TArray<ForgeAim>* forgeShots;   // set while a forged gun's stock fire function runs
+static bool forgeEmitting;             // the Forge's own shots pass
+static TArray<DBloodActor*> forgeHits; // what the Forge's hitscans hit this pull (for the Pyre)
+static int forgeImpacts;               // inside a forged missile's impact: its healing is capped
+static int forgeHealSecond = -1, forgeHealed;
+
 //---------------------------------------------------------------------------
 //
 // a run's pickups holding their own amounts (PlaceAmmo): what the pocket
@@ -2730,12 +2738,6 @@ bool Unflinching(DBloodActor* actor) { return actor && (actor->modFlags & kModRe
 //
 //---------------------------------------------------------------------------
 
-struct ForgeAim { bool missile; int type; double off, zoff; DVector3 dv; };
-static TArray<ForgeAim>* forgeShots;   // set while a forged gun's stock fire function runs
-static bool forgeEmitting;             // the Forge's own shots pass
-static TArray<DBloodActor*> forgeHits; // what the Forge's hitscans hit this pull (for the Pyre)
-static int forgeImpacts;               // inside a forged missile's impact: its healing is capped
-static int forgeHealSecond = -1, forgeHealed;
 
 // The run's forged gun, when it's the one in hand.
 static bool ForgeOn(DBloodPlayer* p)
