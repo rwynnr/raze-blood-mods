@@ -21,10 +21,13 @@
 //   their category (keys, the diving suit, jump boots and other quest-like
 //   items stay, as do items wired into the map's script); ammo leans to the
 //   guns the player has or can find there;
-// - supplies: ammo handed over so that the player's guns can kill the map's
-//   enemies rl_ammo_target percent of the way (150: 1.5 times), counting the
-//   ammo carried and the ammo on the map (on the run's first map the kit comes
-//   after the supplies, and kit ammo the pockets can't hold is refunded);
+// - the map's own ammo, its pickups and what its enemies drop, is raised so
+//   that the player's guns could kill its enemies rl_ammo_target percent of
+//   the way (150: 1.5 times): the pickups of their ammo grow (up to twice
+//   their stock amount, drawn bigger), then more pickups come next to the
+//   map's own pickups and enemies; each secret area gets caches on top. What
+//   the player carries isn't counted. A pickup the pocket can't hold all of
+//   leaves the rest on the floor;
 // - from the second map on, a 25% chance that one of the base's timed effects
 //   curses the whole level (announced under the map's name).
 //
@@ -93,7 +96,7 @@ CUSTOM_CVARD(Int, rl_skill, 2, CVAR_ARCHIVE, "roguelite: skill of new runs, 0-4 
 // recolour a whole sprite; the others recolour a few colour ranges (robes, spiders, players). Blue stands out most
 // against Blood's warm colours, and no stock enemy wears it (stone gargoyles wear GRAY).
 CVARD(Int, rl_elite_pal, 10, CVAR_ARCHIVE, "roguelite: palette lookup that tints champions (0 = none; 10 blue, 2 red, 9 orange)")
-CVARD(Int, rl_ammo_target, 150, CVAR_ARCHIVE, "roguelite: each map's supplies bring your guns' ammo, carried and on the map, to this percent of what its enemies take (150 = 1.5x; 0 = off)")
+CVARD(Int, rl_ammo_target, 150, CVAR_ARCHIVE, "roguelite: each map's pickups hold this percent of the ammo your guns need for its enemies (150 = 1.5x; 0 = stock amounts)")
 
 // Meta progress, kept across runs. Blood and Cryptic Passage share a config, so what belongs to one game's episodes
 // is kept per game in rl_progress; the ichor bank and the run counts are shared.
@@ -414,49 +417,20 @@ void GiveItem(DBloodPlayer* p, int type)
 		actHealDude(p->GetActor(), gPowerUpInfo[type - kItemBase].bonusTime, gPowerUpInfo[type - kItemBase].maxTime);
 }
 
-int ItemAmmo(int item, int* count); // the ammo a pickup gives (the ammo section, below)
-
-// Ammo bought as ammo: not the spray can or the voodoo doll, which the Armory sells as guns.
-bool AmmoPurchase(int item) { return item >= kItemAmmoBase && item < kItemAmmoMax && item != kItemAmmoSprayCan && item != kItemAmmoVoodooDoll; }
-
-// The run's first map: the kit is handed over, after the remix (so none of it is rerolled) and the supplies. The points
-// of bought ammo the pockets can't hold come back, and become ichor with the unspent ones once the map is cleared.
+// The run's first map: the kit is handed over (after the remix, so none of it is rerolled).
 void GiveKit()
 {
 	auto p = getPlayer(myconnectindex);
 	if (!p || !p->GetActor()) return;
-	constexpr int kTypes = countof(p->ammoCount);
-	int before[kTypes], bought[kTypes] = {};
-	for (int at = 0; at < kTypes; at++) before[at] = p->ammoCount[at];
 	FString list;
 	for (int i = 0; i < kNumKit; i++)
 	{
 		if (run.kit[i] <= 0) continue;
 		for (int n = 0; n < run.kit[i] * kitItems[i].count; n++) GiveItem(p, kitItems[i].item);
-		int units;
-		if (int at = ItemAmmo(kitItems[i].item, &units)) bought[at] += units * kitItems[i].count * run.kit[i];
 		list.AppendFormat("%s%s", list.IsEmpty() ? "" : ", ", kitItems[i].name);
 		if (run.kit[i] > 1) list.AppendFormat(" x%d", run.kit[i]);
 	}
 	if (list.IsNotEmpty()) Printf(PRINT_NOTIFY, "Your kit: %s\n", list.GetChars());
-	double refund = 0;
-	for (int at = 1; at < kTypes; at++)
-	{
-		int lost = bought[at] - (p->ammoCount[at] - before[at]); // bought ammo goes first, before a gun's own
-		for (int i = 0; i < kNumKit && lost > 0; i++)
-		{
-			int units, item = kitItems[i].item;
-			if (run.kit[i] <= 0 || !AmmoPurchase(item) || ItemAmmo(item, &units) != at || units <= 0) continue;
-			int each = units * kitItems[i].count, take = std::min(lost, each * run.kit[i]);
-			refund += double(take) / each * kitItems[i].cost;
-			lost -= take;
-		}
-	}
-	if (int points = int(refund + 0.5))
-	{
-		run.unspent += points;
-		Printf(PRINT_NOTIFY, "Kit ammo your pockets couldn't hold: %d points back, as ichor once this map is cleared\n", points);
-	}
 }
 
 //---------------------------------------------------------------------------
@@ -802,12 +776,13 @@ void Pressure()
 
 //---------------------------------------------------------------------------
 //
-// ammo by the map: each map starts with enough ammo for the player's guns to
-// kill its enemies rl_ammo_target percent of the way (150: one and a half
-// times), counting the ammo the player carries and the ammo on the map; what's
-// missing is handed over as the map starts. On a run's first map the kit is
-// handed over after the supplies, and the points of any kit ammo the pockets
-// can't hold come back (as ichor, with the unspent ones).
+// ammo by the map: as a map starts, its own ammo (its pickups and what its
+// enemies drop) is raised until the player's guns could kill its enemies
+// rl_ammo_target percent of the way (150: one and a half times). First the
+// pickups of those guns' ammo grow, then more pickups are added next to the
+// map's own pickups and enemies; each secret area gets caches on top. The
+// ammo the player carries isn't counted: the map pays for itself, and a map
+// that wants to be fought has to be explored.
 //
 //---------------------------------------------------------------------------
 
@@ -873,6 +848,14 @@ int ItemAmmo(int item, int* count)
 	return 0;
 }
 
+// The ammo a pickup on the map holds: its own amount, once a run has set one.
+int ActorAmmo(DBloodActor* a, int* count)
+{
+	int at = ItemAmmo(a->spr.type, count);
+	if (at && (a->modFlags & kModBigPickup) && a->hasX()) *count = a->xspr.data1;
+	return at;
+}
+
 // The ammo it takes one gun alone to kill an enemy of this type and health (0: that gun can't hurt it).
 double AmmoToKill(const AmmoProfile& p, int type, double health)
 {
@@ -895,7 +878,7 @@ double AmmoToKill(const AmmoProfile& p, int type, double health)
 	return health * p.perShot / (std::min(shot, health) * p.hit * p.targets); // a shot can't do more than kill
 }
 
-// The guns the player has; on the run's first map, the kit's too (it's handed over after the remix and the supplies).
+// The guns the player has; on the run's first map, the kit's too (it's handed over after the remix).
 void OwnedGuns(DBloodPlayer* p, bool* owned)
 {
 	for (int w = 0; w < kWeapMax; w++) owned[w] = p && p->hasWeapon[w];
@@ -910,12 +893,15 @@ struct AmmoLedger
 	double health = 0;
 	double need[kAmmoTypes] = {}; // the ammo each gun alone would need to kill every enemy it can hurt
 	double hurt[kAmmoTypes] = {}; // the health of those enemies
-	double have[kAmmoTypes] = {}; // carried, lying on the map, and what enemies drop (at their odds)
-	int given[kAmmoTypes] = {};   // the supplies
-	double before = 0, after = 0; // how many times over the guns' ammo kills the map, before and after the supplies
+	double have[kAmmoTypes] = {}; // lying on the map (at the pickups' own amounts), what enemies drop (at their odds), carried if counted
 	bool counted = false;
+	// What the run did to the map's ammo as it started (rl_ammo prints it): the map's own coverage at stock, with its
+	// pickups raised, and with the caches in secrets; the ammo planned, and what found no room.
+	double before = 0, after = 0, withSecrets = 0;
+	int plan[kAmmoTypes] = {}, unplaced[kAmmoTypes] = {};
+	int bigger = 0, added = 0, cached = 0, secretAreas = 0;
 };
-AmmoLedger ledger; // this map's, as it started (rl_ammo prints it)
+AmmoLedger ledger; // this map's, as it started
 
 void AddEnemy(AmmoLedger& l, int type, double health)
 {
@@ -939,7 +925,7 @@ void AddDrops(AmmoLedger& l, DBloodActor* a)
 	if (a->spr.type == kDudeCultistShotgun) l.have[2] += 0.11 * 8 + 0.40 * 4;
 }
 
-void CountAmmo(AmmoLedger& l, DBloodPlayer* p)
+void CountAmmo(AmmoLedger& l, DBloodPlayer* p, bool carried)
 {
 	l = AmmoLedger();
 	l.counted = true;
@@ -971,12 +957,12 @@ void CountAmmo(AmmoLedger& l, DBloodPlayer* p)
 		for (auto& h : l.hurt) h *= more;
 		l.enemies += run.extraEnemies;
 	}
-	for (int at = 0; at < kAmmoTypes; at++) l.have[at] += p->ammoCount[at];
+	if (carried) for (int at = 0; at < kAmmoTypes; at++) l.have[at] += p->ammoCount[at];
 	BloodStatIterator it3(kStatItem);
 	while (auto a = it3.Next())
 	{
 		int n;
-		if (int at = ItemAmmo(a->spr.type, &n)) l.have[at] += n;
+		if (int at = ActorAmmo(a, &n)) l.have[at] += n;
 	}
 	BloodStatIterator it4(kStatThing); // crates and the like that drop an item
 	while (auto a = it4.Next()) AddDrops(l, a);
@@ -998,54 +984,306 @@ double Coverage(const AmmoLedger& l, const bool* owned, const int* extra = nullp
 int HudAmount(const AmmoProfile& g, double units) { return int(g.ammo == 6 ? units / 10 + 0.5 : units + 0.5); } // the HUD counts spray in tens
 FString AmmoText(const AmmoProfile& g, int units) { return FStringf("%d %s", std::max(HudAmount(g, units), units > 0 ? 1 : 0), g.name); }
 
-// The supplies: the shortfall the ledger shows, shared by the guns that can hurt this map's enemies, each by the
-// share of the map it can hurt (the three bombs together count as one gun). A gun whose pocket is full passes its
-// share on. On a run's first map the kit isn't handed over yet.
-void SupplyAmmo(const bool* owned)
+constexpr double kBigPickup = 2.0;  // a run's pickup holds up to twice its stock amount (and half a pocket, unless it's more)
+constexpr double kBigLook = 1.25;   // a pickup holding more than its stock amount is drawn a quarter bigger
+constexpr int kSecretCaches = 2;    // pickups added to each secret area, on top of the target
+constexpr int kMaxSecretAreas = 16;
+constexpr double kSpotClear = 16, kSpotSpacing = 24, kSpotStepZ = 24; // world units
+
+// The ammo to add to the map, by type: the shortfall from the target, shared by the guns that can hurt the map's
+// enemies, each by the share of the map it can hurt (the three bombs together count as one gun).
+void PlanAmmo(const bool* owned, int* plan)
 {
-	auto p = getPlayer(myconnectindex);
-	if (!p || !p->GetActor() || !ledger.counted) return;
-	ledger.before = ledger.after = Coverage(ledger, owned);
 	double missing = rl_ammo_target / 100. - ledger.before;
-	TArray<const AmmoProfile*> guns;
-	for (auto& g : ammoProfiles) if (owned[g.gun] && ledger.need[g.ammo] > 0) guns.Push(&g);
-	// Each round either covers the rest or fills at least one pocket, so one round per gun (and one more) will do.
-	for (int round = 0; round <= int(guns.Size()) && missing > 0.001; round++)
-	{
-		TArray<const AmmoProfile*> open;
-		int bombs = 0;
-		for (auto g : guns)
-		{
-			if (p->ammoCount[g->ammo] + ledger.given[g->ammo] >= gAmmoInfo[g->ammo].max) continue;
-			open.Push(g);
-			if (IsBomb(g->gun)) bombs++;
-		}
-		double weights = 0;
-		for (auto g : open) weights += Reach(ledger, g->ammo) / (IsBomb(g->gun) ? bombs : 1);
-		if (weights <= 0) break;
-		double placed = 0;
-		for (auto g : open)
-		{
-			double reach = Reach(ledger, g->ammo);
-			double part = missing * reach / (IsBomb(g->gun) ? bombs : 1) / weights; // in coverage
-			int room = gAmmoInfo[g->ammo].max - p->ammoCount[g->ammo] - ledger.given[g->ammo];
-			int units = std::min(room, int(std::ceil(part / reach * ledger.need[g->ammo])));
-			ledger.given[g->ammo] += units;
-			placed += units / ledger.need[g->ammo] * reach;
-		}
-		if (placed <= 0) break;
-		missing -= placed;
-	}
-	FString list;
+	if (missing <= 0) return;
+	int bombs = 0;
+	for (auto& g : ammoProfiles) if (owned[g.gun] && ledger.need[g.ammo] > 0 && IsBomb(g.gun)) bombs++;
+	double weights = 0;
+	for (auto& g : ammoProfiles) if (owned[g.gun] && ledger.need[g.ammo] > 0) weights += Reach(ledger, g.ammo) / (IsBomb(g.gun) ? bombs : 1);
+	if (weights <= 0) return;
 	for (auto& g : ammoProfiles)
 	{
-		int n = ledger.given[g.ammo];
-		if (n <= 0) continue;
-		p->ammoCount[g.ammo] = ClipHigh(p->ammoCount[g.ammo] + n, gAmmoInfo[g.ammo].max);
-		list.AppendFormat("%s%s", list.IsEmpty() ? "" : ", ", AmmoText(g, n).GetChars());
+		if (!owned[g.gun] || ledger.need[g.ammo] <= 0) continue;
+		double reach = Reach(ledger, g.ammo);
+		double part = missing * reach / (IsBomb(g.gun) ? bombs : 1) / weights; // in coverage
+		plan[g.ammo] = int(std::ceil(part / reach * ledger.need[g.ammo]));
 	}
-	ledger.after = Coverage(ledger, owned, ledger.given);
-	if (list.IsNotEmpty()) Printf(PRINT_NOTIFY, "Supplies for this map: %s\n", list.GetChars());
+}
+
+int BigAmount(int stock, int ammo) { return std::max(stock, std::min(int(stock * kBigPickup), gAmmoInfo[ammo].max / 2)); }
+
+// The ammo item of a type that holds the most (shells: the box; bullets: the drum), and its amount.
+int BiggestItem(int ammo, int* count)
+{
+	int best = 0;
+	*count = 0;
+	for (int item = kItemAmmoBase; item < kItemAmmoMax; item++)
+	{
+		auto& d = gAmmoItemData[item - kItemAmmoBase];
+		if (d.type == ammo && d.count > *count && d.textureID().isValid())
+		{
+			best = item;
+			*count = d.count;
+		}
+	}
+	return best;
+}
+
+// A pickup's own amount; holding more than its stock amount, it's drawn bigger, still resting on the floor.
+void SetAmount(DBloodActor* a, int amount, int stock)
+{
+	if (!a->hasX()) return;
+	a->modFlags |= kModBigPickup;
+	a->xspr.data1 = int16_t(std::min(amount, 32767));
+	if (amount <= stock) return;
+	double top, bottom, newTop, newBottom;
+	GetActorExtents(a, &top, &bottom);
+	a->spr.scale *= kBigLook;
+	GetActorExtents(a, &newTop, &newBottom);
+	a->spr.pos.Z += bottom - newBottom;
+	a->basePoint.Z += bottom - newBottom;
+	a->interpolated = false;
+	viewBackupSpriteLoc(a);
+}
+
+// A sector a pickup can lie in: not a door, lift, moving floor, teleporter or damage sector, not water, lava, sky,
+// a stacked room or a drag, crush or bobbing floor, and high enough to stand in.
+bool SpotSectorOk(sectortype* s)
+{
+	if (!s || (s->floorstat & CSTAT_SECTOR_SKY)) return false;
+	if (s->type >= kSectorBase && s->type < kSectorMax) return false;
+	if (s->upperLink != nullptr || s->lowerLink != nullptr) return false;
+	if (GetExtInfo(s->floortexture).surftype == kSurfLava) return false;
+	if (s->hasX())
+	{
+		auto& x = s->xs();
+		if (x.Underwater || x.Depth || x.damageType || x.Drag || x.Crush || (x.bobSpeed && x.bobFloor)) return false;
+	}
+	return s->floorz - s->ceilingz >= 40;
+}
+
+// A spot for a pickup: inside a good sector, at about the anchor's floor height, clear of walls and ledges, and not
+// on another pickup, a thing or an enemy.
+bool SpotOk(sectortype* s, const DVector2& p, double anchorZ, const TArray<DVector2>& taken)
+{
+	if (!SpotSectorOk(s) || !inside(p.X, p.Y, s)) return false;
+	double fz = getflorzofslopeptr(s, p.X, p.Y);
+	if (std::abs(fz - anchorZ) > kSpotStepZ) return false;
+	for (auto& w : s->walls)
+	{
+		auto ns = w.nextSector();
+		bool hard = !ns || (ns->type >= kSectorBase && ns->type < kSectorMax) || std::abs(getflorzofslopeptr(ns, p.X, p.Y) - fz) > 16;
+		if (hard && SquareDistToWall(p.X, p.Y, &w) < kSpotClear * kSpotClear) return false;
+	}
+	for (auto& t : taken) if ((t - p).LengthSquared() < kSpotSpacing * kSpotSpacing) return false;
+	BloodSectIterator it(s);
+	while (auto a = it.Next())
+	{
+		bool item = a->spr.statnum == kStatItem;
+		bool solid = item || (a->spr.cstat & CSTAT_SPRITE_BLOCK) || a->spr.statnum == kStatThing || a->spr.statnum == kStatDude;
+		double r = item ? kSpotSpacing : a->clipdist + kSpotClear;
+		if (solid && (a->spr.pos.XY() - p).LengthSquared() < r * r) return false;
+	}
+	return true;
+}
+
+// A spot minD-maxD from an anchor (on its floor), in sight of it, so the pickup isn't through a wall.
+bool FindItemSpot(std::mt19937& rng, sectortype* aSect, const DVector3& anchor, double minD, double maxD,
+	const TArray<DVector2>& taken, DVector2& out, sectortype*& outSect)
+{
+	DVector3 eye(anchor.XY(), anchor.Z - 16);
+	for (int k = 0; k < 16; k++)
+	{
+		DVector2 p = anchor.XY() + DAngle::fromDeg(Rand01(rng) * 360.).ToVector() * (minD + (maxD - minD) * Rand01(rng));
+		auto s = aSect;
+		updatesector(p, &s);
+		if (!s) continue;
+		if (!cansee(eye, aSect, DVector3(p, getflorzofslopeptr(s, p.X, p.Y) - 16), s)) continue;
+		if (!SpotOk(s, p, anchor.Z, taken)) continue;
+		out = p;
+		outSect = s;
+		return true;
+	}
+	return false;
+}
+
+// A new ammo pickup lying on the floor, like the ones a map places (or an enemy drops).
+DBloodActor* SpawnPickup(sectortype* s, const DVector2& p, int type)
+{
+	if (type < kItemAmmoBase || type >= kItemAmmoMax) return nullptr;
+	auto& d = gAmmoItemData[type - kItemAmmoBase];
+	if (d.type <= 0 || d.type >= kAmmoTypes || !d.textureID().isValid()) return nullptr;
+	double fz = getflorzofslopeptr(s, p.X, p.Y);
+	auto a = actSpawnSprite(s, DVector3(p, fz), kStatItem, true); // an xsprite, so its amount and mark are saved
+	if (!a) return nullptr;
+	a->spr.cstat &= ~CSTAT_SPRITE_BLOCK_ALL;
+	a->spr.type = a->spr.inittype = type;
+	a->spr.setspritetexture(d.textureID());
+	a->spr.shade = d.shade;
+	a->spr.pal = d.pal;
+	a->spr.scale = DVector2(d.xrepeat * REPEAT_SCALE, d.yrepeat * REPEAT_SCALE);
+	double top, bottom;
+	GetActorExtents(a, &top, &bottom);
+	a->spr.pos.Z -= bottom - fz;
+	a->basePoint = a->spr.pos;
+	a->interpolated = false;
+	viewBackupSpriteLoc(a);
+	return a;
+}
+
+DVector3 FloorAt(DBloodActor* a) { return DVector3(a->spr.pos.XY(), getflorzofslopeptr(a->sector(), a->spr.pos.X, a->spr.pos.Y)); }
+
+// Caches in the map's secret areas, on top of the target: each gets kSecretCaches of the biggest pickups, for the
+// player's guns by their reach. A secret area is a sector that reports a secret, or one holding an item that does.
+void PlaceSecretCaches(std::mt19937& rng, const bool* owned, TArray<DVector2>& taken)
+{
+	int bombs = 0;
+	for (auto& g : ammoProfiles) if (owned[g.gun] && ledger.need[g.ammo] > 0 && IsBomb(g.gun)) bombs++;
+	TArray<RewardPick> guns;
+	for (auto& g : ammoProfiles)
+		if (owned[g.gun] && ledger.need[g.ammo] > 0)
+			guns.Push({ g.ammo, std::max(1, int(100 * Reach(ledger, g.ammo) / (IsBomb(g.gun) ? bombs : 1))) });
+	if (guns.Size() == 0) return;
+	TArray<sectortype*> areas;
+	for (auto& sect : sector)
+		if (sect.hasX() && sect.xs().txID == kChannelSecretFound && sect.xs().command >= kCmdNumberic) areas.Push(&sect);
+	BloodStatIterator it(kStatItem);
+	while (auto a = it.Next())
+		if (a->hasX() && a->xspr.txID == kChannelSecretFound && a->insector() && areas.Find(a->sector()) == areas.Size()) areas.Push(a->sector());
+	for (unsigned i = 0; i < areas.Size() && i < unsigned(kMaxSecretAreas); i++)
+	{
+		auto s = areas[i];
+		// The anchor: a pickup in the area, or the middle of its floor.
+		DVector3 anchor;
+		bool found = false;
+		BloodSectIterator si(s);
+		while (auto a = si.Next())
+		{
+			if (a->spr.statnum != kStatItem) continue;
+			anchor = FloorAt(a);
+			found = true;
+			break;
+		}
+		if (!found)
+		{
+			if (s->walls.Size() == 0) continue;
+			DVector2 c(0, 0);
+			for (auto& w : s->walls) c += w.pos;
+			c /= double(s->walls.Size());
+			if (!inside(c.X, c.Y, s)) continue;
+			anchor = DVector3(c, getflorzofslopeptr(s, c.X, c.Y));
+		}
+		int placed = 0;
+		for (int k = 0; k < kSecretCaches; k++)
+		{
+			int ammo = PickWeighted(rng, guns), stock;
+			int item = ammo > 0 ? BiggestItem(ammo, &stock) : 0;
+			DVector2 spot;
+			sectortype* sect;
+			if (!item || !FindItemSpot(rng, s, anchor, 0, 48, taken, spot, sect)) continue;
+			auto a = SpawnPickup(sect, spot, item);
+			if (!a) continue;
+			taken.Push(spot);
+			SetAmount(a, BigAmount(stock, ammo), stock);
+			ledger.cached++;
+			placed++;
+		}
+		if (placed) ledger.secretAreas++;
+	}
+}
+
+// Raises the map's own ammo to the target (the ledger is counted, without what the player carries). First the map's
+// unwired pickups of the short ammo grow, each by a share of its room; then the rest comes as more pickups, of the
+// type's biggest kind, next to the map's own pickups and enemies (round the map, two at most by each); then the
+// caches in secrets. Uses the remix's rng, so a run's maps come out the same every time.
+void PlaceAmmo(std::mt19937& rng, const bool* owned)
+{
+	auto p = getPlayer(myconnectindex);
+	if (!p || !ledger.counted) return;
+	ledger.before = Coverage(ledger, owned);
+	PlanAmmo(owned, ledger.plan);
+	int left[kAmmoTypes];
+	for (int at = 0; at < kAmmoTypes; at++) left[at] = ledger.plan[at];
+
+	// The pickups a run may change (unwired; on a modern map, not one with an amount of its own) and the anchors.
+	TArray<DBloodActor*> pickups, anchors;
+	BloodStatIterator it(kStatItem);
+	while (auto a = it.Next())
+	{
+		if (!a->hasX() || a->xspr.txID != 0 || a->xspr.rxID != 0 || !a->insector()) continue;
+		anchors.Push(a);
+		int n;
+		if (ItemAmmo(a->spr.type, &n) && !(gModernMap && a->xspr.data1 > 0)) pickups.Push(a);
+	}
+
+	// Bigger: each pickup of a short ammo takes a share of what's missing, by the room it has (dithered, so bundles of
+	// one stick still add up).
+	for (int at = 1; at < kAmmoTypes; at++)
+	{
+		if (left[at] <= 0) continue;
+		double room = 0;
+		for (auto a : pickups)
+		{
+			int n;
+			if (ItemAmmo(a->spr.type, &n) == at) room += BigAmount(n, at) - n;
+		}
+		if (room <= 0) continue;
+		double share = std::min(1., left[at] / room), acc = 0;
+		int placed = 0;
+		for (auto a : pickups)
+		{
+			int n;
+			if (ItemAmmo(a->spr.type, &n) != at) continue;
+			acc += (BigAmount(n, at) - n) * share;
+			int add = int(acc + 0.5) - placed;
+			if (add <= 0) continue;
+			placed += add;
+			SetAmount(a, n + add, n);
+			ledger.bigger++;
+		}
+		left[at] -= placed;
+	}
+
+	// More: next to the map's pickups and the enemies standing on a floor, in a shuffled round.
+	BloodStatIterator di(kStatDude);
+	while (auto a = di.Next())
+	{
+		if (a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !a->insector()) continue;
+		double top, bottom;
+		GetActorExtents(a, &top, &bottom);
+		if (std::abs(FloorAt(a).Z - bottom) <= 8) anchors.Push(a); // not the flyers and swimmers
+	}
+	for (int i = int(anchors.Size()) - 1; i > 0; i--) std::swap(anchors[i], anchors[RandInt(rng, 0, i)]);
+	TArray<DVector2> taken;
+	unsigned next = 0;
+	for (int at = 1; at < kAmmoTypes; at++)
+	{
+		int stock, item = BiggestItem(at, &stock);
+		while (left[at] > 0 && item && next < anchors.Size() * 2)
+		{
+			auto anchor = anchors[next++ % anchors.Size()];
+			DVector2 spot;
+			sectortype* sect;
+			if (!FindItemSpot(rng, anchor->sector(), FloorAt(anchor), 24, 64, taken, spot, sect)) continue;
+			auto a = SpawnPickup(sect, spot, item);
+			if (!a) continue;
+			taken.Push(spot);
+			int amount = std::max(std::min(left[at], BigAmount(stock, at)), stock);
+			SetAmount(a, amount, stock);
+			left[at] -= amount;
+			ledger.added++;
+		}
+		ledger.unplaced[at] = std::max(left[at], 0);
+	}
+	AmmoLedger now;
+	CountAmmo(now, p, false);
+	ledger.after = Coverage(now, owned);
+
+	PlaceSecretCaches(rng, owned, taken);
+	CountAmmo(now, p, false);
+	ledger.withSecrets = Coverage(now, owned);
+	if (ledger.bigger || ledger.added || ledger.cached)
+		Printf(PRINT_NOTIFY, "Ammo on this map: %d pickups bigger, %d more, %d caches in secret areas\n", ledger.bigger, ledger.added, ledger.cached);
 }
 
 //---------------------------------------------------------------------------
@@ -1278,8 +1516,11 @@ void Remix()
 	PickCurse(rng);
 	SetupPressure();
 	ledger = AmmoLedger();
-	if (auto p = getPlayer(myconnectindex)) CountAmmo(ledger, p); // after the remix and Horde's count
-	SupplyAmmo(owned); // before the kit, which isn't counted: what the pockets can't hold of its ammo is refunded
+	if (auto p = getPlayer(myconnectindex))
+	{
+		CountAmmo(ledger, p, false); // the map's own ammo, after the remix and Horde's count (what's carried isn't counted)
+		PlaceAmmo(rng, owned);
+	}
 	if (run.index == 0)
 	{
 		if (!run.kitGiven) GiveKit();
@@ -2134,6 +2375,44 @@ bool OnUse(DBloodPlayer* pPlayer)
 	return true;
 }
 
+//---------------------------------------------------------------------------
+//
+// a run's pickups holding their own amounts (PlaceAmmo): what the pocket
+// can't hold stays on the floor, and the message says how much was taken
+//
+//---------------------------------------------------------------------------
+
+static DBloodActor* lastBig; // the pickup TakePickup just gave from, for PickupTaken in the same PickUp
+static int lastTake;
+
+int TakePickup(DBloodActor* item, int room)
+{
+	if (!item || !(item->modFlags & kModBigPickup) || !item->hasX() || item->xspr.data1 <= 0) return -1;
+	int take = std::clamp(int(item->xspr.data1), 0, std::max(room, 0));
+	item->xspr.data1 -= take;
+	lastBig = item;
+	lastTake = take;
+	return take;
+}
+
+bool PickupTaken(DBloodActor* item, const char*& msg)
+{
+	if (!item || item != lastBig) return false;
+	lastBig = nullptr;
+	int n;
+	auto g = ProfileOfAmmo(ItemAmmo(item->spr.type, &n));
+	static FString text; // the message is printed at once
+	if (g && lastTake > 0)
+	{
+		bool gun = item->spr.type >= kItemWeaponBase && item->spr.type < kItemWeaponMax;
+		if (gun && msg) text.Format("%s, %s", msg, AmmoText(*g, lastTake).GetChars());
+		else text.Format("Picked up %s", AmmoText(*g, lastTake).GetChars());
+		if (item->xspr.data1 > 0) text.AppendFormat(" (%d left)", HudAmount(*g, item->xspr.data1));
+		msg = text.GetChars();
+	}
+	return item->xspr.data1 > 0;
+}
+
 int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
 {
 	if (!source || !target || damage <= 0) return damage;
@@ -2382,15 +2661,21 @@ CCMD(rl_ammo)
 	OwnedGuns(p, owned);
 	if (ledger.counted)
 	{
-		FString given;
+		Printf("At the start: %d enemies, %d health. The map's own ammo for your guns could kill them %.2f times over (target %.2f,"
+			" rl_ammo_target %d); with %d pickups bigger and %d more, %.2f; with %d caches in %d secret areas, %.2f.\n", ledger.enemies,
+			int(ledger.health), ledger.before, rl_ammo_target / 100., (int)rl_ammo_target, ledger.bigger, ledger.added, ledger.after,
+			ledger.cached, ledger.secretAreas, ledger.withSecrets);
+		FString planned, unplaced;
 		for (auto& g : ammoProfiles)
-			if (ledger.given[g.ammo] > 0) given.AppendFormat("%s%s", given.IsEmpty() ? "" : ", ", AmmoText(g, ledger.given[g.ammo]).GetChars());
-		Printf("At the start: %d enemies, %d health. Your guns' ammo, carried and on the map, could kill them %.2f times over;"
-			" the supplies (%s) made it %.2f. Target: %.2f (rl_ammo_target %d).\n", ledger.enemies, int(ledger.health), ledger.before,
-			given.IsEmpty() ? "none" : given.GetChars(), ledger.after, rl_ammo_target / 100., (int)rl_ammo_target);
+		{
+			if (ledger.plan[g.ammo] > 0) planned.AppendFormat("%s%s", planned.IsEmpty() ? "" : ", ", AmmoText(g, ledger.plan[g.ammo]).GetChars());
+			if (ledger.unplaced[g.ammo] > 0) unplaced.AppendFormat("%s%s", unplaced.IsEmpty() ? "" : ", ", AmmoText(g, ledger.unplaced[g.ammo]).GetChars());
+		}
+		if (planned.IsNotEmpty()) Printf("  Added to the map's pickups: %s%s%s\n", planned.GetChars(),
+			unplaced.IsEmpty() ? "" : "; found no room for ", unplaced.GetChars());
 	}
 	AmmoLedger now;
-	CountAmmo(now, p);
+	CountAmmo(now, p, true);
 	Printf("Now: %d enemies (a spawner counts as if it hasn't fired), %d health; %.2f times over.\n", now.enemies, int(now.health), Coverage(now, owned));
 	for (auto& g : ammoProfiles)
 	{
