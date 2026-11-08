@@ -68,9 +68,13 @@ namespace bmod
 	// Effects never touch it and stopping them doesn't reset it: the mode sets it and puts it back to 1.
 	extern double modeEnemyTimeScale;
 	double EnemyTimeScale(); // mods.enemyTimeScale * modeEnemyTimeScale
-	// A game mode's speed for one enemy (the roguelite's red champions), on top of the above: over 1, extra movement
-	// steps on some tics and faster animations. Null (the default) or 1 leaves the enemy as it is.
+	// A game mode's speed for one enemy (the roguelite's red champions), on top of the above: over 1, extra AI moves
+	// (acceleration and turning) on that share of the tics and faster animations. Null (the default) or 1 leaves the
+	// enemy as it is.
 	extern double (*modeActorSpeed)(DBloodActor* actor);
+	int ExtraMoves(DBloodActor* actor); // aiProcessDudes: extra moveFunc calls this pass (0 unless modeActorSpeed says so)
+	// A game mode's say on a wave enemy (SpawnWave copies a kind alive on the map): called once it's placed.
+	extern void (*modeWaveSpawned)(DBloodActor* spawned, DBloodActor* kind);
 
 	int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage);
 	int SpawnWave(int count); // the enemy wave: up to count enemies teleport in behind the player; returns how many came
