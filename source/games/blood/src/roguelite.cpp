@@ -1100,8 +1100,8 @@ bool StartRun(int episode, uint32_t seed)
 const char* const kCryptMap = "rlcrypt.map";
 constexpr int kMarkerTag = 0x524C;
 enum { kFeatArmory = 1, kFeatCovenant = 2, kFeatRecords = 3, kFeatPortal = 10, kNumPortals = 6 };
-constexpr double kUseRange = 80;    // map units from a feature's marker
-constexpr double kLabelRange = 192; // a portal's name shows within this
+constexpr double kUseRange = 48;    // world units (16 map units) from a feature's marker: about one bay
+constexpr double kLabelRange = 64;  // a portal's name shows within this (the alcoves are 40 apart)
 constexpr int kNoticeTime = 4 * kClock;
 
 struct Crypt
