@@ -36,6 +36,7 @@ namespace rogue
 	bool SwallowMissile(DBloodActor* shooter, double xyoff, double zoff, const DVector3& dv, int type); // actFireMissile
 	bool SwallowVector(DBloodActor* shooter, double offset, double zoffset, const DVector3& dv, int type); // actFireVector
 	bool ForgeLoaded(DBloodPlayer* pPlayer, int ammotype, int count);      // CheckAmmo: true = Blood Price lets it fire dry
+	bool ForgeLoadedWeapon(DBloodPlayer* pPlayer, int weapon);             // CheckWeaponAmmo, next/prev: and lets you pick it dry
 	struct ForgeImpact                                                     // actImpactMissile: a forged missile's Wound
 	{
 		ForgeImpact(DBloodActor* missile, DBloodActor* hit);

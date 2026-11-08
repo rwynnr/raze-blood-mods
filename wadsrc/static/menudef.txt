@@ -2281,6 +2281,8 @@ OptionMenu "RogueliteForge" protected
 	StaticText " "
 	StaticText " ", 1
 	StaticText " ", 1
+	StaticText " ", 1
+	StaticText " ", 1
 	StaticText ""
 	Option "Vessel: the gun",					"rl_forge_vessel", "RLForgeVessel"
 	Option "Mouth: what it fires",				"rl_forge_mouth", "RLForgeMouth"
