@@ -64,7 +64,13 @@ namespace bmod
 	};
 	extern Modifiers mods;
 
+	// A game mode's lasting factor on enemy speed (the roguelite's Haste), on top of mods.enemyTimeScale.
+	// Effects never touch it and stopping them doesn't reset it: the mode sets it and puts it back to 1.
+	extern double modeEnemyTimeScale;
+	double EnemyTimeScale(); // mods.enemyTimeScale * modeEnemyTimeScale
+
 	int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage);
+	int SpawnWave(int count); // the enemy wave: up to count enemies teleport in behind the player; returns how many came
 	void ModifyView(DVector3& pos, DRotator& angles, double interpfrac); // also drives shader effects
 	void ModifyShot(DBloodActor* shooter, DVector3& dv);                // actFireVector, before normalizing
 	double ScaleRange(DBloodActor* shooter, double range);               // actFireVector reach
