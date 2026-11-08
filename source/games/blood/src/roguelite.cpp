@@ -1048,7 +1048,7 @@ void SetAmount(DBloodActor* a, int amount, int stock)
 
 // A sector a pickup can lie in: not a door, lift, moving floor, teleporter or damage sector, not water, lava, sky,
 // a stacked room or a drag, crush or bobbing floor, and high enough to stand in.
-bool SpotSectorOk(sectortype* s)
+bool SpotSectorOk(sectortype* s, double minHeight = 40)
 {
 	if (!s || (s->floorstat & CSTAT_SECTOR_SKY)) return false;
 	if (s->type >= kSectorBase && s->type < kSectorMax) return false;
@@ -1059,47 +1059,49 @@ bool SpotSectorOk(sectortype* s)
 		auto& x = s->xs();
 		if (x.Underwater || x.Depth || x.damageType || x.Drag || x.Crush || (x.bobSpeed && x.bobFloor)) return false;
 	}
-	return s->floorz - s->ceilingz >= 40;
+	return s->floorz - s->ceilingz >= minHeight;
 }
 
 // A spot for a pickup: inside a good sector, at about the anchor's floor height, clear of walls and ledges, and not
-// on another pickup, a thing or an enemy.
-bool SpotOk(sectortype* s, const DVector2& p, double anchorZ, const TArray<DVector2>& taken)
+// on another pickup, a thing or an enemy. Loose (a secret's cache): a niche 24 high will do, nearer walls and items.
+bool SpotOk(sectortype* s, const DVector2& p, double anchorZ, const TArray<DVector2>& taken, bool loose = false)
 {
-	if (!SpotSectorOk(s) || !inside(p.X, p.Y, s)) return false;
+	const double clear = loose ? 8 : kSpotClear, spacing = loose ? 12 : kSpotSpacing;
+	if (!SpotSectorOk(s, loose ? 24 : 40) || !inside(p.X, p.Y, s)) return false;
 	double fz = getflorzofslopeptr(s, p.X, p.Y);
 	if (std::abs(fz - anchorZ) > kSpotStepZ) return false;
 	for (auto& w : s->walls)
 	{
 		auto ns = w.nextSector();
 		bool hard = !ns || (ns->type >= kSectorBase && ns->type < kSectorMax) || std::abs(getflorzofslopeptr(ns, p.X, p.Y) - fz) > 16;
-		if (hard && SquareDistToWall(p.X, p.Y, &w) < kSpotClear * kSpotClear) return false;
+		if (hard && SquareDistToWall(p.X, p.Y, &w) < clear * clear) return false;
 	}
-	for (auto& t : taken) if ((t - p).LengthSquared() < kSpotSpacing * kSpotSpacing) return false;
+	for (auto& t : taken) if ((t - p).LengthSquared() < spacing * spacing) return false;
 	BloodSectIterator it(s);
 	while (auto a = it.Next())
 	{
 		bool item = a->spr.statnum == kStatItem;
 		bool solid = item || (a->spr.cstat & CSTAT_SPRITE_BLOCK) || a->spr.statnum == kStatThing || a->spr.statnum == kStatDude;
-		double r = item ? kSpotSpacing : a->clipdist + kSpotClear;
+		double r = item ? spacing : a->clipdist + clear;
 		if (solid && (a->spr.pos.XY() - p).LengthSquared() < r * r) return false;
 	}
 	return true;
 }
 
-// A spot minD-maxD from an anchor (on its floor), in sight of it, so the pickup isn't through a wall.
+// A spot minD-maxD from an anchor (on its floor), in sight of it, so the pickup isn't through a wall; with only, in
+// that sector (a secret's cache stays in the secret).
 bool FindItemSpot(std::mt19937& rng, sectortype* aSect, const DVector3& anchor, double minD, double maxD,
-	const TArray<DVector2>& taken, DVector2& out, sectortype*& outSect)
+	const TArray<DVector2>& taken, DVector2& out, sectortype*& outSect, sectortype* only = nullptr, int tries = 16)
 {
 	DVector3 eye(anchor.XY(), anchor.Z - 16);
-	for (int k = 0; k < 16; k++)
+	for (int k = 0; k < tries; k++)
 	{
 		DVector2 p = anchor.XY() + DAngle::fromDeg(Rand01(rng) * 360.).ToVector() * (minD + (maxD - minD) * Rand01(rng));
 		auto s = aSect;
 		updatesector(p, &s);
-		if (!s) continue;
+		if (!s || (only && s != only)) continue;
 		if (!cansee(eye, aSect, DVector3(p, getflorzofslopeptr(s, p.X, p.Y) - 16), s)) continue;
-		if (!SpotOk(s, p, anchor.Z, taken)) continue;
+		if (!SpotOk(s, p, anchor.Z, taken, only != nullptr)) continue;
 		out = p;
 		outSect = s;
 		return true;
@@ -1180,7 +1182,7 @@ void PlaceSecretCaches(std::mt19937& rng, const bool* owned, TArray<DVector2>& t
 			int item = ammo > 0 ? BiggestItem(ammo, &stock) : 0;
 			DVector2 spot;
 			sectortype* sect;
-			if (!item || !FindItemSpot(rng, s, anchor, 0, 48, taken, spot, sect)) continue;
+			if (!item || !FindItemSpot(rng, s, anchor, 0, 64, taken, spot, sect, s, 48)) continue;
 			auto a = SpawnPickup(sect, spot, item);
 			if (!a) continue;
 			taken.Push(spot);
@@ -1201,6 +1203,7 @@ void PlaceAmmo(std::mt19937& rng, const bool* owned)
 	auto p = getPlayer(myconnectindex);
 	if (!p || !ledger.counted) return;
 	ledger.before = Coverage(ledger, owned);
+	if (rl_ammo_target <= 0) return; // stock amounts: no bigger pickups, no more, no caches
 	PlanAmmo(owned, ledger.plan);
 	int left[kAmmoTypes];
 	for (int at = 0; at < kAmmoTypes; at++) left[at] = ledger.plan[at];
@@ -1244,7 +1247,10 @@ void PlaceAmmo(std::mt19937& rng, const bool* owned)
 		left[at] -= placed;
 	}
 
-	// More: next to the map's pickups and the enemies standing on a floor, in a shuffled round.
+	// More: next to the map's pickups, then the enemies standing on a floor (each in a shuffled round; pickups first, as
+	// an enemy can stand where the player can't go).
+	for (int i = int(anchors.Size()) - 1; i > 0; i--) std::swap(anchors[i], anchors[RandInt(rng, 0, i)]);
+	int itemAnchors = int(anchors.Size());
 	BloodStatIterator di(kStatDude);
 	while (auto a = di.Next())
 	{
@@ -1253,7 +1259,7 @@ void PlaceAmmo(std::mt19937& rng, const bool* owned)
 		GetActorExtents(a, &top, &bottom);
 		if (std::abs(FloorAt(a).Z - bottom) <= 8) anchors.Push(a); // not the flyers and swimmers
 	}
-	for (int i = int(anchors.Size()) - 1; i > 0; i--) std::swap(anchors[i], anchors[RandInt(rng, 0, i)]);
+	for (int i = int(anchors.Size()) - 1; i > itemAnchors; i--) std::swap(anchors[i], anchors[RandInt(rng, itemAnchors, i)]);
 	TArray<DVector2> taken;
 	unsigned next = 0;
 	for (int at = 1; at < kAmmoTypes; at++)
@@ -2387,8 +2393,15 @@ static int lastTake;
 
 int TakePickup(DBloodActor* item, int room)
 {
+	lastBig = nullptr;
 	if (!item || !(item->modFlags & kModBigPickup) || !item->hasX() || item->xspr.data1 <= 0) return -1;
-	int take = std::clamp(int(item->xspr.data1), 0, std::max(room, 0));
+	// Taken only when the pocket has room for a stock pickup's worth (or what's left, if less): otherwise firing next to
+	// a pickup that's lying there half taken would take a round at a time, with the sound and flash each shot.
+	int stock;
+	ItemAmmo(item->spr.type, &stock);
+	int held = item->xspr.data1;
+	int take = std::min(held, std::max(room, 0));
+	if (take < std::min(held, std::max(stock, 1))) take = 0;
 	item->xspr.data1 -= take;
 	lastBig = item;
 	lastTake = take;
@@ -2397,7 +2410,7 @@ int TakePickup(DBloodActor* item, int room)
 
 bool PickupTaken(DBloodActor* item, const char*& msg)
 {
-	if (!item || item != lastBig) return false;
+	if (!item || item != lastBig || !(item->modFlags & kModBigPickup) || !item->hasX()) return false;
 	lastBig = nullptr;
 	int n;
 	auto g = ProfileOfAmmo(ItemAmmo(item->spr.type, &n));
@@ -2407,7 +2420,7 @@ bool PickupTaken(DBloodActor* item, const char*& msg)
 		bool gun = item->spr.type >= kItemWeaponBase && item->spr.type < kItemWeaponMax;
 		if (gun && msg) text.Format("%s, %s", msg, AmmoText(*g, lastTake).GetChars());
 		else text.Format("Picked up %s", AmmoText(*g, lastTake).GetChars());
-		if (item->xspr.data1 > 0) text.AppendFormat(" (%d left)", HudAmount(*g, item->xspr.data1));
+		if (item->xspr.data1 > 0) text.AppendFormat(" (%d left)", std::max(HudAmount(*g, item->xspr.data1), 1));
 		msg = text.GetChars();
 	}
 	return item->xspr.data1 > 0;

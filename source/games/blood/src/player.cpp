@@ -1262,7 +1262,10 @@ bool PickupAmmo(DBloodPlayer* pPlayer, DBloodActor* ammoactor)
 
 	if (pPlayer->ammoCount[nAmmoType] >= gAmmoInfo[nAmmoType].max) return 0;
 	else if (int n = rogue::TakePickup(ammoactor, gAmmoInfo[nAmmoType].max - pPlayer->ammoCount[nAmmoType]); n >= 0)
-		pPlayer->ammoCount[nAmmoType] += n; // blood2d roguelite: a pickup holding its own amount (none outside a run)
+	{
+		if (n == 0) return 0; // blood2d roguelite: a pickup holding its own amount (none outside a run); 0 = not yet
+		pPlayer->ammoCount[nAmmoType] += n;
+	}
 #ifdef NOONE_EXTENSIONS
 	else if (gModernMap && ammoactor->hasX() && ammoactor->xspr.data1 > 0) // allow custom amount for item
 		pPlayer->ammoCount[nAmmoType] = ClipHigh(pPlayer->ammoCount[nAmmoType] + ammoactor->xspr.data1, gAmmoInfo[nAmmoType].max);
@@ -1312,7 +1315,10 @@ bool PickupWeapon(DBloodPlayer* pPlayer, DBloodActor* weaponactor)
 
 	if (!actGetRespawnTime(weaponactor) || nAmmoType == -1 || pPlayer->ammoCount[nAmmoType] >= gAmmoInfo[nAmmoType].max) return 0;
 	else if (int n = rogue::TakePickup(weaponactor, gAmmoInfo[nAmmoType].max - pPlayer->ammoCount[nAmmoType]); n >= 0)
-		pPlayer->ammoCount[nAmmoType] += n; // blood2d roguelite: a pickup holding its own amount (none outside a run)
+	{
+		if (n == 0) return 0; // blood2d roguelite: a pickup holding its own amount (none outside a run); 0 = not yet
+		pPlayer->ammoCount[nAmmoType] += n;
+	}
 #ifdef NOONE_EXTENSIONS
 	else if (gModernMap && weaponactor->hasX() && weaponactor->xspr.data1 > 0)
 		pPlayer->ammoCount[nAmmoType] = ClipHigh(pPlayer->ammoCount[nAmmoType] + weaponactor->xspr.data1, gAmmoInfo[nAmmoType].max);
