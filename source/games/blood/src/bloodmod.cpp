@@ -668,14 +668,13 @@ static bool WaveAvailable()
 	return FindWaveSpot(pPlayer->GetActor(), kinds[0], none, spot);
 }
 
-static void EnemyWave()
+int SpawnWave(int count)
 {
 	auto pPlayer = LocalPlayer();
-	if (!pPlayer || !pPlayer->GetActor() || pPlayer->GetActor()->xspr.health <= 0) return;
+	if (!pPlayer || !pPlayer->GetActor() || pPlayer->GetActor()->xspr.health <= 0) return 0;
 	auto pl = pPlayer->GetActor();
 	TArray<DBloodActor*> kinds;
-	if (!WaveKinds(kinds)) return;
-	int count = 3 + gGameOptions.nDifficulty / 2; // 3, 3, 4, 4, 5 by skill
+	if (!WaveKinds(kinds)) return 0;
 	TArray<WaveSpot> taken;
 	for (int i = 0; i < count; i++)
 	{
@@ -702,6 +701,12 @@ static void EnemyWave()
 		sfxPlay3DSound(a, 201, -1, 0); // teleporter
 	}
 	if (mod_eventlog) Printf("mod effect: wave spawned %d of %d\n", int(taken.Size()), count);
+	return int(taken.Size());
+}
+
+static void EnemyWave()
+{
+	SpawnWave(3 + gGameOptions.nDifficulty / 2); // 3, 3, 4, 4, 5 by skill
 }
 
 //---------------------------------------------------------------------------
