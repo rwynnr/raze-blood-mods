@@ -1560,7 +1560,7 @@ void ProcessInput(DBloodPlayer* pPlayer)
 				playerReset(pPlayer);
 				if (gGameOptions.nGameType == 0 && numplayers == 1)
 				{
-					gameaction = ga_autoloadgame;
+					if (!rogue::OnDeathRestart()) gameaction = ga_autoloadgame; // blood2d roguelite: dying ends a run, no reload
 				}
 				else
 					playerStart(pPlayer->pnum);

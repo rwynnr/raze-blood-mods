@@ -395,6 +395,7 @@ void NewLevel(MapRecord *sng, int skill, bool newgame)
 
 void GameInterface::NewGame(MapRecord *sng, int skill, bool)
 {
+	rogue::OnNewGame(); // blood2d roguelite: a new game outside a run leaves the run
 	gGameOptions.uGameFlags = 0;
 	cheatReset();
 	DBloodPlayer* pPlayer = getPlayer(myconnectindex);

@@ -65,6 +65,7 @@
 #include "src/weapon.cpp"
 #include "src/bloodmod.cpp" // blood2d mod base (after all game code)
 #include "src/chaos.cpp"    // blood2d chaos mode
+#include "src/roguelite.cpp" // blood2d roguelite mode
 
 // This includes the VM so it is last
 #include "src/vmexports.cpp"

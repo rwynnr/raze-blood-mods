@@ -129,6 +129,7 @@ void DoLoadGame(const char* name);
 bool sendsave;
 FString	savedescription;
 FString	savegamefile;
+void (*gModMainMenuHook)(); // blood2d mod: called once the game is back at the main menu (the roguelite's run result)
 
 //==========================================================================
 //
@@ -244,6 +245,7 @@ static void GameTicker()
 			gamestate = GS_MENUSCREEN;
 			M_StartControlPanel(ga == ga_mainmenu);
 			M_SetMenu(NAME_Mainmenu);
+			if (gModMainMenuHook) gModMainMenuHook();
 			break;
 
 		case ga_creditsmenu:
@@ -253,6 +255,7 @@ static void GameTicker()
 			M_StartControlPanel(false);
 			M_SetMenu(NAME_Mainmenu);
 			M_SetMenu(NAME_CreditsMenu);
+			if (gModMainMenuHook) gModMainMenuHook();
 			break;
 
 		case ga_savegame:
