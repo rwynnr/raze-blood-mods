@@ -245,21 +245,25 @@ int ScaleBlast(int damage)
 
 // Enemy time scale: run enemy AI / movement N times per tic (accumulated), and scale
 // their animation ticks. 1.0 leaves stock behavior untouched.
+double modeEnemyTimeScale = 1;
+double EnemyTimeScale() { return mods.enemyTimeScale * modeEnemyTimeScale; }
+
 static double enemyAcc;
 static int enemyPassesThisTic = 1;
 static int aiFrame;
 
 void BeginEnemyTic()
 {
-	if (mods.enemyTimeScale == 1) { enemyAcc = 0; enemyPassesThisTic = 1; return; }
-	enemyAcc += mods.enemyTimeScale;
+	double scale = EnemyTimeScale();
+	if (scale == 1) { enemyAcc = 0; enemyPassesThisTic = 1; return; }
+	enemyAcc += scale;
 	enemyPassesThisTic = int(enemyAcc);
 	enemyAcc -= enemyPassesThisTic;
 }
 
 int EnemyPasses() { return enemyPassesThisTic; }
 void NextAiPass() { aiFrame++; }
-int AiFrame() { return mods.enemyTimeScale == 1 ? gFrameCount : aiFrame; }
+int AiFrame() { return EnemyTimeScale() == 1 ? gFrameCount : aiFrame; }
 
 int DudeMoveSteps(DBloodActor* actor)
 {
@@ -268,8 +272,9 @@ int DudeMoveSteps(DBloodActor* actor)
 
 int SeqTicks(DBloodActor* owner, int nTicks)
 {
-	if (mods.enemyTimeScale == 1 || !owner || owner->spr.statnum != kStatDude || owner->IsPlayerActor()) return nTicks;
-	return int(nTicks * mods.enemyTimeScale + 0.5);
+	double scale = EnemyTimeScale();
+	if (scale == 1 || !owner || owner->spr.statnum != kStatDude || owner->IsPlayerActor()) return nTicks;
+	return int(nTicks * scale + 0.5);
 }
 
 //---------------------------------------------------------------------------
@@ -663,14 +668,13 @@ static bool WaveAvailable()
 	return FindWaveSpot(pPlayer->GetActor(), kinds[0], none, spot);
 }
 
-static void EnemyWave()
+int SpawnWave(int count)
 {
 	auto pPlayer = LocalPlayer();
-	if (!pPlayer || !pPlayer->GetActor() || pPlayer->GetActor()->xspr.health <= 0) return;
+	if (!pPlayer || !pPlayer->GetActor() || pPlayer->GetActor()->xspr.health <= 0) return 0;
 	auto pl = pPlayer->GetActor();
 	TArray<DBloodActor*> kinds;
-	if (!WaveKinds(kinds)) return;
-	int count = 3 + gGameOptions.nDifficulty / 2; // 3, 3, 4, 4, 5 by skill
+	if (!WaveKinds(kinds)) return 0;
 	TArray<WaveSpot> taken;
 	for (int i = 0; i < count; i++)
 	{
@@ -697,6 +701,12 @@ static void EnemyWave()
 		sfxPlay3DSound(a, 201, -1, 0); // teleporter
 	}
 	if (mod_eventlog) Printf("mod effect: wave spawned %d of %d\n", int(taken.Size()), count);
+	return int(taken.Size());
+}
+
+static void EnemyWave()
+{
+	SpawnWave(3 + gGameOptions.nDifficulty / 2); // 3, 3, 4, 4, 5 by skill
 }
 
 //---------------------------------------------------------------------------
