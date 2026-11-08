@@ -675,6 +675,14 @@ void MakeChampion(DBloodActor* a, bool grow = true, bool red = false)
 // The red champions' speed, for the base's modeActorSpeed (set as each map starts and on each load).
 double RedSpeed(DBloodActor* a) { return a && (a->modFlags & kModRedChampion) ? kRedSpeed : 1.; }
 
+// A wave enemy copies a kind alive on the map, its size too: a champion's size without its tier would mislead, so
+// the copy keeps the stock look.
+void WaveSpawned(DBloodActor* spawned, DBloodActor* kind)
+{
+	if (!spawned || !kind || !(kind->modFlags & kModChampion)) return;
+	spawned->spr.scale /= (kind->modFlags & kModRedChampion) ? kRedSize : kChampionSize;
+}
+
 void RemixEnemies(std::mt19937& rng, double depth)
 {
 	TArray<DBloodActor*> eligible, reroll;
@@ -1853,12 +1861,14 @@ void OnEvent(const bmod::EventInfo& ev)
 	{
 	case bmod::Event::LevelStart:
 		bmod::modeActorSpeed = RedSpeed; // only actors a run marked are faster
+		bmod::modeWaveSpawned = WaveSpawned;
 		if (IsCryptLevel()) SetupCrypt();
 		else crypt.in = false;
 		LevelStarted();
 		break;
 	case bmod::Event::SaveLoaded:
 		bmod::modeActorSpeed = RedSpeed;
+		bmod::modeWaveSpawned = WaveSpawned;
 		nextCurseTry = 0;
 		ledger = AmmoLedger(); // rl_ammo's "at the start" belongs to the map as it started, not to this load
 		if (IsCryptLevel()) SetupCrypt();
