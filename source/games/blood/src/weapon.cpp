@@ -231,6 +231,8 @@ static bool CheckAmmo(DBloodPlayer* pPlayer, int ammotype, int count)
 {
 	if (gInfiniteAmmo)
 		return 1;
+	if (rogue::ForgeLoaded(pPlayer, ammotype, count)) // blood2d roguelite: the Forge's Blood Price fires on health
+		return 1;
 	if (ammotype == -1)
 		return 1;
 	if (pPlayer->curWeapon == kWeapRemote && pPlayer->weaponAmmo == 11 && pPlayer->weaponState == 11)

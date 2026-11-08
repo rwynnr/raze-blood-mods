@@ -2212,6 +2212,7 @@ OptionMenu "RogueliteArmory" protected
 	Option "Napalm launcher (40)",				"rl_kit_napalm", "YesNo"
 	Option "Tesla cannon (45)",					"rl_kit_tesla", "YesNo"
 	Option "Life leech (60)",					"rl_kit_leech", "YesNo"
+	Submenu "The Forge: carve runes into the flare gun, sawed-off or tommy",	"RogueliteForge"
 	StaticText ""
 	StaticText "Explosives", 1
 	Slider "TNT, 5 sticks (15 each)",			"rl_kit_tnt", 0, 3, 1, 0
@@ -2239,6 +2240,59 @@ OptionMenu "RogueliteArmory" protected
 	Option "Diving suit (10)",					"rl_kit_diving", "YesNo"
 	StaticText ""
 	Command "Empty the kit",					"rl_kit_clear"
+}
+
+// The Forge: one gun of the kit forged with runes (docs/roguelite-forge.md; roguelite.cpp fills in the title and the
+// first three lines, and takes off runes that can't go together).
+OptionValue "RLForgeVessel"
+{
+	0, "None: no forged gun"
+	1, "Flare gun (10, from the kit)"
+	2, "Sawed-off (20, from the kit)"
+	3, "Tommy gun (30, from the kit)"
+}
+OptionValue "RLForgeMouth"
+{
+	0, "None: the gun's own round"
+	1, "Hellmouth (20): napalm fireballs"
+	2, "Cleaver's Psalm (15): cleavers that heal you"
+}
+OptionValue "RLForgePath"
+{
+	0, "None"
+	1, "Hound's Nose (15): missiles hunt the foe ahead"
+	2, "Choir of Three (20): a fan of three, drinks double"
+}
+OptionValue "RLForgeWound"
+{
+	0, "None"
+	1, "Pyre (10): sets foes alight"
+	2, "Gravedigger's Blast (20): missiles burst where they land"
+}
+OptionValue "RLForgePenance"
+{
+	0, "None"
+	1, "Blood Price (-15): when dry, fire on your health"
+}
+
+OptionMenu "RogueliteForge" protected
+{
+	Title "The Forge"
+	StaticText " "
+	StaticText " ", 1
+	StaticText " ", 1
+	StaticText ""
+	Option "Vessel: the gun",					"rl_forge_vessel", "RLForgeVessel"
+	Option "Mouth: what it fires",				"rl_forge_mouth", "RLForgeMouth"
+	Option "Path: how it travels",				"rl_forge_path", "RLForgePath"
+	Option "Wound: what a hit does",			"rl_forge_wound", "RLForgeWound"
+	Option "Penance: a drawback, for points",	"rl_forge_penance", "RLForgePenance"
+	StaticText ""
+	StaticText "One forged gun a run. It keeps its key, ammo, hands and alt fire: only its primary fire changes.", 1
+	StaticText "Its points come out of the kit's. A rune that can't go with the others is taken off, and the line", 1
+	StaticText "above says why.", 1
+	StaticText ""
+	Command "Melt it down",						"rl_forge_clear"
 }
 
 // The Covenant: opt-in difficulty conditions, after Hades' Pact of Punishment (roguelite.cpp fills in the title

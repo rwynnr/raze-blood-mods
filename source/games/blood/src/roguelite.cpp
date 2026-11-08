@@ -33,6 +33,11 @@
 // - from the second map on, a 25% chance that one of the base's timed effects
 //   curses the whole level (announced under the map's name).
 //
+// The Forge (docs/roguelite-forge.md): one gun of the kit, forged with runes in
+// the Armory, fires the runes' payload in place of its own primary fire: the
+// stock fire function still runs (hands, sounds, ammo, timing), its shots are
+// swallowed and their aims recorded, and the payload goes out along them.
+//
 // Dying ends the run: a "Run over" screen, then the main menu (no reload).
 // Finishing the last map wins it: "Run complete" at the menu, and the next
 // episode unlocks (all unlocked: the gauntlet opens). Ichor, earned per kill
@@ -46,6 +51,9 @@
 //   rl_status                            the run in progress and the meta progress
 //   rl_clearmap                          end the run's current map as cleared, as if its exit was used
 //   rl_ammo                              this map's ammo: what its enemies take, what you have, the supplies
+//   rl_forge [vessel mouth path wound penance]  the forged gun (numbers as in the menu); sets it, and in a run
+//                                        also forges the run's gun at once (testing)
+//   rl_forge_clear                       melt the forged gun down
 //   rl_unlock <count|all>                set how many of this game's episodes are unlocked (testing)
 //   rl_resetprogress                     lock this game's episodes again; empty the ichor bank and the wins
 //   openmenu RogueliteMenu               the Roguelite menu (it is also on the main menu)
@@ -112,7 +120,7 @@ CVARD(Int, rl_wins, 0, CVAR_ARCHIVE, "roguelite: runs won")
 // Pact of Punishment) live in the config, so both are remembered from one run to the next. Their menus are in
 // menudef ("RogueliteArmory", "RogueliteCovenant"); a run takes a copy of both when it starts.
 BEGIN_BLD_NS
-namespace rogue { void KitChanged(); void CovenantChanged(); }
+namespace rogue { void KitChanged(); void CovenantChanged(); void ForgeChanged(); }
 END_BLD_NS
 #define RL_KIT(name, maxUnits) CUSTOM_CVARD(Int, name, 0, CVAR_ARCHIVE, "roguelite Armory: how many of this the kit buys") \
 	{ if (self < 0) self = 0; else if (self > maxUnits) self = maxUnits; else BLD_NS::rogue::KitChanged(); }
@@ -153,6 +161,14 @@ RL_COV(rl_cov_famine, 4)
 RL_COV(rl_cov_austerity, 3)
 RL_COV(rl_cov_hourglass, 1)
 RL_COV(rl_cov_wardens, 1)
+// The Forge's recipe: one choice per slot (0 = none), checked together by ForgeChanged.
+#define RL_FORGE(name, maxValue) CUSTOM_CVARD(Int, name, 0, CVAR_ARCHIVE, "roguelite Forge: this slot's rune (0 = none)") \
+	{ if (self < 0) self = 0; else if (self > maxValue) self = maxValue; else BLD_NS::rogue::ForgeChanged(); }
+RL_FORGE(rl_forge_vessel, 3)
+RL_FORGE(rl_forge_mouth, 2)
+RL_FORGE(rl_forge_path, 2)
+RL_FORGE(rl_forge_wound, 2)
+RL_FORGE(rl_forge_penance, 1)
 
 BEGIN_BLD_NS
 
@@ -253,6 +269,83 @@ const Condition conditions[kNumConditions] =
 };
 constexpr double kDreadIchor = 0.10;
 
+//---------------------------------------------------------------------------
+//
+// the Forge's parts (docs/roguelite-forge.md): a Vessel (the gun), and one
+// rune in each of three circles, Mouth (what it fires), Path (how it
+// travels), Wound (what a hit does), and an optional Penance
+//
+//---------------------------------------------------------------------------
+
+enum { kForgeVessel, kForgeMouth, kForgePath, kForgeWound, kForgePenance, kForgeSlots };
+enum { kVesselFlare = 1, kVesselShotgun, kVesselTommy };
+enum { kMouthHellmouth = 1, kMouthCleaver };
+enum { kPathHound = 1, kPathChoir };
+enum { kWoundPyre = 1, kWoundGrave };
+enum { kPenanceBloodPrice = 1 };
+
+// A Vessel's worth per round of its own ammo against a plain 50-health foe (ammoProfiles' damage, capped at the foe's
+// health, times the hit rate), so a Mouth can be weighed against it: a heavier payload drinks more rounds a pull, a
+// lighter one fires more projectiles a round.
+struct ForgeVesselInfo
+{
+	const char* name;
+	int weapon, ammo;
+	FIntCVarRef* kit;  // its kit line: forging a gun puts it in the kit
+	int kitCost;
+	double worth;      // per round
+	int stockMissile;  // its own round, if a missile (the flare), else 0
+	bool slow;         // at least 0.3 s between pulls: may take a heavy Mouth
+	const char* round; // its own round, in a sentence
+};
+const ForgeVesselInfo forgeVessels[] =
+{
+	{ "", 0, 0, nullptr, 0, 1, 0, false, "" },
+	{ "Flare Gun", kWeapFlareGun, 1, &rl_kit_flare, 10, 40, kMissileFlareRegular, true, "a flare" },
+	{ "Sawed-off", kWeapShotgun, 2, &rl_kit_shotgun, 20, 30, 0, true, "its pellets" },
+	{ "Tommy Gun", kWeapTommyGun, 3, &rl_kit_tommy, 30, 7.2, 0, false, "a bullet" },
+};
+
+struct ForgeRuneInfo
+{
+	const char* name;
+	const char* word; // in the gun's name: an adjective, or for a Wound "of the ..."
+	int cost;         // a Penance's is a refund
+	const char* says; // in the gun's sentence
+};
+const ForgeRuneInfo forgeMouths[] =
+{
+	{ "", "", 0, "" },
+	{ "Hellmouth", "Hellmouth", 20, "napalm fireball" },
+	{ "Cleaver's Psalm", "Cleaving", 15, "cleaver that heals you 10 on a hit" },
+};
+const int forgeMouthMissile[] = { 0, kMissileFireballNapalm, kMissileButcherKnife };
+const double forgeMouthWorth[] = { 1, 52.5, 8.7 }; // napalm: 50 x 0.7 hit x 1.5 foes; cleaver: 14.5 spirit x 0.6
+const bool forgeMouthHeavy[] = { false, true, false };
+const bool forgeMouthBurns[] = { false, true, false };
+const ForgeRuneInfo forgePaths[] =
+{
+	{ "", "", 0, "" },
+	{ "Hound's Nose", "Hunting", 15, "hunting the nearest foe ahead" },
+	{ "Choir of Three", "Threefold", 20, "in a fan of three" },
+};
+const ForgeRuneInfo forgeWounds[] =
+{
+	{ "", "", 0, "" },
+	{ "Pyre", "of the Pyre", 10, "it sets foes alight" },
+	{ "Gravedigger's Blast", "of the Grave", 20, "it bursts where it lands, and the blast reaches you too" },
+};
+const ForgeRuneInfo forgePenances[] =
+{
+	{ "", "", 0, "" },
+	{ "Blood Price", "Blood-Priced", 15, "when it's dry, a pull costs 4 health" },
+};
+constexpr int kForgeMissiles = 8, kForgeVectors = 32; // most a pull fires
+constexpr int kPyreBurn = 240;                       // burn time: 30 health over about 4 s
+constexpr int kBloodPrice = 4;                       // health a dry pull costs
+constexpr int kForgeHealPerSecond = 10;              // most the forge heals you a second
+constexpr double kHoundCone = 25, kHoundRange = 1024; // degrees, world units
+
 struct Run
 {
 	bool active = false;
@@ -279,6 +372,7 @@ struct Run
 	int parTime = 0;              // Hourglass: this map's par time, in seconds (0 = none)
 	int nextOvertime = 0;         // Hourglass: PlayClock of the next wave past the par time
 	int unspent = 0;              // kit points not spent: ichor once the first map is cleared
+	int forge[kForgeSlots] = {};  // the Forge's recipe, as it was when the run started
 };
 
 Run run;
@@ -344,20 +438,45 @@ void SetProgress(const Progress& p)
 //
 //---------------------------------------------------------------------------
 
+// The Forge's runes, less a Penance's refund (which can't take the runes below 0: the Vessel's own kit price stands).
+int ForgeCost(const int* f)
+{
+	if (!f[kForgeVessel]) return 0;
+	int runes = forgeMouths[f[kForgeMouth]].cost + forgePaths[f[kForgePath]].cost + forgeWounds[f[kForgeWound]].cost;
+	return std::max(runes - forgePenances[f[kForgePenance]].cost, 0);
+}
+
+void ForgeRecipe(int* f)
+{
+	f[kForgeVessel] = rl_forge_vessel;
+	f[kForgeMouth] = rl_forge_mouth;
+	f[kForgePath] = rl_forge_path;
+	f[kForgeWound] = rl_forge_wound;
+	f[kForgePenance] = rl_forge_penance;
+}
+
+// The kit's points, the Forge's included.
 int KitCost(const int* units = nullptr)
 {
 	int sum = 0;
 	for (int i = 0; i < kNumKit; i++) sum += (units ? units[i] : int(*kitItems[i].cvar)) * kitItems[i].cost;
+	if (!units)
+	{
+		int f[kForgeSlots];
+		ForgeRecipe(f);
+		sum += ForgeCost(f);
+	}
 	return sum;
 }
 
 // The points a run gets for its kit. A stock game reaches later episodes with the earlier ones' guns, so they get
 // more: 100 for the first, 50 more for each later one up to 250; Cryptic Passage 200; the gauntlet, which starts at
-// the first episode, 100. The Covenant's Austerity takes 20 a rank.
+// the first episode, 100. The Covenant's Austerity takes 20 a rank, but never the last 30, so a forged gun stays in
+// reach at any Dread.
 int Budget(int episode, int austerity)
 {
 	int points = episode == 0 ? 100 : LumpFilter.CompareNoCase("Blood.Cryptic") == 0 ? 200 : std::min(100 + 50 * (episode - 1), 250);
-	return std::max(points - 20 * austerity, 0);
+	return std::max(points - 20 * austerity, std::min(points, 30));
 }
 
 int Dread(const int* ranks)
@@ -425,6 +544,121 @@ void GiveItem(DBloodPlayer* p, int type)
 		actHealDude(p->GetActor(), gPowerUpInfo[type - kItemBase].bonusTime, gPowerUpInfo[type - kItemBase].maxTime);
 }
 
+//---------------------------------------------------------------------------
+//
+// the Forge: what a recipe fires, its name, and which runes go together
+//
+//---------------------------------------------------------------------------
+
+struct ForgeRates
+{
+	int perRound = 0; // payload projectiles a round of ammo (0: the gun's own round, as many as it fired)
+	int drink = 1;    // rounds of ammo a pull's round costs
+	bool missile = false;
+};
+
+ForgeRates Rates(const int* f)
+{
+	ForgeRates r;
+	auto& v = forgeVessels[f[kForgeVessel]];
+	int m = f[kForgeMouth];
+	if (m)
+	{
+		double worth = forgeMouthWorth[m];
+		r.perRound = std::clamp(int(v.worth / worth + 0.5), 1, kForgeMissiles);
+		r.drink = std::max(int(worth / v.worth + 0.5), 1);
+		r.missile = true;
+	}
+	else r.missile = v.stockMissile != 0;
+	if (f[kForgePath] == kPathChoir)
+	{
+		r.drink *= 2;
+		if (r.perRound) r.perRound = std::max(1, std::min(r.perRound, kForgeMissiles / 3)); // three of each still fit a pull
+	}
+	return r;
+}
+
+FString ForgeName(const int* f)
+{
+	if (!f[kForgeVessel]) return "no forged gun";
+	FString s = "The ";
+	if (f[kForgePenance]) s.AppendFormat("%s ", forgePenances[f[kForgePenance]].word);
+	if (f[kForgePath]) s.AppendFormat("%s ", forgePaths[f[kForgePath]].word);
+	if (f[kForgeMouth]) s.AppendFormat("%s ", forgeMouths[f[kForgeMouth]].word);
+	s += forgeVessels[f[kForgeVessel]].name;
+	if (f[kForgeWound]) s.AppendFormat(" %s", forgeWounds[f[kForgeWound]].word);
+	return s;
+}
+
+FString ForgeSentence(const int* f)
+{
+	if (!f[kForgeVessel]) return "Pick a Vessel, then carve its runes.";
+	auto& v = forgeVessels[f[kForgeVessel]];
+	auto r = Rates(f);
+	FString s = "Each pull: ";
+	if (f[kForgeMouth])
+		s.AppendFormat("%s%s%s", r.perRound > 1 ? FStringf("%d ", r.perRound).GetChars() : "a ", forgeMouths[f[kForgeMouth]].says,
+			r.perRound > 1 ? "s" : "");
+	else s += v.round;
+	if (f[kForgeVessel] == kVesselShotgun && f[kForgeMouth]) s += " a barrel";
+	if (f[kForgePath]) s.AppendFormat(", %s", forgePaths[f[kForgePath]].says);
+	if (f[kForgeWound]) s.AppendFormat("; %s", forgeWounds[f[kForgeWound]].says);
+	s += ".";
+	return s;
+}
+
+FString ForgeAmmoLine(const int* f)
+{
+	if (!f[kForgeVessel]) return "";
+	auto r = Rates(f);
+	static const char* ammoNames[] = { "", "flares", "shells", "bullets" };
+	FString s = FStringf("Drinks %d %s a %s.", r.drink, ammoNames[forgeVessels[f[kForgeVessel]].ammo],
+		f[kForgeVessel] == kVesselShotgun ? "barrel" : "pull");
+	if (f[kForgePenance]) s.AppendFormat(" %s.", forgePenances[f[kForgePenance]].says);
+	return s;
+}
+
+// Why a recipe's rune in a slot can't stand (nullptr: it can).
+const char* ForgeIllegal(const int* f, int slot)
+{
+	if (slot != kForgeVessel && f[slot] && !f[kForgeVessel]) return "pick a Vessel first";
+	bool missiles = Rates(f).missile;
+	switch (slot)
+	{
+	case kForgeMouth:
+		if (f[kForgeMouth] && forgeMouthHeavy[f[kForgeMouth]] && !forgeVessels[f[kForgeVessel]].slow)
+			return "too heavy for the tommy gun's rate of fire";
+		break;
+	case kForgePath:
+		if (f[kForgePath] == kPathHound && !missiles) return "the Hound's Nose needs missiles: a Mouth, or the flare gun";
+		if (f[kForgePath] == kPathChoir && !f[kForgeMouth]) return "the Choir needs a Mouth to sing with";
+		break;
+	case kForgeWound:
+		if (f[kForgeWound] == kWoundPyre && ((f[kForgeVessel] == kVesselFlare && !f[kForgeMouth]) || forgeMouthBurns[f[kForgeMouth]]))
+			return "the Pyre: it burns already";
+		if (f[kForgeWound] == kWoundGrave && !missiles) return "the Gravedigger's Blast needs missiles: a Mouth, or the flare gun";
+		break;
+	case kForgePenance:
+		if (f[kForgePenance] && !f[kForgeMouth] && !f[kForgePath] && !f[kForgeWound]) return "a Penance needs a rune to pay for";
+		break;
+	}
+	return nullptr;
+}
+
+FString forgeNote; // why a rune was just taken off (the Forge menu shows it)
+
+const char* RuneName(int slot, int value)
+{
+	switch (slot)
+	{
+	case kForgeMouth: return forgeMouths[value].name;
+	case kForgePath: return forgePaths[value].name;
+	case kForgeWound: return forgeWounds[value].name;
+	case kForgePenance: return forgePenances[value].name;
+	}
+	return forgeVessels[value].name;
+}
+
 // The run's first map: the kit is handed over (after the remix, so none of it is rerolled).
 void GiveKit()
 {
@@ -439,6 +673,7 @@ void GiveKit()
 		if (run.kit[i] > 1) list.AppendFormat(" x%d", run.kit[i]);
 	}
 	if (list.IsNotEmpty()) Printf(PRINT_NOTIFY, "Your kit: %s\n", list.GetChars());
+	if (run.forge[kForgeVessel]) Printf(PRINT_NOTIFY, "Your forged gun: %s\n", ForgeName(run.forge).GetChars());
 }
 
 //---------------------------------------------------------------------------
@@ -1687,6 +1922,7 @@ bool StartRun(int episode, uint32_t seed)
 	run.pending = 0;
 	for (int i = 0; i < kNumKit; i++) run.kit[i] = *kitItems[i].cvar;
 	for (int c = 0; c < kNumConditions; c++) run.cov[c] = *conditions[c].cvar;
+	ForgeRecipe(run.forge);
 	run.unspent = budget - cost;
 	startingRun = true;
 	saveConfig = true;
@@ -2257,6 +2493,18 @@ void UpdateMenus()
 		m->mTitle.Format("The Armory: %d points", KitCost());
 		if (m->mItems.Size()) SetLabel(m->mItems[0], KitFitText());
 	}
+	if (auto m = FindOptionMenu("RogueliteForge"))
+	{
+		int f[kForgeSlots];
+		ForgeRecipe(f);
+		m->mTitle.Format("The Forge: %d points (kit and Forge %d)", ForgeCost(f), KitCost());
+		if (m->mItems.Size() > 2)
+		{
+			SetLabel(m->mItems[0], ForgeName(f));
+			SetLabel(m->mItems[1], ForgeSentence(f));
+			SetLabel(m->mItems[2], forgeNote.IsNotEmpty() ? forgeNote : ForgeAmmoLine(f));
+		}
+	}
 	if (auto m = FindOptionMenu("RogueliteCovenant"))
 	{
 		int dread = ChosenDread();
@@ -2460,6 +2708,8 @@ bool PickupTaken(DBloodActor* item, const char*& msg)
 int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
 {
 	if (!source || !target || damage <= 0) return damage;
+	if (forgeEmitting && source->IsPlayerActor() && target != source && target->IsDudeActor() && !target->IsPlayerActor())
+		if (forgeHits.Find(target) == forgeHits.Size()) forgeHits.Push(target); // a forged hitscan's hit
 	auto s = source;
 	for (int i = 0; i < 2 && s && !s->IsDudeActor(); i++) s = s->GetOwner(); // a missile's or explosion's owner
 	if (!s || s == target || !s->IsDudeActor() || s->IsPlayerActor()) return damage;
@@ -2472,13 +2722,260 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
 
 bool Unflinching(DBloodActor* actor) { return actor && (actor->modFlags & kModRedChampion); }
 
+//---------------------------------------------------------------------------
+//
+// the Forge at work: the stock fire function runs as ever (hands, sounds,
+// ammo, timing), its shots are swallowed with their aims recorded, and the
+// recipe's payload goes out along those aims
+//
+//---------------------------------------------------------------------------
+
+struct ForgeAim { bool missile; int type; double off, zoff; DVector3 dv; };
+static TArray<ForgeAim>* forgeShots;   // set while a forged gun's stock fire function runs
+static bool forgeEmitting;             // the Forge's own shots pass
+static TArray<DBloodActor*> forgeHits; // what the Forge's hitscans hit this pull (for the Pyre)
+static int forgeImpacts;               // inside a forged missile's impact: its healing is capped
+static int forgeHealSecond = -1, forgeHealed;
+
+// The run's forged gun, when it's the one in hand.
+static bool ForgeOn(DBloodPlayer* p)
+{
+	int v = run.forge[kForgeVessel];
+	return v && run.active && !run.over && !crypt.in && p && p == getPlayer(myconnectindex) && p->GetActor() && p->curWeapon == forgeVessels[v].weapon;
+}
+
+static bool PrimaryCallback(int vessel, int nCallback)
+{
+	return (vessel == kVesselFlare && nCallback == nClientFireFlare) || (vessel == kVesselShotgun && nCallback == nClientFireShotgun)
+		|| (vessel == kVesselTommy && nCallback == nClientFireTommy);
+}
+
+static bool FiringCallback(int vessel, int nCallback)
+{
+	return PrimaryCallback(vessel, nCallback) || (vessel == kVesselFlare && nCallback == nClientAltFireFlare)
+		|| (vessel == kVesselTommy && (nCallback == nClientFireSpread || nCallback == nClientAltFireSpread || nCallback == nClientAltFireSpread2));
+}
+
+static bool BloodPriced() { return run.forge[kForgePenance] == kPenanceBloodPrice; }
+
+static void PayInBlood(DBloodPlayer* p)
+{
+	auto self = p->GetActor();
+	actDamageSprite(self, self, kDamageSpirit, kBloodPrice << 4); // as the dry life leech feeds on you
+}
+
+// The Hound's Nose: the nearest foe within the cone ahead, in sight.
+static DBloodActor* HoundTarget(DBloodPlayer* p, const DVector3& aim)
+{
+	auto pl = p->GetActor();
+	DVector3 eye(pl->spr.pos.XY(), p->zWeapon);
+	DAngle ahead = aim.XY().Angle();
+	DBloodActor* best = nullptr;
+	double bestDist = kHoundRange;
+	BloodStatIterator it(kStatDude);
+	while (auto a = it.Next())
+	{
+		if (a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !AllowedKillType(a) || !a->insector()) continue;
+		DVector2 d = a->spr.pos.XY() - eye.XY();
+		double dist = d.Length();
+		if (dist >= bestDist || absangle(d.Angle(), ahead).Degrees() > kHoundCone) continue;
+		double top, bottom;
+		GetActorExtents(a, &top, &bottom);
+		if (!cansee(eye, pl->sector(), DVector3(a->spr.pos.XY(), (top + bottom) / 2), a->sector())) continue;
+		best = a;
+		bestDist = dist;
+	}
+	return best;
+}
+
+static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, int spent)
+{
+	auto pl = p->GetActor();
+	auto& v = forgeVessels[run.forge[kForgeVessel]];
+	auto r = Rates(run.forge);
+	int units = spent > 0 ? spent : std::max(id, 1); // the rounds the pull spent (dry: its trigger count)
+
+	// The payload's aims: with a Mouth, perRound of its missiles a round along the recorded aims; else the recorded shots.
+	TArray<ForgeAim> out;
+	int mouth = run.forge[kForgeMouth];
+	if (mouth)
+		for (int i = 0; i < r.perRound * units; i++)
+		{
+			auto s = shots[i % shots.Size()];
+			s.missile = true;
+			s.type = forgeMouthMissile[mouth];
+			out.Push(s);
+		}
+	else out = shots;
+	if (run.forge[kForgePath] == kPathChoir) // three in a flat fan
+	{
+		TArray<ForgeAim> fan;
+		for (auto& s : out)
+			for (double a : { -10., 0., 10. })
+			{
+				auto t = s;
+				t.dv = DVector3(s.dv.XY().Rotated(DAngle::fromDeg(a)), s.dv.Z);
+				fan.Push(t);
+			}
+		out = std::move(fan);
+	}
+
+	// The ammo: the stock function paid a round a round fired; the rest of the drink is charged here. Dry with the
+	// Blood Price, the pull costs health instead.
+	int owed = units * r.drink - spent;
+	int paid = std::min(std::max(owed, 0), p->ammoCount[v.ammo]);
+	if (paid > 0) UseAmmo(p, v.ammo, paid);
+	if (owed > paid && BloodPriced()) PayInBlood(p);
+
+	DBloodActor* target = run.forge[kForgePath] == kPathHound && r.missile ? HoundTarget(p, out.Size() ? out[0].dv : p->aim) : nullptr;
+	int missiles = 0, vectors = 0;
+	forgeHits.Clear();
+	forgeEmitting = true;
+	for (auto& s : out)
+	{
+		if (s.missile)
+		{
+			if (missiles++ >= kForgeMissiles) continue;
+			auto m = actFireMissile(pl, s.off, s.zoff, s.dv, s.type);
+			if (!m) continue;
+			m->modFlags |= kModForged;
+			if (target) m->SetTarget(target);
+		}
+		else
+		{
+			if (vectors++ >= kForgeVectors) continue;
+			actFireVector(pl, s.off, s.zoff, s.dv, VECTOR_TYPE(s.type));
+		}
+	}
+	forgeEmitting = false;
+	if (run.forge[kForgeWound] == kWoundPyre)
+		for (auto t : forgeHits) if (t->hasX() && t->xspr.health > 0) actBurnSprite(pl, t, kPyreBurn);
+	forgeHits.Clear();
+}
+
+void WeaponCallback(int nCallback, int id, void* data)
+{
+	auto p = static_cast<DBloodPlayer*>(data);
+	int v = run.forge[kForgeVessel];
+	if (!ForgeOn(p) || !FiringCallback(v, nCallback))
+	{
+		qavClientCallback[nCallback](id, data);
+		return;
+	}
+	int ammo = forgeVessels[v].ammo, before = p->ammoCount[ammo];
+	if (!PrimaryCallback(v, nCallback))
+	{
+		qavClientCallback[nCallback](id, data); // alt fire stays stock; dry with the Blood Price, it costs health
+		if (before == 0 && BloodPriced()) PayInBlood(p);
+		return;
+	}
+	TArray<ForgeAim> shots;
+	forgeShots = &shots;
+	qavClientCallback[nCallback](id, data);
+	forgeShots = nullptr;
+	if (shots.Size()) EmitForge(p, shots, id, before - p->ammoCount[ammo]);
+}
+
+bool SwallowMissile(DBloodActor* shooter, double xyoff, double zoff, const DVector3& dv, int type)
+{
+	if (!forgeShots || forgeEmitting || !shooter || !shooter->IsPlayerActor()) return false;
+	forgeShots->Push({ true, type, xyoff, zoff, dv });
+	return true;
+}
+
+bool SwallowVector(DBloodActor* shooter, double offset, double zoffset, const DVector3& dv, int type)
+{
+	if (!forgeShots || forgeEmitting || !shooter || !shooter->IsPlayerActor()) return false;
+	forgeShots->Push({ false, type, offset, zoffset, dv });
+	return true;
+}
+
+bool ForgeLoaded(DBloodPlayer* pPlayer, int ammotype, int count)
+{
+	if (!BloodPriced() || !ForgeOn(pPlayer) || ammotype != forgeVessels[run.forge[kForgeVessel]].ammo) return false;
+	return pPlayer->GetActor()->xspr.health > unsigned((kBloodPrice + 1) << 4);
+}
+
+ForgeImpact::ForgeImpact(DBloodActor* missile, DBloodActor* hit)
+{
+	if (!missile || !(missile->modFlags & kModForged) || !run.active || run.over) return;
+	active = true;
+	forgeImpacts++;
+	auto owner = missile->GetOwner();
+	if (run.forge[kForgeWound] == kWoundPyre && hit && hit->IsDudeActor() && !hit->IsPlayerActor() && hit->hasX() && hit->xspr.health > 0)
+		actBurnSprite(owner, hit, kPyreBurn);
+	if (run.forge[kForgeWound] == kWoundGrave && missile->insector())
+	{
+		if (auto blast = actSpawnThing(missile->sector(), missile->spr.pos, kThingArmedTNTStick))
+		{
+			blast->SetOwner(owner);
+			actExplodeSprite(blast); // a small blast, the player's
+		}
+	}
+}
+
+ForgeImpact::~ForgeImpact()
+{
+	if (active) forgeImpacts--;
+}
+
 int ScaleHealing(DBloodActor* actor, int add)
 {
-	if (!run.active || run.over || !actor || !actor->IsPlayerActor() || add <= 0 || run.cov[kFamine] <= 0) return add;
+	if (!run.active || run.over || !actor || !actor->IsPlayerActor() || add <= 0) return add;
+	if (forgeImpacts > 0) // healing from a forged missile (the cleaver): kForgeHealPerSecond at most
+	{
+		int second = PlayClock / kClock;
+		if (second != forgeHealSecond) forgeHealSecond = second, forgeHealed = 0;
+		add = std::min(add, kForgeHealPerSecond - forgeHealed);
+		if (add <= 0) return 0;
+		forgeHealed += add;
+	}
+	if (run.cov[kFamine] <= 0) return add;
 	return std::max(1, int(add * (1. - 0.25 * run.cov[kFamine]) + 0.5)); // the Covenant's Famine
 }
 
-void KitChanged() { UpdateMenus(); }
+// The recipe changed (a menu option or the console): take off runes that can't stand with the rest, saying why; a
+// chosen Vessel goes in the kit. Also when the kit changed: a Vessel taken out of the kit melts the gun down.
+static bool forgeChecking;
+void ForgeChanged()
+{
+	if (forgeChecking) return;
+	forgeChecking = true;
+	FIntCVarRef* cvars[kForgeSlots] = { &rl_forge_vessel, &rl_forge_mouth, &rl_forge_path, &rl_forge_wound, &rl_forge_penance };
+	int f[kForgeSlots];
+	ForgeRecipe(f);
+	forgeNote = "";
+	if (f[kForgeVessel] && *forgeVessels[f[kForgeVessel]].kit < 1) *forgeVessels[f[kForgeVessel]].kit = 1;
+	for (int slot = kForgeMouth; slot < kForgeSlots; slot++)
+	{
+		if (auto why = ForgeIllegal(f, slot))
+		{
+			forgeNote.AppendFormat("%s%s off: %s", forgeNote.IsEmpty() ? "" : "; ", RuneName(slot, f[slot]), why);
+			f[slot] = 0;
+			*cvars[slot] = 0;
+		}
+	}
+	if (forgeNote.IsNotEmpty()) Printf(PRINT_NOTIFY, "The Forge: %s\n", forgeNote.GetChars());
+	forgeChecking = false;
+	UpdateMenus();
+}
+
+void KitChanged()
+{
+	int v = rl_forge_vessel;
+	if (v && !forgeChecking && *forgeVessels[v].kit < 1)
+	{
+		forgeChecking = true;
+		rl_forge_vessel = 0;
+		rl_forge_mouth = 0;
+		rl_forge_path = 0;
+		rl_forge_wound = 0;
+		rl_forge_penance = 0;
+		forgeNote = "the Vessel left the kit: the gun is melted down";
+		forgeChecking = false;
+	}
+	UpdateMenus();
+}
 void CovenantChanged() { UpdateMenus(); }
 
 void TintSprite(DBloodActor* owner, tspritetype* tspr)
@@ -2518,6 +3015,7 @@ void Serialize(FSerializer& arc)
 			arc.Array("cov", run.cov, kNumConditions);
 			arc.Array("kit", run.kit, kNumKit);
 			arc.Array("offers", run.offers, 3);
+			arc.Array("forge", run.forge, kForgeSlots);
 			arc.EndObject();
 		}
 		return;
@@ -2552,6 +3050,7 @@ void Serialize(FSerializer& arc)
 		arc.Array("cov", loaded.cov, kNumConditions);
 		arc.Array("kit", loaded.kit, kNumKit);
 		arc.Array("offers", loaded.offers, 3);
+		arc.Array("forge", loaded.forge, kForgeSlots);
 		arc.EndObject();
 		has = true;
 	}
@@ -2681,6 +3180,37 @@ CCMD(rl_pick)
 	}
 	run.offerPending = false;
 	M_ClearMenus();
+}
+
+CCMD(rl_forge_clear)
+{
+	rl_forge_vessel = 0;
+	rl_forge_mouth = 0;
+	rl_forge_path = 0;
+	rl_forge_wound = 0;
+	rl_forge_penance = 0;
+	if (run.active && !run.over) for (auto& s : run.forge) s = 0;
+	Printf(PRINT_NOTIFY, "The Forge: melted down\n");
+}
+
+CCMD(rl_forge)
+{
+	int f[kForgeSlots];
+	if (argv.argc() > 1)
+	{
+		FIntCVarRef* cvars[kForgeSlots] = { &rl_forge_vessel, &rl_forge_mouth, &rl_forge_path, &rl_forge_wound, &rl_forge_penance };
+		for (int slot = 0; slot < kForgeSlots && slot + 1 < argv.argc(); slot++) *cvars[slot] = atoi(argv[slot + 1]);
+		ForgeRecipe(f);
+		if (run.active && !run.over)
+		{
+			for (int slot = 0; slot < kForgeSlots; slot++) run.forge[slot] = f[slot];
+			Printf("(forged into the run in progress, for testing; its kit is as it was)\n");
+		}
+	}
+	ForgeRecipe(f);
+	Printf("%s (%d points): %s %s\n", ForgeName(f).GetChars(), ForgeCost(f), ForgeSentence(f).GetChars(), ForgeAmmoLine(f).GetChars());
+	Printf("Vessels: 1 flare gun, 2 sawed-off, 3 tommy gun. Mouths: 1 Hellmouth, 2 Cleaver's Psalm. Paths: 1 Hound's Nose,"
+		" 2 Choir of Three. Wounds: 1 Pyre, 2 Gravedigger's Blast. Penance: 1 Blood Price.\n");
 }
 
 CCMD(rl_kit_clear)

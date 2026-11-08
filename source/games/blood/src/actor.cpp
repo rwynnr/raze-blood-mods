@@ -3805,6 +3805,7 @@ static void actImpactMissile(DBloodActor* missileActor, int hitCode)
 	walltype* pWallHit = nullptr;
 
 	actHitcodeToData(hitCode, &gHitInfo, &actorHit, &pWallHit);
+	rogue::ForgeImpact forgeImpact(missileActor, actorHit); // blood2d roguelite: a forged missile's Wound, for this impact
 
 	const THINGINFO* pThingInfo = nullptr;
 	DUDEINFO* pDudeInfo = nullptr;
@@ -6449,6 +6450,7 @@ void actBuildMissile(DBloodActor* spawned, DBloodActor* actor)
 
 DBloodActor* actFireMissile(DBloodActor* actor, double xyoff, double zoff, DVector3 dv, int nType)
 {
+	if (rogue::SwallowMissile(actor, xyoff, zoff, dv, nType)) return nullptr; // blood2d roguelite: the Forge fires its own
 	if (bmod::RemapMissile(actor, xyoff, zoff, dv, nType)) return nullptr;
 	assert(nType >= kMissileBase && nType < kMissileMax);
 	bool impact = false;
@@ -6621,6 +6623,7 @@ bool actCanSplatWall(walltype* pWall)
 
 void actFireVector(DBloodActor* shooter, double offset, double zoffset, DVector3 dv, VECTOR_TYPE vectorType, double nRange)
 {
+	if (rogue::SwallowVector(shooter, offset, zoffset, dv, vectorType)) return; // blood2d roguelite: the Forge fires its own
 	if (bmod::RemapVector(shooter, offset, zoffset, dv, vectorType)) return;
 	// this function expects a vector with unit length in XY. Let's not depend on all callers doing it.
 	bmod::ModifyShot(shooter, dv);
