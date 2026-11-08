@@ -843,12 +843,13 @@ FString LitanyRiddle(const int* f)
 		total++;
 	}
 	if (!total) return "";
-	FString s = FStringf("%d more %s stir: ", total, total == 1 ? "Litany" : "Litanies");
+	static const char* const circle[kForgeSlots] = { "Vessel", "Mouth", "Path", "Wound", "Penance" };
+	FString s = FStringf("%d more %s stir, by the circle of the rune that wakes %s: ", total, total == 1 ? "Litany" : "Litanies", total == 1 ? "it" : "them");
 	bool first = true;
 	for (int slot = 0; slot < kForgeSlots; slot++)
 	{
 		if (!stirs[slot]) continue;
-		s.AppendFormat("%s%d in %s circle", first ? "" : ", ", stirs[slot], circleNames[slot]);
+		s.AppendFormat("%s%s %d", first ? "" : ", ", circle[slot], stirs[slot]);
 		first = false;
 	}
 	return s;
@@ -3372,10 +3373,12 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 				if (quarry)
 				{
 					double off = (i - 1) * 24.;
-					if (off != 0) // actFireMissile traces sideways to its offset first: next to a wall, that blade fires from the middle
+					if (off != 0) // actFireMissile's own spawn trace (actor.cpp): where it would strike a wall, the blade fires from the middle
 					{
-						DVector2 side = (pl->spr.Angles.Yaw + DAngle90).ToVector() * off + pl->spr.Angles.Yaw.ToVector() * 16;
-						if (HitScan(pl, from.Z, DVector3(side, 0), CLIPMASK0, side.Length() * 1.5) != -1) off = 0;
+						double cd = missileInfo[kMissileButcherKnife - kMissileBase].fClipDist() + pl->clipdist;
+						DVector2 side = (pl->spr.Angles.Yaw + DAngle90).ToVector() * (s.off + off) + pl->spr.Angles.Yaw.ToVector() * cd;
+						int h = HitScan(pl, pl->spr.pos.Z + s.zoff, DVector3(side, 0), CLIPMASK0, cd * 4);
+						if (h == 0 || h == 3) off = 0;
 					}
 					DVector3 start = from + DVector3((pl->spr.Angles.Yaw + DAngle90).ToVector() * off, 0);
 					t.off = s.off + off;
