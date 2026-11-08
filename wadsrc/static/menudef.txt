@@ -2291,10 +2291,14 @@ OptionMenu "RogueliteForge" protected
 	Option "Penance: a drawback, for points",	"rl_forge_penance", "RLForgePenance"
 	StaticText ""
 	StaticText "Litanies: two parts that wake an effect neither has (two can sing; pick one to sing or silence it)", 1
-	Command " ",								"rl_forge_sing 1"
-	Command " ",								"rl_forge_sing 2"
-	Command " ",								"rl_forge_sing 3"
-	Command " ",								"rl_forge_sing 4"
+	Command " ",								"rl_forge_sing 1", 1
+	StaticText " ", 1
+	Command " ",								"rl_forge_sing 2", 1
+	StaticText " ", 1
+	Command " ",								"rl_forge_sing 3", 1
+	StaticText " ", 1
+	Command " ",								"rl_forge_sing 4", 1
+	StaticText " ", 1
 	StaticText " ", 1
 	Submenu "The Book of Litanies",				"RogueliteBook"
 	StaticText ""
