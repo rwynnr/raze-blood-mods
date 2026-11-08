@@ -2317,7 +2317,7 @@ OptionMenu "RogueliteArmory" protected
 }
 
 // The Forge: one gun of the kit forged with runes (docs/roguelite-forge.md; roguelite.cpp fills in the title and the
-// first three lines, and takes off runes that can't go together).
+// first five lines, and takes off runes that can't go together).
 OptionValue "RLForgeVessel"
 {
 	0, "None: no forged gun"

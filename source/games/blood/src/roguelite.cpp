@@ -647,13 +647,13 @@ const char* ForgeIllegal(const int* f, int slot)
 			return "too heavy for the tommy gun's rate of fire";
 		break;
 	case kForgePath:
-		if (f[kForgePath] == kPathHound && !missiles) return "the Hound's Nose needs missiles: a Mouth, or the flare gun";
-		if (f[kForgePath] == kPathChoir && !f[kForgeMouth]) return "the Choir needs a Mouth to sing with";
+		if (f[kForgePath] == kPathHound && !missiles) return "it needs missiles: a Mouth, or the flare gun";
+		if (f[kForgePath] == kPathChoir && !f[kForgeMouth]) return "it needs a Mouth to sing with";
 		break;
 	case kForgeWound:
 		if (f[kForgeWound] == kWoundPyre && ((f[kForgeVessel] == kVesselFlare && !f[kForgeMouth]) || forgeMouthBurns[f[kForgeMouth]]))
-			return "the Pyre: it burns already";
-		if (f[kForgeWound] == kWoundGrave && !missiles) return "the Gravedigger's Blast needs missiles: a Mouth, or the flare gun";
+			return "the shot burns already";
+		if (f[kForgeWound] == kWoundGrave && !missiles) return "it needs missiles: a Mouth, or the flare gun";
 		break;
 	case kForgePenance:
 		if (f[kForgePenance] && !f[kForgeMouth] && !f[kForgePath] && !f[kForgeWound]) return "a Penance needs a rune to pay for";
@@ -2842,8 +2842,9 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 		paid += extra;
 		if (paid < owed)
 		{
-			if (BloodPriced()) { if (!PayInBlood(p)) return; }
-			else share = double(paid) / owed;
+			if (BloodPriced() && PayInBlood(p)) share = 1;
+			else if (paid > 0) share = double(paid) / owed;
+			else return; // nothing paid: nothing fires
 		}
 	}
 
@@ -2851,7 +2852,7 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 	TArray<ForgeAim> out;
 	if (mouth)
 	{
-		int count = int(perRound * units * share);
+		int count = std::max(1, int(perRound * units * share)); // something paid: at least one
 		for (int i = 0; i < count; i++)
 		{
 			auto s = shots[i % shots.Size()];
@@ -2862,7 +2863,7 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 	}
 	else
 	{
-		int count = int(shots.Size() * share + 0.5);
+		int count = std::max(1, int(shots.Size() * share + 0.5));
 		for (int i = 0; i < count; i++) out.Push(shots[i]);
 	}
 	if (out.Size() == 0) return;
@@ -2898,7 +2899,16 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 			auto m = actFireMissile(pl, s.off, s.zoff, s.dv, s.type);
 			if (!m) continue;
 			m->modFlags |= kModForged;
-			if (target) m->SetTarget(target);
+			if (target)
+			{
+				m->SetTarget(target);
+				// The stock homing sets the full speed sideways and keeps vel.Z: give it the slope to the foe's middle.
+				double top, bottom;
+				GetActorExtents(target, &top, &bottom);
+				DVector3 d = DVector3(target->spr.pos.XY(), (top + bottom) / 2) - m->spr.pos;
+				double flat = d.XY().Length();
+				if (flat > 1) m->vel.Z = missileInfo[m->spr.type - kMissileBase].fVelocity() * d.Z / flat;
+			}
 		}
 		else
 		{
@@ -2925,11 +2935,10 @@ void WeaponCallback(int nCallback, int id, void* data)
 	TArray<ForgeAim> shots;
 	if (!PrimaryCallback(p, v, nCallback))
 	{
-		// Alt fire stays stock and needs ammo: dry (only the Blood Price lets it get this far), it fires nothing.
-		bool dry = before == 0 && BloodPriced() && !gInfiniteAmmo;
-		if (dry) forgeShots = &shots;
+		// Alt fire stays stock and needs ammo: dry (only the Blood Price lets it get this far), it does nothing at all
+		// (the tommy's spread would put the gun away).
+		if (before == 0 && BloodPriced() && !gInfiniteAmmo) return;
 		qavClientCallback[nCallback](id, data);
-		forgeShots = nullptr;
 		return;
 	}
 	forgeShots = &shots;
@@ -3012,6 +3021,7 @@ int ScaleHealing(DBloodActor* actor, int add)
 // The recipe changed (a menu option or the console): take off runes that can't stand with the rest, saying why; a
 // chosen Vessel goes in the kit. Also when the kit changed: a Vessel taken out of the kit melts the gun down.
 static bool forgeChecking;
+static bool forgeConsole; // rl_forge is setting the recipe: a rune that can't fit comes off, it isn't stepped
 void ForgeChanged()
 {
 	if (forgeChecking) return;
@@ -3041,13 +3051,14 @@ void ForgeChanged()
 		int now = f[slot], n = forgeSlotMax[slot] + 1;
 		// The slot the menu just stepped steps on, the same way, to the next rune that fits (none always does);
 		// a rune another slot's change put out of place comes off.
-		if (now != last[slot])
+		if (now != last[slot] && !forgeConsole)
 		{
 			bool forward = now == (last[slot] + 1) % n;
 			for (int k = 0; k < n && ForgeIllegal(f, slot); k++) f[slot] = forward ? (f[slot] + 1) % n : (f[slot] + n - 1) % n;
 		}
 		else f[slot] = 0;
 		if (ForgeIllegal(f, slot)) f[slot] = 0;
+		if (f[slot] && f[slot] != now && forgeNote.Len() < 80) forgeNote.AppendFormat("; %s instead", RuneName(slot, f[slot]));
 		*cvars[slot] = f[slot];
 	}
 	for (int slot = 0; slot < kForgeSlots; slot++) last[slot] = f[slot];
@@ -3296,7 +3307,9 @@ CCMD(rl_forge)
 	if (argv.argc() > 1)
 	{
 		FIntCVarRef* cvars[kForgeSlots] = { &rl_forge_vessel, &rl_forge_mouth, &rl_forge_path, &rl_forge_wound, &rl_forge_penance };
+		forgeConsole = true;
 		for (int slot = 0; slot < kForgeSlots && slot + 1 < argv.argc(); slot++) *cvars[slot] = atoi(argv[slot + 1]);
+		forgeConsole = false;
 		ForgeRecipe(f);
 		if (run.active && !run.over)
 		{
@@ -3305,7 +3318,9 @@ CCMD(rl_forge)
 		}
 	}
 	ForgeRecipe(f);
-	Printf("%s (%d points): %s %s\n", ForgeName(f).GetChars(), ForgeCost(f), ForgeSentence(f).GetChars(), ForgeAmmoLine(f).GetChars());
+	auto effect = ForgeEffectLine(f);
+	Printf("%s (%d points): %s %s%s%s\n", ForgeName(f).GetChars(), ForgeCost(f), ForgeSentence(f).GetChars(), effect.GetChars(),
+		effect.IsEmpty() ? "" : " ", ForgeAmmoLine(f).GetChars());
 	Printf("Vessels: 1 flare gun, 2 sawed-off, 3 tommy gun. Mouths: 1 Hellmouth, 2 Cleaver's Psalm. Paths: 1 Hound's Nose,"
 		" 2 Choir of Three. Wounds: 1 Pyre, 2 Gravedigger's Blast. Penance: 1 Blood Price.\n");
 }
