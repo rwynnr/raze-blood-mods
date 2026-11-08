@@ -5736,6 +5736,7 @@ static void actCheckExplosion()
 		if (!actor->hasX()) continue;
 
 		auto Owner = actor->GetOwner();
+		rogue::ForgeExplosion forgeExplosion(actor); // blood2d roguelite: Brimstone Leap (a forged blast throws you)
 		int nType = actor->spr.type;
 		assert(nType >= 0 && nType < kExplodeMax);
 		const EXPLOSION* pExplodeInfo = &explodeInfo[nType];

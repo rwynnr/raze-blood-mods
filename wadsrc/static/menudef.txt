@@ -2290,11 +2290,26 @@ OptionMenu "RogueliteForge" protected
 	Option "Wound: what a hit does",			"rl_forge_wound", "RLForgeWound"
 	Option "Penance: a drawback, for points",	"rl_forge_penance", "RLForgePenance"
 	StaticText ""
+	StaticText "Litanies: two parts that wake an effect neither has (two can sing; pick one to sing or silence it)", 1
+	Command " ",								"rl_forge_sing 1"
+	Command " ",								"rl_forge_sing 2"
+	Command " ",								"rl_forge_sing 3"
+	Command " ",								"rl_forge_sing 4"
+	StaticText " ", 1
+	Submenu "The Book of Litanies",				"RogueliteBook"
+	StaticText ""
 	StaticText "One forged gun a run. It keeps its key, ammo, hands and alt fire: only its primary fire changes.", 1
 	StaticText "Its points come out of the kit's. A rune that can't go with the others is taken off, and the line", 1
 	StaticText "above says why.", 1
 	StaticText ""
 	Command "Melt it down",						"rl_forge_clear"
+}
+
+// The Book of Litanies: what the Forge's Litanies are, found or not (roguelite.cpp builds it).
+OptionMenu "RogueliteBook" protected
+{
+	Title "The Book of Litanies"
+	StaticText " "
 }
 
 // The Covenant: opt-in difficulty conditions, after Hades' Pact of Punishment (roguelite.cpp fills in the title
