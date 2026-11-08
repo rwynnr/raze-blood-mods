@@ -481,14 +481,23 @@ void RollOffers(std::mt19937& rng, double depth)
 			if (w > 0) guns.Push({ g.item, w });
 		}
 	}
-	armour.Push({ kItemArmorBody, 3 });
-	armour.Push({ kItemArmorFire, 2 });
-	armour.Push({ kItemArmorSpirit, 2 });
-	if (depth >= 0.5) armour.Push({ kItemArmorSuper, 1 });
+	// Armour that would add nothing (already at its caps) isn't offered.
+	auto addsArmour = [&](int item)
+	{
+		auto& a = armorData[item - kItemArmorBasic];
+		return (a.armor0 && p->armor[0] < a.armor0max) || (a.armor1 && p->armor[1] < a.armor1max) || (a.armor2 && p->armor[2] < a.armor2max);
+	};
+	if (addsArmour(kItemArmorBody)) armour.Push({ kItemArmorBody, 3 });
+	if (addsArmour(kItemArmorFire)) armour.Push({ kItemArmorFire, 2 });
+	if (addsArmour(kItemArmorSpirit)) armour.Push({ kItemArmorSpirit, 2 });
+	if (depth >= 0.5 && addsArmour(kItemArmorSuper)) armour.Push({ kItemArmorSuper, 1 });
 	auto packFull = [&](int item) { return p->packSlots[gItemData[item - kItemBase].packSlot].curAmount >= 100; };
 	if (!packFull(kItemHealthDoctorBag)) care.Push({ kItemHealthDoctorBag, 3 });
-	care.Push({ kItemHealthLifeEssense, 2 });
-	if (depth >= 0.3) care.Push({ kItemHealthLifeSeed, 1 });
+	// Healing only where it would heal: below the item's cap, and not under heavy Famine.
+	int health = p->GetActor() ? int(p->GetActor()->xspr.health >> 4) : 0;
+	bool famished = run.cov[kFamine] >= 3;
+	if (!famished && health < gPowerUpInfo[kItemHealthLifeEssense - kItemBase].maxTime) care.Push({ kItemHealthLifeEssense, 2 });
+	if (!famished && depth >= 0.3 && health < gPowerUpInfo[kItemHealthLifeSeed - kItemBase].maxTime) care.Push({ kItemHealthLifeSeed, 1 });
 	if (!packFull(kItemBeastVision)) care.Push({ kItemBeastVision, 1 });
 	if (!packFull(kItemJumpBoots)) care.Push({ kItemJumpBoots, 1 });
 
@@ -634,10 +643,11 @@ int KindCost(int type)
 
 struct Look { int pal; DVector2 scale; };
 
-void MakeChampion(DBloodActor* a)
+void MakeChampion(DBloodActor* a, bool grow = true)
 {
 	a->modFlags |= kModChampion;
 	a->xspr.health = uint32_t(a->xspr.health * kChampionHealth);
+	if (!grow) return;
 	a->spr.scale *= kChampionSize;
 	a->xspr.scale = int((a->xspr.scale ? a->xspr.scale : 256) * kChampionSize); // SEQ frames keep the size
 }
@@ -710,7 +720,9 @@ void CovenantEnemies()
 	while (auto a = it.Next())
 	{
 		if (a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0) continue;
-		if (wardens && !(a->modFlags & kModChampion)) MakeChampion(a);
+		// Bosses and scripted enemies don't grow: a bigger Tchernobog could catch on a low ceiling.
+		bool plain = bmod::ShuffleEligible(a, false) && a->xspr.txID == 0 && a->xspr.rxID == 0;
+		if (wardens && !(a->modFlags & kModChampion)) MakeChampion(a, plain);
 		a->xspr.health = uint32_t(a->xspr.health * flesh);
 	}
 }
@@ -734,6 +746,12 @@ void Pressure()
 {
 	if (run.extraEnemies > 0 && PlayClock >= run.nextWave)
 	{
+		TArray<DBloodActor*> kinds;
+		if (!bmod::WaveKinds(kinds))
+		{
+			run.extraEnemies = 0; // a wave copies the kinds alive on the map: none left, no more Horde
+			return;
+		}
 		int came = bmod::SpawnWave(std::min(run.extraEnemies, 3 + run.cov[kHorde]));
 		run.extraEnemies -= came;
 		run.nextWave = PlayClock + (came ? 50 : 5) * kClock; // no room behind the player: try again soon
@@ -968,6 +986,7 @@ void LevelStarted()
 	run.index = run.pending;
 	run.pending = -1;
 	run.exiting = false;
+	bmod::modeEnemyTimeScale = 1. + 0.15 * run.cov[kHaste]; // from the first tic (the ticker keeps it after)
 	Remix();
 }
 
@@ -1119,7 +1138,6 @@ struct Crypt
 };
 
 Crypt crypt;
-bool enteringCrypt;   // rl_crypt asked for the game that is about to start
 FString cryptMessage; // shown once the Crypt is up (a run's result)
 
 bool CryptAvailable() { return fileSystem.FileExists(kCryptMap); }
@@ -1130,7 +1148,6 @@ bool EnterCrypt()
 	if (!isBlood() || numplayers > 1 || !CryptAvailable()) return false;
 	auto map = SetupUserMap(kCryptMap);
 	if (!map) return false;
-	enteringCrypt = true;
 	M_ClearMenus();
 	DeferredStartGame(map, rl_skill);
 	return true;
@@ -1176,15 +1193,19 @@ void SetupCrypt()
 			crypt.portalPos[id - kFeatPortal] = a->spr.pos.XY();
 		}
 	}
-	// Locked and unused portals go dark.
+	// Locked and unused portals go dark; open ones get rlcrypt.py's alcove lighting back (an older save of the
+	// Crypt may hold one dark that has opened since). Keep these in step with the generator.
 	TArray<Episode> eps;
 	GetEpisodes(eps);
+	auto vortex = tileGetTextureID(1019);
 	for (int i = 0; i < kNumPortals; i++)
 	{
 		auto sect = crypt.portal[i];
-		if (!sect || PortalOpen(i, int(eps.Size()))) continue;
-		sect->floorshade = sect->ceilingshade = 48;
-		for (auto& wal : sect->walls) wal.shade = 48;
+		if (!sect) continue;
+		bool open = PortalOpen(i, int(eps.Size()));
+		sect->floorshade = open ? 0 : 48;
+		sect->ceilingshade = open ? 4 : 48;
+		for (auto& wal : sect->walls) wal.shade = !open ? 48 : wal.walltexture() == vortex ? -20 : 4;
 	}
 	auto p = getPlayer(myconnectindex);
 	if (p && p->GetActor()) // standing in a portal at the start doesn't count as walking in
@@ -1293,7 +1314,7 @@ void OnTick()
 		return;
 	}
 	if (!run.active || run.over) return;
-	if (run.offerPending && gamestate == GS_LEVEL && !M_Active())
+	if (run.offerPending && gamestate == GS_LEVEL && !M_Active() && PlayClock - run.levelClock >= kClock / 2)
 	{
 		OpenRewardChoice(); // closing it without a choice opens it again: pick a reward, or nothing for a little ichor
 		return;
@@ -1510,15 +1531,18 @@ TArray<DMenuItemBase*> menuItems; // the items added here
 
 // A menu entry that starts a run. While another run is in progress (being played, or continuable from its saves),
 // it asks first with Blood's yes/no message (OptionMenuItemSafeCommand), since starting a run ends the other one.
-DMenuItemBase* CreateRunItem(const char* label, const char* command, bool confirm)
+DMenuItemBase* CreateRunItem(const char* label, const char* command, bool confirm,
+	const char* prompt = "This abandons the run in progress: its saves stop loading.\nStart a new run?")
 {
 	auto cls = confirm ? PClass::FindClass("OptionMenuItemSafeCommand") : nullptr;
 	auto init = cls ? dyn_cast<PFunction>(cls->FindSymbol("Init", false)) : nullptr;
 	if (!init) return CreateOptionMenuItemCommand(label, FName(command));
 	auto item = cls->CreateNew();
-	FString labelStr = label;
-	FString prompt = "This abandons the run in progress: its saves stop loading.\nStart a new run?";
-	VMValue params[] = { item, &labelStr, FName(command).GetIndex(), &prompt };
+	FString labelStr = label, promptStr = prompt;
+	// One tic later: the yes/no box closes after running the command, and would take a message the command
+	// opens (a kit over the run's points) down with it.
+	FStringf delayed("wait 1; %s", command);
+	VMValue params[] = { item, &labelStr, FName(delayed.GetChars()).GetIndex(), &promptStr };
 	VMCall(init->Variants[0].Implementation, params, countof(params), nullptr, 0);
 	return (DMenuItemBase*)item;
 }
@@ -1561,10 +1585,11 @@ void BuildMenu()
 	text("", -1);
 
 	int first = -1;
-	if (CryptAvailable() && !crypt.in)
+	if (CryptAvailable() && !(crypt.in && gamestate == GS_LEVEL))
 	{
 		first = int(opt->mItems.Size());
-		add(CreateOptionMenuItemCommand("Enter the Crypt: the Armory, the Covenant, the portals", FName("rl_crypt")));
+		add(CreateRunItem("Enter the Crypt: the Armory, the Covenant, the portals", "rl_crypt", run.active && !run.over && gamestate == GS_LEVEL,
+			"This leaves the run in progress (it can be continued from its saves).\nGo to the Crypt?"));
 		text("", -1);
 	}
 	header("Episode runs");
@@ -1774,7 +1799,6 @@ void OnNewGame()
 		return;
 	}
 	run = Run(); // a game outside the run (or the Crypt); the run, if any, can still be continued from its saves
-	enteringCrypt = false;
 	bmod::modeEnemyTimeScale = 1.;
 	if (saveConfig)
 	{
@@ -1897,6 +1921,7 @@ void Serialize(FSerializer& arc)
 	run = std::move(loaded);
 	run.active = true;
 	run.curseClock = INT_MIN / 2;
+	bmod::modeEnemyTimeScale = run.over ? 1. : 1. + 0.15 * run.cov[kHaste];
 }
 
 void OnMenuOpened()
