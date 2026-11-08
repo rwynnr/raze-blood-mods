@@ -6067,7 +6067,7 @@ static void actCheckDudes()
 		}
 
 		if ((actor->spr.flags & 4) || !actor->vel.isZero() || actor->sector()->velFloor || actor->sector()->velCeil)
-			for (int n = bmod::DudeMoveSteps(actor); n > 0; n--) MoveDude(actor);
+			for (int n = bmod::DudeMoveSteps(actor); n > 0 && actor->IsDudeActor() && !(actor->spr.flags & 32); n--) MoveDude(actor); // not once a step killed it
 	}
 }
 
