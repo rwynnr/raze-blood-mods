@@ -2731,21 +2731,28 @@ void UpdateMenus()
 			SetLabel(m->mItems[3], ForgeAmmoLine(f));
 			SetLabel(m->mItems[4], forgeNote);
 		}
-		// Items 6-10: Vessel..Penance; 11 blank; 12 the Litanies' heading; 13-16 the lit Litanies; 17 the riddle.
-		if (m->mItems.Size() > 17)
+		// Items 6-10: Vessel..Penance; 11 blank; 12 the Litanies' heading; 13, 15, 17, 19 the lit Litanies (centred, short)
+		// and 14, 16, 18, 20 their sentences; 21 the riddle.
+		if (m->mItems.Size() > 21)
 		{
 			int lit[4], n = LitLitanies(f, lit, 4), sing = ResolveSinging(f);
 			for (int i = 0; i < 4; i++)
 			{
-				if (i >= n) { SetLabel(m->mItems[13 + i], " "); continue; }
+				if (i >= n)
+				{
+					SetLabel(m->mItems[13 + 2 * i], " ");
+					SetLabel(m->mItems[14 + 2 * i], " ");
+					continue;
+				}
 				int k = lit[i];
 				auto& L = litanies[k];
-				SetLabel(m->mItems[13 + i], FStringf("%s %s (%s%s)%s: %s", (sing & (1 << k)) ? "[sings]" : "[silent]", L.name, litanyKinds[L.kind],
-					L.kind == kKindBane ? ", +1 Dread" : "", (litanyNew & (1u << k)) ? " NEW" : "", L.sentence));
+				SetLabel(m->mItems[13 + 2 * i], FStringf("%s %s (%s%s)%s", (sing & (1 << k)) ? "[sings]" : "[silent]", L.name, litanyKinds[L.kind],
+					L.kind == kKindBane ? ", +1 Dread" : "", (litanyNew & (1u << k)) ? " NEW" : ""));
+				SetLabel(m->mItems[14 + 2 * i], L.sentence);
 			}
 			FString riddle = LitanyRiddle(f);
 			if (riddle.IsEmpty() && f[kForgeVessel] && !n) riddle = "No Litany yet: carve runes from other circles.";
-			SetLabel(m->mItems[17], riddle.IsEmpty() ? FString(" ") : riddle);
+			SetLabel(m->mItems[21], riddle.IsEmpty() ? FString(" ") : riddle);
 		}
 	}
 	BuildBookMenu();
@@ -2946,8 +2953,7 @@ static int forgeImpacts;               // inside a forged missile's impact: its 
 static int forgeHealSecond = -1, forgeHealed;
 static DBloodActor* forgeScent;          // Blood Feud: the last foe that drew your blood (compared, never followed)
 static int forgeScentAt = INT_MIN / 2;
-static DBloodActor* forgeExplosionNow;   // Brimstone Leap: the forged blast being worked out
-static TArray<DBloodActor*> forgeKicked; // the blasts that have thrown you already
+static DBloodActor* forgeExplosionNow;   // Brimstone Leap: the forged blast being worked out (kModKicked once it threw you)
 static bool Sings(int k) { return run.active && !run.over && (run.litanies & (1 << k)); }
 constexpr double kLeapKick = -14;        // Brimstone Leap's throw, upward (z grows down)
 static void LitanyFired(int k);
@@ -3005,10 +3011,9 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
 	// Brimstone Leap: your own forged blast throws you, the first tic it reaches you, and doesn't wound you.
 	if (forgeExplosionNow && target->IsPlayerActor() && target == getPlayer(myconnectindex)->GetActor())
 	{
-		if (forgeKicked.Find(forgeExplosionNow) == forgeKicked.Size())
+		if (!(forgeExplosionNow->modFlags & kModKicked))
 		{
-			if (forgeKicked.Size() > 64) forgeKicked.Clear();
-			forgeKicked.Push(forgeExplosionNow);
+			forgeExplosionNow->modFlags |= kModKicked;
 			DVector2 away = target->spr.pos.XY() - forgeExplosionNow->spr.pos.XY();
 			if (away.LengthSquared() > 1) target->vel.XY() += away.Unit() * 4.;
 			target->vel.Z = std::min(target->vel.Z, kLeapKick); // a little over a jump (-11.7): a 64-unit ledge from your feet
@@ -3080,9 +3085,16 @@ static bool PayInBlood(DBloodPlayer* p)
 	auto a = p->GetActor();
 	if (a->xspr.health < unsigned((kBloodPrice << 4) + 16)) // only Last Rites gets here: the price is your life
 	{
-		LitanyFired(kLitLastRites);
-		actDamageSprite(a, a, kDamageFall, 1000 << 4);
-		return false; // the killing pull fires nothing
+		// A damage type the jump boots or a powerup don't block (any armour can't soak this much).
+		static const DAMAGE_TYPE kinds[] = { kDamageSpirit, kDamageBullet, kDamageExplode, kDamageBurn, kDamageTesla, kDamageDrown, kDamageFall };
+		for (auto t : kinds)
+			if (!p->damageControl[t] && !p->godMode)
+			{
+				LitanyFired(kLitLastRites);
+				actDamageSprite(a, a, t, 1000 << 4);
+				break;
+			}
+		return false; // the killing pull fires nothing (and one that can't kill doesn't fire)
 	}
 	a->xspr.health -= kBloodPrice << 4;
 	return true;
@@ -3166,7 +3178,7 @@ static void ForgeBlast(const DVector3& pos, sectortype* sect, int kind)
 	t->SetOwner(p->GetActor());
 	t->modFlags |= kModForged;
 	actExplodeSprite(t);
-	if (kind >= 2 && t->spr.statnum == kStatExplosion) // retyped to the large explosion: actCheckExplosion reads its type
+	if (kind >= 2 && t->spr.type == kExplosionStandard) // retyped to the large explosion: actCheckExplosion reads its type
 	{
 		auto& e = explodeInfo[kExplosionLarge];
 		t->spr.type = kExplosionLarge;
@@ -3222,11 +3234,17 @@ static int LitFor(DBloodActor* a)
 }
 
 // Hymn of Ash: a pull's refunds, and which missile belongs to which pull.
-struct HymnPull { int refundsLeft, ammo, at; };
+struct HymnPull { int id, refundsLeft, ammo, at; };
 struct HymnShot { DBloodActor* missile; int pull; };
-static TArray<HymnPull> hymnPulls;
+static TArray<HymnPull> hymnPulls;  // a pull is known by its id (records come and go)
 static TArray<HymnShot> hymnShots;
-static int hymnNow = -1;            // the pull being fired (for point-blank impacts)
+static int hymnNow = -1;            // the pull being fired, by id (for point-blank impacts)
+static int hymnNextId = 1;
+static HymnPull* HymnRecord(int id)
+{
+	for (auto& r : hymnPulls) if (r.id == id) return &r;
+	return nullptr;
+}
 static bool forgeBloodBoughtNow;    // the pull being fired was paid in blood (Last Rites, point blank)
 
 // Corpse-Candle's lit flares, Requiem's waiting blasts, the Fetch's cleavers to send back.
@@ -3237,13 +3255,13 @@ static TArray<Candle> candles;
 static TArray<Toll> tolls;
 static TArray<Fetching> fetching;
 static int witchfireNext = INT_MIN / 2;
+static int lastTollAt = INT_MIN / 2;
 
 static void ResetLitanies()
 {
 	forgeScent = nullptr;
 	forgeScentAt = INT_MIN / 2;
 	forgeExplosionNow = nullptr;
-	forgeKicked.Clear();
 	forgeLit.Clear();
 	hymnPulls.Clear();
 	hymnShots.Clear();
@@ -3302,6 +3320,7 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 		if (paid < owed)
 		{
 			if (BloodPriced() && PayInBlood(p)) share = 1, bloodPaid = true;
+			else if (pl->xspr.health <= 0) return; // Last Rites took your life: the pull fires nothing
 			else if (paid > 0) share = double(paid) / owed;
 			else return; // nothing paid: nothing fires
 		}
@@ -3353,6 +3372,11 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 				if (quarry)
 				{
 					double off = (i - 1) * 24.;
+					if (off != 0) // actFireMissile traces sideways to its offset first: next to a wall, that blade fires from the middle
+					{
+						DVector2 side = (pl->spr.Angles.Yaw + DAngle90).ToVector() * off + pl->spr.Angles.Yaw.ToVector() * 16;
+						if (HitScan(pl, from.Z, DVector3(side, 0), CLIPMASK0, side.Length() * 1.5) != -1) off = 0;
+					}
 					DVector3 start = from + DVector3((pl->spr.Angles.Yaw + DAngle90).ToVector() * off, 0);
 					t.off = s.off + off;
 					t.dv = (MiddleOf(quarry) - start).Unit();
@@ -3368,9 +3392,9 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 	hymnNow = -1;
 	if (Sings(kLitHymn) && mouth == kMouthHellmouth)
 	{
-		if (hymnPulls.Size() > 32) { hymnPulls.Clear(); hymnShots.Clear(); }
-		hymnPulls.Push({ std::max(std::min(r.drink, roundsPaid) - 1, 0), v.ammo, PlayClock });
-		hymnNow = int(hymnPulls.Size()) - 1;
+		if (hymnPulls.Size() >= 32) hymnPulls.Delete(0);
+		hymnNow = hymnNextId++;
+		hymnPulls.Push({ hymnNow, std::max(std::min(r.drink, roundsPaid) - 1, 0), v.ammo, PlayClock });
 	}
 	forgeBloodBoughtNow = bloodPaid;
 
@@ -3424,7 +3448,12 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 	forgeBloodBoughtNow = false;
 	if (run.forge[kForgeWound] == kWoundPyre)
 		for (auto t : forgeHits)
-			if (t->hasX() && t->xspr.health > 0) { actBurnSprite(pl, t, kPyreBurn); NoteLit(t); }
+			if (t->hasX() && t->xspr.health > 0)
+			{
+				bool was = t->xspr.burnTime > 0;
+				actBurnSprite(pl, t, kPyreBurn);
+				if (!was) NoteLit(t);
+			}
 	forgeHits.Clear();
 }
 
@@ -3493,13 +3522,14 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit)
 	missile = m;
 	type = m->spr.type;
 	forgeImpacts++;
+	m->modFlags |= kModForged; // a point-blank missile is marked here (its knife, its candle)
 	liveHit = hit && hit->IsDudeActor() && !hit->IsPlayerActor() && hit->hasX() && hit->xspr.health > 0;
 	sky = !hit && m->insector() && (m->sector()->ceilingstat & CSTAT_SECTOR_SKY) && m->spr.pos.Z <= m->sector()->ceilingz + 4;
 	int offspring = Offspring(m);
 	bool bloodBought = (m->modFlags & kModBloodBought) || (emitted && forgeBloodBoughtNow);
 
 	// Witchfire: a cleaver striking a foe that has burned a while scatters its fire on every body near, you too.
-	if (Sings(kLitWitchfire) && type == kMissileButcherKnife && liveHit && hit->xspr.burnTime > 0 && LitFor(hit) >= kClock / 4
+	if (Sings(kLitWitchfire) && type == kMissileButcherKnife && offspring == 0 && liveHit && hit->xspr.burnTime > 0 && LitFor(hit) >= kClock / 4
 		&& PlayClock >= witchfireNext)
 	{
 		witchfireNext = PlayClock + kClock / 2;
@@ -3515,9 +3545,10 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit)
 	// The Pyre: at emission its hits are burned once each by EmitForge; later impacts burn here (a top-up for offspring).
 	if (!emitted && run.forge[kForgeWound] == kWoundPyre && liveHit)
 	{
+		bool was = hit->xspr.burnTime > 0;
 		if (offspring) BurnTo(owner, hit, kPyreBurn);
 		else actBurnSprite(owner, hit, kPyreBurn);
-		NoteLit(hit);
+		if (!was) NoteLit(hit);
 	}
 	// Hymn of Ash: a fireball on flesh gives a round back; one on stone (or nothing) drinks one more.
 	if (Sings(kLitHymn) && type == kMissileFireballNapalm && offspring == 0)
@@ -3525,9 +3556,10 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit)
 		int pull = emitted ? hymnNow : -1;
 		for (auto& h : hymnShots) if (h.missile == m) pull = h.pull;
 		auto p = getPlayer(myconnectindex);
-		if (pull >= 0 && pull < int(hymnPulls.Size()) && p && p->GetActor())
+		auto record = HymnRecord(pull);
+		if (record && p && p->GetActor())
 		{
-			auto& rec = hymnPulls[pull];
+			auto& rec = *record;
 			if (liveHit && rec.refundsLeft > 0)
 			{
 				rec.refundsLeft--;
@@ -3538,7 +3570,8 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit)
 			else if (!hit) UseAmmo(p, rec.ammo, 1);
 		}
 	}
-	// Last Rites: a blood-bought fireball near death bursts bigger.
+	// Last Rites: a blood-bought fireball near death bursts bigger (the one extra blast: it takes the Grave's place).
+	bool bigger = false;
 	if (Sings(kLitLastRites) && type == kMissileFireballNapalm && bloodBought && owner && owner->hasX())
 	{
 		int health = owner->xspr.health >> 4;
@@ -3546,9 +3579,10 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit)
 		{
 			ForgeBlast(m->spr.pos, m->sector(), health < 20 ? 2 : 1);
 			LitanyFired(kLitLastRites);
+			bigger = true;
 		}
 	}
-	if (run.forge[kForgeWound] == kWoundGrave && m->insector())
+	if (run.forge[kForgeWound] == kWoundGrave && m->insector() && !bigger)
 	{
 		bool flesh = hit && (hit->IsDudeActor() || hit->spr.statnum == kStatThing) && GetExtInfo(hit->spr.spritetexture()).surftype == kSurfFlesh;
 		if (Sings(kLitCandle) && type == kMissileFlareRegular && flesh)
@@ -3563,6 +3597,7 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit)
 		else if (Sings(kLitRequiem))
 		{
 			if (tolls.Size() < 32) tolls.Push({ m->spr.pos, m->sector(), PlayClock }); // Requiem: it waits to ring with the others
+			lastTollAt = PlayClock;
 		}
 		else ForgeBlast(m->spr.pos, m->sector(), 0); // the Grave's small blast, the player's
 	}
@@ -3583,7 +3618,8 @@ ForgeImpact::~ForgeImpact()
 		missile->spr.setspritetexture(missileInfo[kMissileButcherKnife - kMissileBase].textureID());
 		missile->spr.type = kSpriteDecoration;
 		missile->vel.Zero();
-		if (missile->hasX()) missile->xspr.data2 = kClock; // it arms in a second
+		if (missile->hasX()) missile->xspr.data2 = kClock / 4; // it arms in a second (counted in tics, 4 PlayClock each)
+		evKillActor(missile, kCallbackRemove);               // the missile's 5-second removal doesn't apply to a knife
 		actPostSprite(missile, kStatDecoration);
 		// Eight at most: a ninth sets off the oldest.
 		TArray<DBloodActor*> knives;
@@ -3657,14 +3693,19 @@ static void ForgeTick()
 		if (PlayClock >= c.blowAt || !lodged)
 		{
 			ForgeBlast(c.pos, c.sect, 1);
+			if (lodged) c.flare->modFlags &= ~kModForged; // spent: a load doesn't light it again
 			candles.Delete(i);
 		}
 	}
 	// Requiem: blasts that landed together ring out as one: two as a standard, three or more as a large.
 	{
+		// They ring once no blast has landed for 8 PlayClock (or the oldest has waited 32), all together.
 		TArray<Toll> ready;
-		for (int i = int(tolls.Size()) - 1; i >= 0; i--)
-			if (PlayClock - tolls[i].at >= 8) { ready.Push(tolls[i]); tolls.Delete(i); }
+		if (tolls.Size() && (PlayClock - lastTollAt >= 8 || PlayClock - tolls[0].at >= 32))
+		{
+			ready = std::move(tolls);
+			tolls.Clear();
+		}
 		while (ready.Size())
 		{
 			TArray<Toll> group;
@@ -3747,12 +3788,12 @@ static void ForgeTick()
 			sfxPlay3DSound(pl, 780, -1, 0);
 		}
 	}
-	// Hymn of Ash's records last as long as a missile can fly.
-	for (int i = int(hymnPulls.Size()) - 1; i >= 0 && hymnPulls.Size() && PlayClock - hymnPulls[0].at > 5 * kClock; i--)
-	{
-		hymnPulls.Clear();
-		hymnShots.Clear();
-	}
+	// Hymn of Ash's records last as long as a missile can fly (5 s); a shot goes with its record.
+	for (int i = int(hymnPulls.Size()) - 1; i >= 0; i--) if (PlayClock - hymnPulls[i].at > 5 * kClock) hymnPulls.Delete(i);
+	for (int i = int(hymnShots.Size()) - 1; i >= 0; i--) if (!HymnRecord(hymnShots[i].pull)) hymnShots.Delete(i);
+	// What this tic posted (blasts, freed knives and twins) is done now, not left for the next tic's post pass: a save,
+	// a load or a level change can come between.
+	actPostProcess();
 }
 
 int ScaleHealing(DBloodActor* actor, int add)
@@ -4077,19 +4118,24 @@ CCMD(rl_forge_sing)
 	else
 	{
 		drop(litanies[k].id);
-		list.Push(litanies[k].id);
+		list.Insert(0, litanies[k].id); // chosen first, so it wins over the defaults
 		write();
-		// A third (or a rival) silences the oldest chosen until this one sings.
-		for (int guard = 0; guard < 8 && !(ResolveSinging(f) & (1 << k)); guard++)
+		// Still silent: its rival gives way first, then the singer chosen longest ago, until it sings. Only this
+		// gun's lit Litanies are touched (a choice made for another recipe stays as it was).
+		for (int guard = 0; guard < kNumLitanies && !(ResolveSinging(f) & (1 << k)); guard++)
 		{
-			for (int j = 0; j < int(list.Size()); j++)
+			int singing = ResolveSinging(f), victim = -1;
+			for (int j = 0; j < kNumLitanies && victim < 0; j++)
+				if (j != k && (singing & (1 << j)) && (litanies[j].rivals & litanies[k].rivals)) victim = j;
+			for (int j = int(list.Size()) - 1; j >= 0 && victim < 0; j--)
 			{
-				if (list[j][0] == '-' || !list[j].CompareNoCase(litanies[k].id)) continue;
-				FString id = list[j];
-				list.Delete(j);
-				list.Push(FStringf("-%s", id.GetChars()));
-				break;
+				int q = list[j][0] == '-' ? -1 : LitanyIndex(list[j].GetChars());
+				if (q >= 0 && q != k && (singing & (1 << q))) victim = q;
 			}
+			for (int j = kNumLitanies - 1; j >= 0 && victim < 0; j--) if (j != k && (singing & (1 << j))) victim = j;
+			if (victim < 0) break;
+			drop(litanies[victim].id);
+			list.Push(FStringf("-%s", litanies[victim].id));
 			write();
 		}
 	}
