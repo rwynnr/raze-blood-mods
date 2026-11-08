@@ -1261,6 +1261,8 @@ bool PickupAmmo(DBloodPlayer* pPlayer, DBloodActor* ammoactor)
 	int nAmmoType = pAmmoItemData->type;
 
 	if (pPlayer->ammoCount[nAmmoType] >= gAmmoInfo[nAmmoType].max) return 0;
+	else if (int n = rogue::TakePickup(ammoactor, gAmmoInfo[nAmmoType].max - pPlayer->ammoCount[nAmmoType]); n >= 0)
+		pPlayer->ammoCount[nAmmoType] += n; // blood2d roguelite: a pickup holding its own amount (none outside a run)
 #ifdef NOONE_EXTENSIONS
 	else if (gModernMap && ammoactor->hasX() && ammoactor->xspr.data1 > 0) // allow custom amount for item
 		pPlayer->ammoCount[nAmmoType] = ClipHigh(pPlayer->ammoCount[nAmmoType] + ammoactor->xspr.data1, gAmmoInfo[nAmmoType].max);
@@ -1289,6 +1291,8 @@ bool PickupWeapon(DBloodPlayer* pPlayer, DBloodActor* weaponactor)
 			return 0;
 		pPlayer->hasWeapon[nWeaponType] = 1;
 		if (nAmmoType == -1) return 0;
+		else if (int n = rogue::TakePickup(weaponactor, gAmmoInfo[nAmmoType].max - pPlayer->ammoCount[nAmmoType]); n >= 0)
+			pPlayer->ammoCount[nAmmoType] += n; // blood2d roguelite: a pickup holding its own amount (none outside a run)
 		// allow to set custom ammo count for weapon pickups
 #ifdef NOONE_EXTENSIONS
 		else if (gModernMap && weaponactor->hasX() && weaponactor->xspr.data1 > 0)
@@ -1307,6 +1311,8 @@ bool PickupWeapon(DBloodPlayer* pPlayer, DBloodActor* weaponactor)
 	}
 
 	if (!actGetRespawnTime(weaponactor) || nAmmoType == -1 || pPlayer->ammoCount[nAmmoType] >= gAmmoInfo[nAmmoType].max) return 0;
+	else if (int n = rogue::TakePickup(weaponactor, gAmmoInfo[nAmmoType].max - pPlayer->ammoCount[nAmmoType]); n >= 0)
+		pPlayer->ammoCount[nAmmoType] += n; // blood2d roguelite: a pickup holding its own amount (none outside a run)
 #ifdef NOONE_EXTENSIONS
 	else if (gModernMap && weaponactor->hasX() && weaponactor->xspr.data1 > 0)
 		pPlayer->ammoCount[nAmmoType] = ClipHigh(pPlayer->ammoCount[nAmmoType] + weaponactor->xspr.data1, gAmmoInfo[nAmmoType].max);
@@ -1354,13 +1360,14 @@ void PickUp(DBloodPlayer* pPlayer, DBloodActor* actor)
 
 	if (pickedUp) bmod::OnPickup(pPlayer, nType);
 	if (!pickedUp) return;
-	else if (actor->hasX())
+	bool stays = rogue::PickupTaken(actor, msg); // blood2d roguelite: names the amount; what the pocket can't hold stays
+	if (actor->hasX())
 	{
 		if (actor->xspr.Pickup)
 			trTriggerSprite(actor, kCmdSpritePickup);
 	}
 
-	if (!actCheckRespawn(actor))
+	if (!stays && !actCheckRespawn(actor))
 		actPostSprite(actor, kStatFree);
 
 	pPlayer->pickupEffect = 30;
