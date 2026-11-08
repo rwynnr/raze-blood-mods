@@ -2190,5 +2190,82 @@ OptionMenu "RogueliteMenu" protected
 {
 	Title "Roguelite"
 	Option "Skill",							"rl_skill", "RogueliteSkills"
+	Submenu "The Armory: your starting kit",	"RogueliteArmory"
+	Submenu "The Covenant: harder runs, more ichor",	"RogueliteCovenant"
 	StaticText ""
+}
+
+// The Armory: a starting kit bought with points (roguelite.cpp fills in the title and the first line).
+OptionMenu "RogueliteArmory" protected
+{
+	Title "The Armory"
+	StaticText " "
+	StaticText "Points per run: 100, and 50 more for each later episode up to 250;", 1
+	StaticText "Cryptic Passage 200, the gauntlet 100. Unspent points become ichor.", 1
+	StaticText ""
+	StaticText "Weapons, each with a pickup's ammo", 1
+	Option "Flare gun (10)",					"rl_kit_flare", "YesNo"
+	Option "Sawed-off shotgun (20)",			"rl_kit_shotgun", "YesNo"
+	Option "Spray can (15)",					"rl_kit_spray", "YesNo"
+	Option "Tommy gun (30)",					"rl_kit_tommy", "YesNo"
+	Option "Voodoo doll (35)",					"rl_kit_voodoo", "YesNo"
+	Option "Napalm launcher (40)",				"rl_kit_napalm", "YesNo"
+	Option "Tesla cannon (45)",					"rl_kit_tesla", "YesNo"
+	Option "Life leech (60)",					"rl_kit_leech", "YesNo"
+	StaticText ""
+	StaticText "Explosives", 1
+	Slider "TNT, 5 sticks (15 each)",			"rl_kit_tnt", 0, 3, 1, 0
+	Slider "Proximity bombs, 3 (15 each)",		"rl_kit_prox", 0, 3, 1, 0
+	Slider "Remote bombs, 3 (15 each)",			"rl_kit_remote", 0, 3, 1, 0
+	StaticText ""
+	StaticText "Ammo", 1
+	Slider "Shells, 15 (5 each)",				"rl_kit_shells", 0, 3, 1, 0
+	Slider "Bullets, 100 (8 each)",				"rl_kit_bullets", 0, 3, 1, 0
+	Slider "Flares, 8 (5 each)",				"rl_kit_flares", 0, 3, 1, 0
+	Slider "Gasoline, 6 (10 each)",				"rl_kit_gas", 0, 3, 1, 0
+	Slider "Tesla charge, 32 (10 each)",		"rl_kit_charge", 0, 3, 1, 0
+	Slider "Trapped souls, 10 (10 each)",		"rl_kit_souls", 0, 3, 1, 0
+	StaticText ""
+	StaticText "Armour", 1
+	Option "Body armour (20)",					"rl_kit_body", "YesNo"
+	Option "Fire armour (15)",					"rl_kit_fire", "YesNo"
+	Option "Spirit armour (15)",				"rl_kit_spirit", "YesNo"
+	Option "Super armour (50)",					"rl_kit_super", "YesNo"
+	StaticText ""
+	StaticText "Inventory", 1
+	Option "Doctor's bag (25)",					"rl_kit_docbag", "YesNo"
+	Option "Beast vision (10)",					"rl_kit_beast", "YesNo"
+	Option "Jump boots (10)",					"rl_kit_boots", "YesNo"
+	Option "Diving suit (10)",					"rl_kit_diving", "YesNo"
+	StaticText ""
+	Command "Empty the kit",					"rl_kit_clear"
+}
+
+// The Covenant: opt-in difficulty conditions, after Hades' Pact of Punishment (roguelite.cpp fills in the title
+// and the first line).
+OptionMenu "RogueliteCovenant" protected
+{
+	Title "The Covenant"
+	StaticText " "
+	StaticText "Each rank adds Dread, and each point of Dread pays +10% ichor.", 1
+	StaticText "Dread per rank: Haste, Horde, Champions 2; Hourglass, Wardens 3; the rest 1.", 1
+	StaticText ""
+	Slider "Wrath: enemies deal +20% damage",	"rl_cov_wrath", 0, 5, 1, 0
+	Slider "Flesh: enemies +15% health",		"rl_cov_flesh", 0, 4, 1, 0
+	Slider "Haste: enemies 15% faster",			"rl_cov_haste", 0, 2, 1, 0
+	Slider "Horde: +20% enemies, in waves",		"rl_cov_horde", 0, 3, 1, 0
+	Slider "Champions: +100% champions",		"rl_cov_champions", 0, 2, 1, 0
+	Slider "Curses: some maps, nasty, every map",	"rl_cov_curses", 0, 3, 1, 0
+	Slider "Famine: healing 25% weaker",		"rl_cov_famine", 0, 4, 1, 0
+	Slider "Austerity: 20 fewer kit points",	"rl_cov_austerity", 0, 3, 1, 0
+	Option "Hourglass: a par time, then waves",	"rl_cov_hourglass", "YesNo"
+	Option "Wardens: bosses' arenas all champions",	"rl_cov_wardens", "YesNo"
+	StaticText ""
+	Command "Clear the Covenant",				"rl_cov_clear"
+}
+
+// The reward choice at the start of each map after a run's first (roguelite.cpp fills it in).
+OptionMenu "RoguelitePick" protected
+{
+	Title "Choose a reward"
 }

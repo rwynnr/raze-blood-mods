@@ -69,6 +69,7 @@
 #include "serializer.h"
 #include "v_draw.h"
 #include "v_font.h"
+#include "types.h"
 #include "vm.h"
 #include "printf.h"
 
@@ -93,6 +94,52 @@ CVARD(Int, rl_ichor, 0, CVAR_ARCHIVE, "roguelite: ichor banked by the runs that 
 CVARD(Int, rl_runs, 0, CVAR_ARCHIVE, "roguelite: runs started (also numbers them)")
 CVARD(Int, rl_wins, 0, CVAR_ARCHIVE, "roguelite: runs won")
 
+// The Armory (a starting kit bought with points) and the Covenant (opt-in difficulty conditions, after Hades'
+// Pact of Punishment) live in the config, so both are remembered from one run to the next. Their menus are in
+// menudef ("RogueliteArmory", "RogueliteCovenant"); a run takes a copy of both when it starts.
+BEGIN_BLD_NS
+namespace rogue { void KitChanged(); void CovenantChanged(); }
+END_BLD_NS
+#define RL_KIT(name, maxUnits) CUSTOM_CVARD(Int, name, 0, CVAR_ARCHIVE, "roguelite Armory: how many of this the kit buys") \
+	{ if (self < 0) self = 0; else if (self > maxUnits) self = maxUnits; else BLD_NS::rogue::KitChanged(); }
+RL_KIT(rl_kit_flare, 1)
+RL_KIT(rl_kit_shotgun, 1)
+RL_KIT(rl_kit_spray, 1)
+RL_KIT(rl_kit_tommy, 1)
+RL_KIT(rl_kit_voodoo, 1)
+RL_KIT(rl_kit_napalm, 1)
+RL_KIT(rl_kit_tesla, 1)
+RL_KIT(rl_kit_leech, 1)
+RL_KIT(rl_kit_tnt, 3)
+RL_KIT(rl_kit_prox, 3)
+RL_KIT(rl_kit_remote, 3)
+RL_KIT(rl_kit_shells, 3)
+RL_KIT(rl_kit_bullets, 3)
+RL_KIT(rl_kit_flares, 3)
+RL_KIT(rl_kit_gas, 3)
+RL_KIT(rl_kit_charge, 3)
+RL_KIT(rl_kit_souls, 3)
+RL_KIT(rl_kit_body, 1)
+RL_KIT(rl_kit_fire, 1)
+RL_KIT(rl_kit_spirit, 1)
+RL_KIT(rl_kit_super, 1)
+RL_KIT(rl_kit_docbag, 1)
+RL_KIT(rl_kit_beast, 1)
+RL_KIT(rl_kit_boots, 1)
+RL_KIT(rl_kit_diving, 1)
+#define RL_COV(name, maxRanks) CUSTOM_CVARD(Int, name, 0, CVAR_ARCHIVE, "roguelite Covenant: ranks of this condition") \
+	{ if (self < 0) self = 0; else if (self > maxRanks) self = maxRanks; else BLD_NS::rogue::CovenantChanged(); }
+RL_COV(rl_cov_wrath, 5)
+RL_COV(rl_cov_flesh, 4)
+RL_COV(rl_cov_haste, 2)
+RL_COV(rl_cov_horde, 3)
+RL_COV(rl_cov_champions, 2)
+RL_COV(rl_cov_curses, 3)
+RL_COV(rl_cov_famine, 4)
+RL_COV(rl_cov_austerity, 3)
+RL_COV(rl_cov_hourglass, 1)
+RL_COV(rl_cov_wardens, 1)
+
 BEGIN_BLD_NS
 
 namespace rogue
@@ -103,11 +150,89 @@ namespace
 
 constexpr int kClock = 120;                                   // PlayClock units per second
 constexpr int kIchorKill = 1, kIchorChampion = 5, kIchorMap = 10;
-constexpr double kChampionFirst = 0.05, kChampionLast = 0.25; // champion chance on a run's first and last map
-constexpr double kChampionHealth = 2.5, kChampionSize = 1.25;
-constexpr double kBudgetGrowth = 0.5;                         // enemy threat budget: the stock map's x1 on the first map, x1.5 on the last
-constexpr double kCurseChance = 0.25;                         // per map, from the second on
+// Spike 2's gentler base: the threat budget stays at each map's stock total, champions are rarer and softer, and
+// curses come only with the Covenant's Curses. The Covenant's conditions make it harder from there.
+constexpr double kChampionFirst = 0.04, kChampionLast = 0.12; // champion chance on a run's first and last map
+constexpr double kChampionHealth = 2.0, kChampionSize = 1.25; // and 1.25x damage (ScaleDamage)
+constexpr double kCurseChance = 0.25;                         // per map, from the second on, with the Covenant's Curses
 constexpr int kCurseTitle = 5 * kClock;                       // how long a curse is announced
+constexpr int kSkipIchor = 10;                                // the reward choice's "nothing" pays this
+
+//---------------------------------------------------------------------------
+//
+// the Armory: a starting kit bought with points before a run
+//
+//---------------------------------------------------------------------------
+
+struct KitItem
+{
+	FIntCVar* cvar;   // how many are bought
+	const char* name;
+	int item;         // the item handed over, as if picked up (its stock pickup amounts)
+	int count;        // how many of that item one purchase is
+	int cost;         // points per purchase
+};
+
+const KitItem kitItems[] =
+{
+	{ &rl_kit_flare, "Flare gun", kItemWeaponFlarePistol, 1, 10 },
+	{ &rl_kit_shotgun, "Sawed-off shotgun", kItemWeaponSawedoff, 1, 20 },
+	{ &rl_kit_spray, "Spray can", kItemAmmoSprayCan, 1, 15 },
+	{ &rl_kit_tommy, "Tommy gun", kItemWeaponTommygun, 1, 30 },
+	{ &rl_kit_voodoo, "Voodoo doll", kItemAmmoVoodooDoll, 1, 35 },
+	{ &rl_kit_napalm, "Napalm launcher", kItemWeaponNapalmLauncher, 1, 40 },
+	{ &rl_kit_tesla, "Tesla cannon", kItemWeaponTeslaCannon, 1, 45 },
+	{ &rl_kit_leech, "Life leech", kItemWeaponLifeLeech, 1, 60 },
+	{ &rl_kit_tnt, "TNT (5 sticks)", kItemAmmoTNTBox, 1, 15 },
+	{ &rl_kit_prox, "Proximity bombs (3)", kItemAmmoProxBombBundle, 3, 15 },
+	{ &rl_kit_remote, "Remote bombs (3)", kItemAmmoRemoteBombBundle, 3, 15 },
+	{ &rl_kit_shells, "Shells (15)", kItemAmmoSawedoffBox, 1, 5 },
+	{ &rl_kit_bullets, "Bullets (100)", kItemAmmoTommygunDrum, 1, 8 },
+	{ &rl_kit_flares, "Flares (8)", kItemAmmoFlares, 1, 5 },
+	{ &rl_kit_gas, "Gasoline (6)", kItemAmmoGasolineCan, 1, 10 },
+	{ &rl_kit_charge, "Tesla charge (32)", kItemAmmoTeslaCharge, 1, 10 },
+	{ &rl_kit_souls, "Trapped souls (10)", kItemAmmoTrappedSoul, 1, 10 },
+	{ &rl_kit_body, "Body armour", kItemArmorBody, 1, 20 },
+	{ &rl_kit_fire, "Fire armour", kItemArmorFire, 1, 15 },
+	{ &rl_kit_spirit, "Spirit armour", kItemArmorSpirit, 1, 15 },
+	{ &rl_kit_super, "Super armour", kItemArmorSuper, 1, 50 },
+	{ &rl_kit_docbag, "Doctor's bag", kItemHealthDoctorBag, 1, 25 },
+	{ &rl_kit_beast, "Beast vision", kItemBeastVision, 1, 10 },
+	{ &rl_kit_boots, "Jump boots", kItemJumpBoots, 1, 10 },
+	{ &rl_kit_diving, "Diving suit", kItemDivingSuit, 1, 10 },
+};
+constexpr int kNumKit = int(countof(kitItems));
+
+//---------------------------------------------------------------------------
+//
+// the Covenant: opt-in conditions with ranks (Hades' Pact of Punishment).
+// Each rank adds its Dread; each point of Dread pays +10% ichor.
+//
+//---------------------------------------------------------------------------
+
+enum { kWrath, kFlesh, kHaste, kHorde, kChampions, kCurses, kFamine, kAusterity, kHourglass, kWardens, kNumConditions };
+
+struct Condition
+{
+	FIntCVar* cvar;
+	const char* name;
+	int dread;        // per rank
+};
+
+const Condition conditions[kNumConditions] =
+{
+	{ &rl_cov_wrath, "Wrath", 1 },         // enemies deal +20% damage per rank
+	{ &rl_cov_flesh, "Flesh", 1 },         // +15% enemy health per rank
+	{ &rl_cov_haste, "Haste", 2 },         // enemies 15% faster per rank
+	{ &rl_cov_horde, "Horde", 2 },         // +20% enemies per rank, arriving in waves
+	{ &rl_cov_champions, "Champions", 2 }, // +100% champions per rank
+	{ &rl_cov_curses, "Curses", 1 },       // curses on some maps; then nasty ones too; then on every map
+	{ &rl_cov_famine, "Famine", 1 },       // healing heals 25% less per rank
+	{ &rl_cov_austerity, "Austerity", 1 }, // 20 fewer kit points per rank
+	{ &rl_cov_hourglass, "Hourglass", 3 }, // each map has a par time; past it, waves come every 30 s
+	{ &rl_cov_wardens, "Wardens", 3 },     // on an episode's boss map, the boss and everything with it are champions
+};
+constexpr double kDreadIchor = 0.10;
 
 struct Run
 {
@@ -124,6 +249,17 @@ struct Run
 	int ichor = 0, kills = 0, champions = 0, cleared = 0;
 	FString curse;                // the effect cursing this map, "" = none
 	int curseClock = INT_MIN / 2; // PlayClock when the curse was announced
+	int cov[kNumConditions] = {}; // the Covenant's ranks, as they were when the run started
+	int kit[kNumKit] = {};        // the Armory's kit, as it was when the run started
+	bool kitGiven = false;        // the kit is handed over on the run's first map
+	int offers[3] = { -1, -1, -1 }; // the reward choice waiting on this map (reward ids), -1 = none
+	bool offerPending = false;
+	int levelClock = 0;           // PlayClock when this map started
+	int extraEnemies = 0;         // Horde: enemies still to arrive on this map
+	int nextWave = 0;             // Horde: PlayClock of the next wave
+	int parTime = 0;              // Hourglass: this map's par time, in seconds (0 = none)
+	int nextOvertime = 0;         // Hourglass: PlayClock of the next wave past the par time
+	int unspent = 0;              // kit points not spent: ichor once the first map is cleared
 };
 
 Run run;
@@ -177,6 +313,223 @@ void SetProgress(const Progress& p)
 	out.AppendFormat("%s=%d,%d,%d", LumpFilter.GetChars(), p.unlocked, int(p.gauntletWon), p.activeRun);
 	rl_progress = out.GetChars();
 	saveConfig = true;
+}
+
+//---------------------------------------------------------------------------
+//
+// the Armory's kit, the Covenant's Dread, and handing items over
+//
+//---------------------------------------------------------------------------
+
+int KitCost(const int* units = nullptr)
+{
+	int sum = 0;
+	for (int i = 0; i < kNumKit; i++) sum += (units ? units[i] : int(*kitItems[i].cvar)) * kitItems[i].cost;
+	return sum;
+}
+
+// The points a run gets for its kit. A stock game reaches later episodes with the earlier ones' guns, so they get
+// more: 100 for the first, 50 more for each later one up to 250; Cryptic Passage 200; the gauntlet, which starts at
+// the first episode, 100. The Covenant's Austerity takes 20 a rank.
+int Budget(int episode, int austerity)
+{
+	int points = episode == 0 ? 100 : LumpFilter.CompareNoCase("Blood.Cryptic") == 0 ? 200 : std::min(100 + 50 * (episode - 1), 250);
+	return std::max(points - 20 * austerity, 0);
+}
+
+int Dread(const int* ranks)
+{
+	int dread = 0;
+	for (int c = 0; c < kNumConditions; c++) dread += ranks[c] * conditions[c].dread;
+	return dread;
+}
+
+int ChosenDread()
+{
+	int ranks[kNumConditions];
+	for (int c = 0; c < kNumConditions; c++) ranks[c] = *conditions[c].cvar;
+	return Dread(ranks);
+}
+
+// The gun a weapon or weapon-giving ammo pickup gives (0 = none).
+int WeaponOf(int item)
+{
+	if (item >= kItemWeaponBase && item < kItemWeaponMax) return gWeaponItemData[item - kItemWeaponBase].type;
+	if (item >= kItemAmmoBase && item < kItemAmmoMax) return gAmmoItemData[item - kItemAmmoBase].weaponType;
+	return 0;
+}
+
+// Hands an item over as if the player had picked it up: Blood's own pickup amounts and caps, no sound or message.
+void GiveItem(DBloodPlayer* p, int type)
+{
+	auto raise = [&](int weapon)
+	{
+		int best = WeaponUpgrade(p, weapon);
+		if (best != p->curWeapon)
+		{
+			p->weaponState = 0;
+			p->nextWeapon = best;
+		}
+	};
+	if (type >= kItemWeaponBase && type < kItemWeaponMax)
+	{
+		auto& d = gWeaponItemData[type - kItemWeaponBase];
+		p->hasWeapon[d.type] = 1;
+		if (d.ammoType >= 0) p->ammoCount[d.ammoType] = ClipHigh(p->ammoCount[d.ammoType] + d.count, gAmmoInfo[d.ammoType].max);
+		raise(d.type);
+	}
+	else if (type >= kItemAmmoBase && type < kItemAmmoMax)
+	{
+		auto& d = gAmmoItemData[type - kItemAmmoBase];
+		if (d.type >= countof(p->ammoCount)) return;
+		p->ammoCount[d.type] = ClipHigh(p->ammoCount[d.type] + d.count, gAmmoInfo[d.type].max);
+		if (d.weaponType)
+		{
+			p->hasWeapon[d.weaponType] = 1;
+			raise(d.weaponType);
+		}
+	}
+	else if (type >= kItemArmorBasic && type <= kItemArmorSuper)
+	{
+		auto& a = armorData[type - kItemArmorBasic];
+		if (p->armor[0] < a.armor0max) p->armor[0] = ClipHigh(p->armor[0] + a.armor0, a.armor0max);
+		if (p->armor[1] < a.armor1max) p->armor[1] = ClipHigh(p->armor[1] + a.armor1, a.armor1max);
+		if (p->armor[2] < a.armor2max) p->armor[2] = ClipHigh(p->armor[2] + a.armor2, a.armor2max);
+	}
+	else if (type == kItemHealthDoctorBag || type == kItemJumpBoots || type == kItemDivingSuit || type == kItemBeastVision)
+		packAddItem(p, gItemData[type - kItemBase].packSlot);
+	else if (type == kItemHealthMedPouch || type == kItemHealthLifeEssense || type == kItemHealthLifeSeed || type == kItemHealthRedPotion)
+		actHealDude(p->GetActor(), gPowerUpInfo[type - kItemBase].bonusTime, gPowerUpInfo[type - kItemBase].maxTime);
+}
+
+// The run's first map: the kit is handed over (after the remix, so none of it is rerolled).
+void GiveKit()
+{
+	auto p = getPlayer(myconnectindex);
+	if (!p || !p->GetActor()) return;
+	FString list;
+	for (int i = 0; i < kNumKit; i++)
+	{
+		if (run.kit[i] <= 0) continue;
+		for (int n = 0; n < run.kit[i] * kitItems[i].count; n++) GiveItem(p, kitItems[i].item);
+		list.AppendFormat("%s%s", list.IsEmpty() ? "" : ", ", kitItems[i].name);
+		if (run.kit[i] > 1) list.AppendFormat(" x%d", run.kit[i]);
+	}
+	if (list.IsNotEmpty()) Printf(PRINT_NOTIFY, "Your kit: %s\n", list.GetChars());
+}
+
+//---------------------------------------------------------------------------
+//
+// the reward choice (Hades' boon pick): from the second map on, each map
+// starts with a choice of three rewards, or nothing for a little ichor
+//
+//---------------------------------------------------------------------------
+
+constexpr int kRewardAmmo = 1000; // a pickup's worth of ammo for every gun the player has
+
+struct RewardPick { int id, weight; };
+
+// The guns, with weights for a run's start and its end: the heavy ones get likelier deeper in.
+struct RewardGun { int item, early, late; };
+const RewardGun rewardGuns[] =
+{
+	{ kItemWeaponFlarePistol, 4, 1 }, { kItemWeaponSawedoff, 4, 2 }, { kItemAmmoSprayCan, 2, 2 }, { kItemWeaponTommygun, 3, 3 },
+	{ kItemAmmoVoodooDoll, 1, 2 }, { kItemWeaponNapalmLauncher, 1, 3 }, { kItemWeaponTeslaCannon, 1, 3 }, { kItemWeaponLifeLeech, 0, 2 },
+};
+
+FString RewardName(int id)
+{
+	if (id == kRewardAmmo) return "Ammo for every gun you have";
+	if (id == kItemHealthLifeEssense) return "Life essence";
+	if (id == kItemHealthLifeSeed) return "Life seed (health to 200)";
+	for (auto& k : kitItems)
+		if (k.item == id) return WeaponOf(id) ? FStringf("%s, with ammo", k.name) : FString(k.name);
+	return "Something";
+}
+
+int PickWeighted(std::mt19937& rng, const TArray<RewardPick>& list)
+{
+	int total = 0;
+	for (auto& p : list) total += p.weight;
+	if (total <= 0) return -1;
+	int r = RandInt(rng, 0, total - 1);
+	for (auto& p : list)
+	{
+		if (r < p.weight) return p.id;
+		r -= p.weight;
+	}
+	return -1;
+}
+
+void RollOffers(std::mt19937& rng, double depth)
+{
+	for (auto& o : run.offers) o = -1;
+	auto p = getPlayer(myconnectindex);
+	if (!p) return;
+	TArray<RewardPick> guns, armour, care;
+	bool anyGun = false;
+	for (auto& g : rewardGuns)
+	{
+		if (p->hasWeapon[WeaponOf(g.item)]) anyGun = true;
+		else
+		{
+			int w = int(g.early + (g.late - g.early) * depth + 0.5);
+			if (w > 0) guns.Push({ g.item, w });
+		}
+	}
+	armour.Push({ kItemArmorBody, 3 });
+	armour.Push({ kItemArmorFire, 2 });
+	armour.Push({ kItemArmorSpirit, 2 });
+	if (depth >= 0.5) armour.Push({ kItemArmorSuper, 1 });
+	auto packFull = [&](int item) { return p->packSlots[gItemData[item - kItemBase].packSlot].curAmount >= 100; };
+	if (!packFull(kItemHealthDoctorBag)) care.Push({ kItemHealthDoctorBag, 3 });
+	care.Push({ kItemHealthLifeEssense, 2 });
+	if (depth >= 0.3) care.Push({ kItemHealthLifeSeed, 1 });
+	if (!packFull(kItemBeastVision)) care.Push({ kItemBeastVision, 1 });
+	if (!packFull(kItemJumpBoots)) care.Push({ kItemJumpBoots, 1 });
+
+	// Three kinds of reward, a gun among them while there are guns to find (the later maps expect them).
+	TArray<int> kinds; // 0 gun, 1 armour, 2 care, 3 ammo
+	if (guns.Size()) kinds.Push(0);
+	TArray<int> rest;
+	rest.Push(1);
+	rest.Push(2);
+	if (anyGun) rest.Push(3);
+	for (int i = int(rest.Size()) - 1; i > 0; i--) std::swap(rest[i], rest[RandInt(rng, 0, i)]);
+	for (int k : rest) if (kinds.Size() < 3) kinds.Push(k);
+	for (unsigned i = 0; i < kinds.Size() && i < 3; i++)
+	{
+		switch (kinds[i])
+		{
+		case 0: run.offers[i] = PickWeighted(rng, guns); break;
+		case 1: run.offers[i] = PickWeighted(rng, armour); break;
+		case 2: run.offers[i] = PickWeighted(rng, care); break;
+		default: run.offers[i] = kRewardAmmo; break;
+		}
+	}
+	run.offerPending = run.offers[0] >= 0;
+}
+
+void GrantReward(int id)
+{
+	auto p = getPlayer(myconnectindex);
+	if (!p || !p->GetActor() || id < 0) return;
+	if (id != kRewardAmmo)
+	{
+		GiveItem(p, id);
+		return;
+	}
+	for (auto& g : rewardGuns)
+	{
+		if (!p->hasWeapon[WeaponOf(g.item)]) continue;
+		if (g.item >= kItemWeaponBase && g.item < kItemWeaponMax)
+		{
+			auto& d = gWeaponItemData[g.item - kItemWeaponBase];
+			if (d.ammoType >= 0) p->ammoCount[d.ammoType] = ClipHigh(p->ammoCount[d.ammoType] + d.count, gAmmoInfo[d.ammoType].max);
+		}
+		else GiveItem(p, g.item); // the spray can and the voodoo doll come as ammo
+	}
+	if (p->hasWeapon[kWeapDynamite]) GiveItem(p, kItemAmmoTNTBox);
 }
 
 int RandInt(std::mt19937& rng, int lo, int hi) { return std::uniform_int_distribution<int>(lo, hi)(rng); }
@@ -308,9 +661,8 @@ void RemixEnemies(std::mt19937& rng, double depth)
 		if (a->sector() && !IsUnderwaterSector(a->sector())) reroll.Push(a); // swimmers stay what they are
 	}
 
-	double budget = 0;
+	double budget = 0; // the map's stock threat: the rerolled kinds add up to about the same
 	for (auto a : reroll) budget += KindCost(a->spr.type);
-	budget *= 1. + kBudgetGrowth * depth;
 
 	// Tiny Caleb only where the map has one: his size comes from how the map places him.
 	TArray<Kind> pool;
@@ -333,8 +685,62 @@ void RemixEnemies(std::mt19937& rng, double depth)
 		bmod::RetypeDude(reroll[i], pick.type, look ? look->pal : 0, look ? look->scale : DVector2(1, 1));
 	}
 
-	double chance = kChampionFirst + (kChampionLast - kChampionFirst) * depth;
+	double chance = (kChampionFirst + (kChampionLast - kChampionFirst) * depth) * (1 + run.cov[kChampions]);
 	for (auto a : eligible) if (Rand01(rng) < chance) MakeChampion(a);
+}
+
+// The run's last map of an episode: its boss map.
+bool BossMap()
+{
+	if (run.index < 0 || run.index >= int(run.maps.Size())) return false;
+	if (run.index + 1 >= int(run.maps.Size())) return true;
+	auto cur = FindMapByName(run.maps[run.index].GetChars()), next = FindMapByName(run.maps[run.index + 1].GetChars());
+	return cur && next && cur->cluster != next->cluster;
+}
+
+// The Covenant's Flesh and Wardens, on every enemy of the map (bosses and scripted ones too).
+void CovenantEnemies()
+{
+	bool wardens = run.cov[kWardens] > 0 && BossMap();
+	double flesh = 1. + 0.15 * run.cov[kFlesh];
+	if (!wardens && run.cov[kFlesh] == 0) return;
+	BloodStatIterator it(kStatDude);
+	while (auto a = it.Next())
+	{
+		if (a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0) continue;
+		if (wardens && !(a->modFlags & kModChampion)) MakeChampion(a);
+		a->xspr.health = uint32_t(a->xspr.health * flesh);
+	}
+}
+
+// Horde and Hourglass, from the enemies the map starts with: how many more arrive in waves, and the par time.
+void SetupPressure()
+{
+	run.levelClock = PlayClock;
+	int enemies = 0;
+	BloodStatIterator it(kStatDude);
+	while (auto a = it.Next())
+		if (!a->IsPlayerActor() && a->hasX() && a->xspr.health > 0 && AllowedKillType(a)) enemies++;
+	run.extraEnemies = int(enemies * 0.2 * run.cov[kHorde] + 0.5);
+	run.nextWave = PlayClock + 40 * kClock;
+	run.parTime = run.cov[kHourglass] ? std::clamp(60 + 3 * enemies, 120, 600) : 0;
+	run.nextOvertime = 0;
+}
+
+// Horde's waves (the rest of its enemies, a few at a time) and Hourglass's (every 30 s past the par time).
+void Pressure()
+{
+	if (run.extraEnemies > 0 && PlayClock >= run.nextWave)
+	{
+		int came = bmod::SpawnWave(std::min(run.extraEnemies, 3 + run.cov[kHorde]));
+		run.extraEnemies -= came;
+		run.nextWave = PlayClock + (came ? 50 : 5) * kClock; // no room behind the player: try again soon
+	}
+	if (run.parTime > 0 && PlayClock - run.levelClock > run.parTime * kClock && PlayClock >= run.nextOvertime)
+	{
+		int came = bmod::SpawnWave(3);
+		run.nextOvertime = PlayClock + (came ? 30 : 5) * kClock;
+	}
 }
 
 //---------------------------------------------------------------------------
@@ -488,10 +894,14 @@ bool StartCurse()
 	return bmod::StartEffect(e);
 }
 
+// Only with the Covenant's Curses: rank 1, a quarter of the maps from the second on, silly and twist effects;
+// rank 2, nasty ones too; rank 3, every map.
 void PickCurse(std::mt19937& rng)
 {
 	run.curse = "";
-	if (run.index < 1 || Rand01(rng) >= kCurseChance) return;
+	int rank = run.cov[kCurses];
+	if (rank <= 0) return;
+	if (rank < 3 && (run.index < 1 || Rand01(rng) >= kCurseChance)) return;
 	// Timed effects only: one-shots act once, and effects with a length of their own are meant to be brief.
 	TArray<const bmod::Effect*> list;
 	int total = 0;
@@ -499,6 +909,7 @@ void PickCurse(std::mt19937& rng)
 	{
 		auto e = &bmod::GetEffect(i);
 		if (e->oneShot || e->fixedSeconds > 0 || !bmod::CanStart(e)) continue;
+		if (rank < 2 && e->category == bmod::Category::Nasty) continue;
 		list.Push(e);
 		total += CurseWeight(e);
 	}
@@ -528,8 +939,17 @@ void Remix()
 	std::mt19937 rng(run.seed ^ (0x9E3779B9u * uint32_t(run.index + 1)));
 	double depth = run.maps.Size() > 1 ? double(run.index) / double(run.maps.Size() - 1) : 0.;
 	RemixEnemies(rng, depth);
+	CovenantEnemies();
 	RemixItems(rng);
 	PickCurse(rng);
+	SetupPressure();
+	if (run.index == 0)
+	{
+		if (!run.kitGiven) GiveKit(); // after the remix, so none of it is rerolled
+		run.kitGiven = true;
+		run.offerPending = false;
+	}
+	else RollOffers(rng, depth); // the ticker opens the choice once the map is running
 }
 
 void LevelStarted()
@@ -557,9 +977,12 @@ void WriteConfig()
 	GameConfig->WriteConfigFile();
 }
 
+// The run's ichor with the Covenant's bonus: +10% per point of Dread.
+int BankedIchor() { return int(run.ichor * (1. + kDreadIchor * Dread(run.cov)) + 0.5); }
+
 void Bank()
 {
-	rl_ichor = rl_ichor + run.ichor;
+	rl_ichor = rl_ichor + BankedIchor();
 	auto p = GetProgress();
 	if (p.activeRun == run.id)
 	{
@@ -571,8 +994,10 @@ void Bank()
 
 FString RunStats()
 {
-	return FStringf("Maps cleared: %d of %d\nKills: %d (%d champions)\nIchor: +%d (banked: %d)",
-		run.cleared, int(run.maps.Size()), run.kills, run.champions, run.ichor, (int)rl_ichor);
+	int dread = Dread(run.cov);
+	FString bonus = dread ? FStringf(", +%d%% for Dread %d", int(kDreadIchor * 100 * dread + 0.5), dread) : FString();
+	return FStringf("Maps cleared: %d of %d\nKills: %d (%d champions)\nIchor: +%d%s (banked: %d)",
+		run.cleared, int(run.maps.Size()), run.kills, run.champions, BankedIchor(), bonus.GetChars(), (int)rl_ichor);
 }
 
 void RunOver()
@@ -622,6 +1047,14 @@ bool StartRun(int episode, uint32_t seed)
 		Printf("rl_newrun: no maps found for this run\n");
 		return false;
 	}
+	int budget = Budget(episode, rl_cov_austerity), cost = KitCost();
+	if (cost > budget)
+	{
+		FStringf msg("Your kit costs %d points; %s allows %d.\nLighten it in the Armory.", cost, RunName(episode).GetChars(), budget);
+		Printf(PRINT_NOTIFY, "%s\n", msg.GetChars());
+		M_StartMessage(msg.GetChars(), 1);
+		return false;
+	}
 	if (run.active && !run.over)
 	{
 		Printf(PRINT_NOTIFY, "Roguelite: the run in progress is abandoned\n");
@@ -639,6 +1072,9 @@ bool StartRun(int episode, uint32_t seed)
 	run.episode = episode;
 	run.maps = std::move(order);
 	run.pending = 0;
+	for (int i = 0; i < kNumKit; i++) run.kit[i] = *kitItems[i].cvar;
+	for (int c = 0; c < kNumConditions; c++) run.cov[c] = *conditions[c].cvar;
+	run.unspent = budget - cost;
 	startingRun = true;
 	saveConfig = true;
 	Printf(PRINT_NOTIFY, "Roguelite: %s, %d maps (run %d, seed %u)\n", RunName(episode).GetChars(), int(run.maps.Size()), run.id, seed);
@@ -681,6 +1117,8 @@ void OnEvent(const bmod::EventInfo& ev)
 	}
 }
 
+void OpenRewardChoice(); // the menu section below
+
 void OnTick()
 {
 	if (refusedLoad)
@@ -690,7 +1128,15 @@ void OnTick()
 		gameaction = ga_mainmenu;
 		return;
 	}
-	if (!run.active || run.over || run.curse.IsEmpty()) return;
+	bmod::modeEnemyTimeScale = run.active && !run.over ? 1. + 0.15 * run.cov[kHaste] : 1.; // the Covenant's Haste lasts the run
+	if (!run.active || run.over) return;
+	if (run.offerPending && gamestate == GS_LEVEL && !M_Active())
+	{
+		OpenRewardChoice(); // closing it without a choice opens it again: pick a reward, or nothing for a little ichor
+		return;
+	}
+	Pressure();
+	if (run.curse.IsEmpty()) return;
 	if (PlayClock >= nextCurseTry || PlayClock < nextCurseTry - kClock)
 	{
 		nextCurseTry = PlayClock + kClock;
@@ -738,8 +1184,18 @@ void DrawRunLine(double sc)
 	};
 	FString name = run.episode ? RunName(run.episode) : FString("The gauntlet: ") + CurrentEpisodeName();
 	line(name.GetChars(), CR_GOLD);
-	line(FStringf("Map %d/%d   Ichor %d", run.index + 1, int(run.maps.Size()), run.ichor).GetChars(), CR_WHITE);
+	int dread = Dread(run.cov);
+	FString stats = FStringf("Map %d/%d   Ichor %d", run.index + 1, int(run.maps.Size()), run.ichor);
+	if (dread) stats.AppendFormat("   Dread %d", dread);
+	line(stats.GetChars(), CR_WHITE);
 	if (auto e = CurseEffect()) line(FStringf("Curse: %s", bmod::EffectTitle(e)).GetChars(), CR_RED);
+	if (run.parTime > 0)
+	{
+		int left = run.parTime - (PlayClock - run.levelClock) / kClock;
+		if (left >= 0) line(FStringf("Par %d:%02d", left / 60, left % 60).GetChars(), left < 30 ? CR_ORANGE : CR_WHITE);
+		else line(FStringf("Overtime %d:%02d", -left / 60, -left % 60).GetChars(), CR_RED);
+	}
+	if (run.extraEnemies > 0) line(FStringf("Horde: %d to come", run.extraEnemies).GetChars(), CR_GRAY);
 }
 
 // In the 320x200 space the map's name uses (Blood draws it at y 50), just under it.
@@ -891,6 +1347,94 @@ void BuildMenu()
 
 //---------------------------------------------------------------------------
 //
+// the Armory's and the Covenant's menus (menudef: CVAR options and sliders):
+// their titles and first lines follow the choices as they change. And the
+// reward choice's menu, filled in here.
+//
+//---------------------------------------------------------------------------
+
+DOptionMenuDescriptor* FindOptionMenu(const char* name)
+{
+	auto desc = MenuDescriptors.CheckKey(FName(name));
+	if (!desc || !*desc || !(*desc)->IsKindOf(RUNTIME_CLASS(DOptionMenuDescriptor))) return nullptr;
+	return static_cast<DOptionMenuDescriptor*>(*desc);
+}
+
+// A menu item's text (OptionMenuItem.mLabel), which the open menu draws each frame.
+void SetLabel(DMenuItemBase* item, const FString& text)
+{
+	if (!item) return;
+	auto field = dyn_cast<PField>(item->GetClass()->FindSymbol("mLabel", true));
+	if (field && field->Type == TypeString) *reinterpret_cast<FString*>(reinterpret_cast<uint8_t*>(item) + field->Offset) = text;
+}
+
+FString KitFitText()
+{
+	TArray<Episode> eps;
+	GetEpisodes(eps);
+	int cost = KitCost(), austerity = rl_cov_austerity;
+	FString over;
+	auto check = [&](int episode, const FString& name)
+	{
+		int budget = Budget(episode, austerity);
+		if (cost > budget) over.AppendFormat("%s%s (%d)", over.IsEmpty() ? "" : ", ", name.GetChars(), budget);
+	};
+	for (int e = 1; e <= int(eps.Size()); e++) check(e, FStringf("episode %d", e));
+	check(0, "the gauntlet");
+	return over.IsEmpty() ? FString("This kit fits every run.") : FStringf("Too many points for: %s", over.GetChars());
+}
+
+void UpdateMenus()
+{
+	if (auto m = FindOptionMenu("RogueliteArmory"))
+	{
+		m->mTitle.Format("The Armory: %d points", KitCost());
+		if (m->mItems.Size()) SetLabel(m->mItems[0], KitFitText());
+	}
+	if (auto m = FindOptionMenu("RogueliteCovenant"))
+	{
+		int dread = ChosenDread();
+		m->mTitle = dread ? FStringf("The Covenant: Dread %d", dread) : FString("The Covenant");
+		if (m->mItems.Size())
+			SetLabel(m->mItems[0], dread ? FStringf("Dread %d: +%d%% ichor", dread, int(kDreadIchor * 100 * dread + 0.5)) : FString("No conditions: Dread 0"));
+	}
+}
+
+void BuildPickMenu()
+{
+	auto opt = FindOptionMenu("RoguelitePick");
+	if (!opt) return;
+	opt->mItems.Clear();
+	auto add = [&](DMenuItemBase* item)
+	{
+		if (!item) return;
+		GC::WriteBarrier(opt, item);
+		opt->mItems.Push(item);
+	};
+	opt->mTitle.Format("Map %d of %d: choose a reward", run.index + 1, int(run.maps.Size()));
+	add(CreateOptionMenuItemStaticText(" ", -1));
+	for (int i = 0; i < 3; i++)
+		if (run.offers[i] >= 0) add(CreateOptionMenuItemCommand(RewardName(run.offers[i]).GetChars(), FName(FStringf("rl_pick %d", i + 1).GetChars()), true));
+	add(CreateOptionMenuItemStaticText(" ", -1));
+	add(CreateOptionMenuItemCommand(FStringf("Nothing (+%d ichor)", kSkipIchor).GetChars(), FName("rl_pick 0"), true));
+	opt->mSelectedItem = -1;
+	opt->mScrollPos = 0;
+}
+
+void OpenRewardChoice()
+{
+	BuildPickMenu();
+	if (!FindOptionMenu("RoguelitePick"))
+	{
+		run.offerPending = false; // no menu to choose in (an old raze.pk3): the reward is skipped
+		return;
+	}
+	M_StartControlPanel(false);
+	M_SetMenu(FName("RoguelitePick"));
+}
+
+//---------------------------------------------------------------------------
+//
 // the movie entering a map: Blood ties an episode's opening movie to the
 // episode's first map (The Way of All Flesh: Caleb rising from his grave, on
 // E1M1), and Dead Reckoning's other one to its boss map. In a run, the opening
@@ -950,6 +1494,11 @@ MapRecord* NextLevel(MapRecord* stockNext)
 	run.exiting = true;
 	run.cleared++;
 	run.ichor += kIchorMap;
+	if (run.index == 0)
+	{
+		run.ichor += run.unspent; // the kit points left unspent, now that the run is under way
+		run.unspent = 0;
+	}
 	int next = run.index + 1; // a secret exit leads on to the next map too (secret maps aren't in v1)
 	auto map = next < int(run.maps.Size()) ? FindMapByName(run.maps[next].GetChars()) : nullptr;
 	if (!map)
@@ -980,6 +1529,7 @@ void OnNewGame()
 		return;
 	}
 	run = Run(); // a game outside the run; the run, if any, can still be continued from its saves
+	bmod::modeEnemyTimeScale = 1.;
 }
 
 int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
@@ -987,9 +1537,21 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
 	if (!source || !target || damage <= 0) return damage;
 	auto s = source;
 	for (int i = 0; i < 2 && s && !s->IsDudeActor(); i++) s = s->GetOwner(); // a missile's or explosion's owner
-	if (!s || s == target || !(s->modFlags & kModChampion)) return damage;
-	return damage + damage / 2;
+	if (!s || s == target || !s->IsDudeActor() || s->IsPlayerActor()) return damage;
+	if (s->modFlags & kModChampion) damage += damage / 4; // champions hit 1.25x
+	if (run.active && !run.over && target->IsPlayerActor() && run.cov[kWrath] > 0)
+		damage = int(damage * (1. + 0.2 * run.cov[kWrath]) + 0.5); // the Covenant's Wrath
+	return damage;
 }
+
+int ScaleHealing(DBloodActor* actor, int add)
+{
+	if (!run.active || run.over || !actor || !actor->IsPlayerActor() || add <= 0 || run.cov[kFamine] <= 0) return add;
+	return std::max(1, int(add * (1. - 0.25 * run.cov[kFamine]) + 0.5)); // the Covenant's Famine
+}
+
+void KitChanged() { UpdateMenus(); }
+void CovenantChanged() { UpdateMenus(); }
 
 void TintSprite(DBloodActor* owner, tspritetype* tspr)
 {
@@ -1016,7 +1578,18 @@ void Serialize(FSerializer& arc)
 				("kills", run.kills)
 				("champions", run.champions)
 				("cleared", run.cleared)
-				("curse", run.curse);
+				("curse", run.curse)
+				("kitgiven", run.kitGiven)
+				("offerpending", run.offerPending)
+				("levelclock", run.levelClock)
+				("extraenemies", run.extraEnemies)
+				("nextwave", run.nextWave)
+				("partime", run.parTime)
+				("nextovertime", run.nextOvertime)
+				("unspent", run.unspent);
+			arc.Array("cov", run.cov, kNumConditions);
+			arc.Array("kit", run.kit, kNumKit);
+			arc.Array("offers", run.offers, 3);
 			arc.EndObject();
 		}
 		return;
@@ -1039,7 +1612,18 @@ void Serialize(FSerializer& arc)
 			("kills", loaded.kills)
 			("champions", loaded.champions)
 			("cleared", loaded.cleared)
-			("curse", loaded.curse);
+			("curse", loaded.curse)
+			("kitgiven", loaded.kitGiven)
+			("offerpending", loaded.offerPending)
+			("levelclock", loaded.levelClock)
+			("extraenemies", loaded.extraEnemies)
+			("nextwave", loaded.nextWave)
+			("partime", loaded.parTime)
+			("nextovertime", loaded.nextOvertime)
+			("unspent", loaded.unspent);
+		arc.Array("cov", loaded.cov, kNumConditions);
+		arc.Array("kit", loaded.kit, kNumKit);
+		arc.Array("offers", loaded.offers, 3);
 		arc.EndObject();
 		has = true;
 	}
@@ -1058,6 +1642,7 @@ void Serialize(FSerializer& arc)
 void OnMenuOpened()
 {
 	BuildMenu();
+	UpdateMenus();
 }
 
 //---------------------------------------------------------------------------
@@ -1144,6 +1729,53 @@ CCMD(rl_unlock)
 	p.unlocked = !stricmp(argv[1], "all") ? std::max(count, 1) : std::clamp(atoi(argv[1]), 1, std::max(count, 1));
 	SetProgress(p);
 	Printf(PRINT_NOTIFY, "Roguelite: %d of %d episodes unlocked%s\n", p.unlocked, count, count > 0 && p.unlocked >= count ? ", the gauntlet is open" : "");
+}
+
+CCMD(rl_pick)
+{
+	if (!run.active || run.over || !run.offerPending || argv.argc() < 2) return;
+	int n = atoi(argv[1]);
+	if (n >= 1 && n <= 3 && run.offers[n - 1] >= 0)
+	{
+		GrantReward(run.offers[n - 1]);
+		Printf(PRINT_NOTIFY, "Reward: %s\n", RewardName(run.offers[n - 1]).GetChars());
+	}
+	else
+	{
+		run.ichor += kSkipIchor;
+		Printf(PRINT_NOTIFY, "No reward: +%d ichor\n", kSkipIchor);
+	}
+	run.offerPending = false;
+	M_ClearMenus();
+}
+
+CCMD(rl_kit_clear)
+{
+	for (auto& k : kitItems) *k.cvar = 0;
+	Printf(PRINT_NOTIFY, "The Armory's kit is empty\n");
+}
+
+CCMD(rl_cov_clear)
+{
+	for (auto& c : conditions) *c.cvar = 0;
+	Printf(PRINT_NOTIFY, "The Covenant is clear: Dread 0\n");
+}
+
+CCMD(rl_kit)
+{
+	TArray<Episode> eps;
+	GetEpisodes(eps);
+	FString list;
+	for (auto& k : kitItems)
+		if (*k.cvar > 0) list.AppendFormat("%s%s%s", list.IsEmpty() ? "" : ", ", k.name, *k.cvar > 1 ? FStringf(" x%d", int(*k.cvar)).GetChars() : "");
+	Printf("Kit (%d points): %s\n", KitCost(), list.IsEmpty() ? "nothing" : list.GetChars());
+	FString budgets;
+	for (int e = 1; e <= int(eps.Size()); e++) budgets.AppendFormat("episode %d %d, ", e, Budget(e, rl_cov_austerity));
+	Printf("Points: %sthe gauntlet %d\n", budgets.GetChars(), Budget(0, rl_cov_austerity));
+	FString cov;
+	for (auto& c : conditions)
+		if (*c.cvar > 0) cov.AppendFormat("%s%s %d", cov.IsEmpty() ? "" : ", ", c.name, int(*c.cvar));
+	Printf("Covenant: %s (Dread %d)\n", cov.IsEmpty() ? "none" : cov.GetChars(), ChosenDread());
 }
 
 CCMD(rl_clearmap)
