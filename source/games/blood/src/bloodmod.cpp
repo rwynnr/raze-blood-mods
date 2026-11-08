@@ -249,6 +249,7 @@ int ScaleBlast(int damage)
 double modeEnemyTimeScale = 1;
 double EnemyTimeScale() { return mods.enemyTimeScale * modeEnemyTimeScale; }
 double (*modeActorSpeed)(DBloodActor* actor) = nullptr;
+void (*modeWaveSpawned)(DBloodActor* spawned, DBloodActor* kind) = nullptr;
 
 // One enemy's own speed factor (modeActorSpeed), 1 for players and when no mode sets one.
 static double ActorSpeed(DBloodActor* actor)
@@ -277,12 +278,17 @@ int AiFrame() { return EnemyTimeScale() == 1 ? gFrameCount : aiFrame; }
 
 int DudeMoveSteps(DBloodActor* actor)
 {
-	if (actor && actor->IsPlayerActor()) return 1;
-	int steps = enemyPassesThisTic;
+	return (actor && actor->IsPlayerActor()) ? 1 : enemyPassesThisTic;
+}
+
+// One enemy's own speed comes from extra AI moves, not extra movement steps: MoveDude's ground drag runs on every step,
+// so on foot the distance per tic follows the acceleration only (the moves), whatever the number of steps.
+int ExtraMoves(DBloodActor* actor)
+{
 	double f = ActorSpeed(actor);
-	if (f > 1) // the part over 1 as an extra step on that share of the tics (1.35: 35 tics in 100)
-		steps += int(std::floor((gFrameCount + 1) * (f - 1)) - std::floor(gFrameCount * (f - 1)));
-	return steps;
+	if (f <= 1) return 0;
+	// The part over 1, spread over the tics: 1.35 gives an extra move on 35 tics in 100.
+	return int(std::floor((gFrameCount + 1) * (f - 1)) - std::floor(gFrameCount * (f - 1)));
 }
 
 int SeqTicks(DBloodActor* owner, int nTicks)
@@ -290,7 +296,9 @@ int SeqTicks(DBloodActor* owner, int nTicks)
 	if (!owner || owner->spr.statnum != kStatDude || owner->IsPlayerActor()) return nTicks;
 	double scale = EnemyTimeScale() * ActorSpeed(owner);
 	if (scale == 1) return nTicks;
-	return int(nTicks * scale + 0.5);
+	// The fraction spread over the tics, so 1.35x animates 1.35x, not 1.25x after rounding (whole scales unchanged).
+	double t = nTicks * scale;
+	return int(std::floor((gFrameCount + 1) * t) - std::floor(gFrameCount * t));
 }
 
 //---------------------------------------------------------------------------
@@ -709,6 +717,7 @@ int SpawnWave(int count)
 		GetActorExtents(a, &top, &bottom);
 		if (bottom > spot.pos.Z) a->spr.pos.Z -= bottom - spot.pos.Z;
 		a->spr.Angles.Yaw = (pl->spr.pos.XY() - a->spr.pos.XY()).Angle(); // facing you
+		if (modeWaveSpawned) modeWaveSpawned(a, kind); // e.g. not a champion's size without its tier
 		a->interpolated = false;
 		viewBackupSpriteLoc(a);
 		if (AllowedKillType(a)) Level.addKillCount();

@@ -1606,7 +1606,11 @@ void aiProcessDudes(void)
 		if (actor->xspr.aiState)
 		{
 			if (actor->xspr.aiState->moveFunc)
+			{
 				actor->xspr.aiState->moveFunc(actor);
+				for (int n = bmod::ExtraMoves(actor); n > 0 && actor->xspr.aiState && actor->xspr.aiState->moveFunc; n--)
+					actor->xspr.aiState->moveFunc(actor); // blood2d base: a mode's faster enemy (modeActorSpeed)
+			}
 
 			if (actor->xspr.aiState->thinkFunc && (bmod::AiFrame() & 3) == (actor->GetIndex() & 3))
 				actor->xspr.aiState->thinkFunc(actor);
