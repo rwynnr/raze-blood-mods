@@ -19,7 +19,11 @@
 //   size, tinted, 1.5x damage;
 // - health, armor, ammo, explosive, weapon and powerup pickups reroll within
 //   their category (keys, the diving suit, jump boots and other quest-like
-//   items stay, as do items wired into the map's script);
+//   items stay, as do items wired into the map's script); ammo leans to the
+//   guns the player has or can find there;
+// - supplies: ammo handed over so that the player's guns can kill the map's
+//   enemies rl_ammo_target percent over, counting the ammo carried and the
+//   ammo on the map (on the run's first map, the kit's ammo comes on top);
 // - from the second map on, a 25% chance that one of the base's timed effects
 //   curses the whole level (announced under the map's name).
 //
@@ -35,11 +39,12 @@
 //   rl_newrun <episode|gauntlet> [seed]  start a run (episode = 1..N in the game's own list) at rl_skill
 //   rl_status                            the run in progress and the meta progress
 //   rl_clearmap                          end the run's current map as cleared, as if its exit was used
+//   rl_ammo                              this map's ammo: what its enemies take, what you have, the supplies
 //   rl_unlock <count|all>                set how many of this game's episodes are unlocked (testing)
 //   rl_resetprogress                     lock this game's episodes again; empty the ichor bank and the wins
 //   openmenu RogueliteMenu               the Roguelite menu (it is also on the main menu)
 // CVARs: rl_skill (0-4, set by the menu), rl_elite_pal (the champions' tint, a palette lookup number:
-// 0-14 in Blood, 0 = none), and the meta progress, kept in the config: rl_progress (per game, since
+// 0-14 in Blood, 0 = none), rl_ammo_target (the supplies' target, percent; 0 = no supplies), and the meta progress, kept in the config: rl_progress (per game, since
 // Blood and Cryptic Passage share a config: episodes unlocked, the gauntlet won, the run whose saves can
 // still be continued) and, shared by both, rl_ichor, rl_runs, rl_wins.
 //
@@ -54,6 +59,7 @@
 #include "ns.h"
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <random>
 #include "build.h"
 #include "blood.h"
@@ -86,6 +92,7 @@ CUSTOM_CVARD(Int, rl_skill, 2, CVAR_ARCHIVE, "roguelite: skill of new runs, 0-4 
 // recolour a whole sprite; the others recolour a few colour ranges (robes, spiders, players). Blue stands out most
 // against Blood's warm colours, and no stock enemy wears it (stone gargoyles wear GRAY).
 CVARD(Int, rl_elite_pal, 10, CVAR_ARCHIVE, "roguelite: palette lookup that tints champions (0 = none; 10 blue, 2 red, 9 orange)")
+CVARD(Int, rl_ammo_target, 150, CVAR_ARCHIVE, "roguelite: each map starts with ammo to kill its enemies this many percent over, yours and the map's (0 = off)")
 
 // Meta progress, kept across runs. Blood and Cryptic Passage share a config, so what belongs to one game's episodes
 // is kept per game in rl_progress; the ichor bank and the run counts are shared.
@@ -765,6 +772,232 @@ void Pressure()
 
 //---------------------------------------------------------------------------
 //
+// ammo by the map: each map starts with enough ammo for the player's guns to
+// kill its enemies rl_ammo_target percent over (150: one and a half times),
+// counting the ammo the player carries and the ammo on the map; what's
+// missing is handed over as the map starts. On a run's first map the kit's
+// ammo comes on top.
+//
+//---------------------------------------------------------------------------
+
+constexpr int kAmmoTypes = 12;                    // Blood's ammo types, 0 (none) to 11
+constexpr int kDamageNone = -1, kDamageAny = -2;  // kDamageAny: the life leech, a random type each shot
+
+// What a unit of each ammo type is worth in a fight: a shot's damage by type, as Blood deals it, the ammo a shot uses,
+// how often a shot lands, and how many enemies it hits. Rough by design: misses, overkill and burning are guessed,
+// not simulated. scripts/bloodmaps.py's "ammo" census mirrors this table to compare the stock maps (keep in step).
+struct AmmoProfile
+{
+	int ammo, gun;
+	const char* name;
+	int type1; double dmg1;
+	int type2; double dmg2;
+	int perShot;
+	double hit, targets;
+	bool byDamage; // the voodoo doll spends a unit per 4 damage it deals
+};
+
+const AmmoProfile ammoProfiles[] =
+{
+	{ 1, kWeapFlareGun, "flares", kDamageBullet, 24.5, kDamageBurn, 60, 1, 0.8, 1, false },        // 20-29, then 480 of burning
+	{ 2, kWeapShotgun, "shells", kDamageBullet, 72, kDamageNone, 0, 1, 0.6, 1, false },             // 16 pellets of 4 a barrel, 6 for both
+	{ 3, kWeapTommyGun, "bullets", kDamageBullet, 12, kDamageNone, 0, 1, 0.6, 1, false },
+	{ 4, kWeapNapalm, "gasoline", kDamageBullet, 75, kDamageExplode, 450, 1, 0.7, 1.5, false },     // 50-99, and the blast
+	{ 5, kWeapDynamite, "TNT", kDamageExplode, 250, kDamageNone, 0, 1, 0.6, 1.5, false },
+	{ 6, kWeapSpraycan, "spray", kDamageBurn, 3.5, kDamageNone, 0, 4, 0.8, 1, false },               // a lick of flame and its burning
+	{ 7, kWeapTeslaCannon, "tesla charge", kDamageTesla, 19.5, kDamageNone, 0, 1, 0.75, 1, false },
+	{ 8, kWeapLifeLeech, "trapped souls", kDamageAny, 10, kDamageBurn, 45, 1, 0.8, 1, false },
+	{ 9, kWeapVoodooDoll, "voodoo", kDamageSpirit, 4, kDamageNone, 0, 1, 1, 1, true },
+	{ 10, kWeapProximity, "proximity bombs", kDamageExplode, 250, kDamageNone, 0, 1, 0.8, 1.5, false },
+	{ 11, kWeapRemote, "remote bombs", kDamageExplode, 250, kDamageNone, 0, 1, 0.8, 1.5, false },
+};
+
+const AmmoProfile* ProfileOfAmmo(int ammo)
+{
+	for (auto& p : ammoProfiles) if (p.ammo == ammo) return &p;
+	return nullptr;
+}
+
+bool IsBomb(int gun) { return gun == kWeapDynamite || gun == kWeapProximity || gun == kWeapRemote; }
+
+// The ammo type and amount a pickup gives (0 = no ammo).
+int ItemAmmo(int item, int* count)
+{
+	*count = 0;
+	if (item >= kItemWeaponBase && item < kItemWeaponMax)
+	{
+		auto& d = gWeaponItemData[item - kItemWeaponBase];
+		if (d.ammoType <= 0 || d.ammoType >= kAmmoTypes) return 0;
+		*count = d.count;
+		return d.ammoType;
+	}
+	if (item >= kItemAmmoBase && item < kItemAmmoMax)
+	{
+		auto& d = gAmmoItemData[item - kItemAmmoBase];
+		if (d.type <= 0 || d.type >= kAmmoTypes) return 0;
+		*count = d.count;
+		return d.type;
+	}
+	return 0;
+}
+
+// The ammo it takes one gun alone to kill an enemy of this type and health (0: that gun can't hurt it).
+double AmmoToKill(const AmmoProfile& p, int type, double health)
+{
+	auto info = getDudeInfo(type); // damageVal: Blood's damage scale per damage type, for this skill
+	auto scale = [&](int t)
+	{
+		if (t == kDamageAny)
+		{
+			double sum = 0;
+			for (int k = 0; k < kDamageMax; k++) sum += info->damageVal[k];
+			return sum / (256. * kDamageMax);
+		}
+		return t >= 0 ? info->damageVal[t] / 256. : 0.;
+	};
+	double shot = p.dmg1 * scale(p.type1) + p.dmg2 * scale(p.type2);
+	if (shot <= 0 || health <= 0) return 0;
+	if (p.byDamage) return health / p.dmg1;
+	return health * p.perShot / (std::min(shot, health) * p.hit * p.targets); // a shot can't do more than kill
+}
+
+// The guns the player has; on the run's first map, the kit's too (it's handed over after the remix and the supplies).
+void OwnedGuns(DBloodPlayer* p, bool* owned)
+{
+	for (int w = 0; w < kWeapMax; w++) owned[w] = p && p->hasWeapon[w];
+	if (run.index == 0 && !run.kitGiven)
+		for (int i = 0; i < kNumKit; i++)
+			if (run.kit[i] > 0 && WeaponOf(kitItems[i].item)) owned[WeaponOf(kitItems[i].item)] = true;
+}
+
+struct AmmoLedger
+{
+	int enemies = 0;
+	double health = 0;
+	double need[kAmmoTypes] = {}; // the ammo each gun alone would need to kill every enemy
+	double have[kAmmoTypes] = {}; // carried, lying on the map, and what enemies drop (at their odds)
+	int given[kAmmoTypes] = {};   // the supplies
+	double before = 0, after = 0; // how many times over the guns' ammo kills the map, before and after the supplies
+	bool counted = false;
+};
+AmmoLedger ledger; // this map's, as it started (rl_ammo prints it)
+
+void AddEnemy(AmmoLedger& l, int type, double health)
+{
+	l.enemies++;
+	l.health += health;
+	for (auto& g : ammoProfiles) l.need[g.ammo] += AmmoToKill(g, type, health);
+}
+
+// What an enemy or thing leaves when it dies: its drop item, and a cultist's gun or ammo at Blood's odds.
+void AddDrops(AmmoLedger& l, DBloodActor* a)
+{
+	int n;
+	if (a->hasX() && a->xspr.dropMsg > 0)
+		if (int at = ItemAmmo(a->xspr.dropMsg, &n)) l.have[at] += n;
+	if (a->spr.type == kDudeCultistTommy) l.have[3] += 0.10 * 50 + 0.40 * 15;
+	if (a->spr.type == kDudeCultistShotgun) l.have[2] += 0.11 * 8 + 0.40 * 4;
+}
+
+void CountAmmo(AmmoLedger& l, DBloodPlayer* p)
+{
+	l = AmmoLedger();
+	l.counted = true;
+	BloodStatIterator it(kStatDude);
+	while (auto a = it.Next())
+	{
+		if (a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !AllowedKillType(a)) continue;
+		AddEnemy(l, a->spr.type, a->xspr.health / 16.);
+		AddDrops(l, a);
+	}
+	// The map's dude spawners (275 on the stock maps), each counted once.
+	for (int stat : { kStatDecoration, kStatMarker })
+	{
+		BloodStatIterator it2(stat);
+		while (auto a = it2.Next())
+		{
+			if (a->spr.type != kMarkerDudeSpawn || !a->hasX()) continue;
+			int type = a->xspr.data1;
+			if (type < kDudeBase || type >= kDudeMax || type == kDudeBat || type == kDudeRat || type == kDudeInnocent || type == kDudeBurningInnocent) continue;
+			AddEnemy(l, type, getDudeInfo(type)->startHealth);
+		}
+	}
+	// Horde's waves: that many more of the same mix.
+	if (run.extraEnemies > 0 && l.enemies > 0)
+	{
+		double more = 1. + double(run.extraEnemies) / l.enemies;
+		l.health *= more;
+		for (auto& n : l.need) n *= more;
+		l.enemies += run.extraEnemies;
+	}
+	for (int at = 0; at < kAmmoTypes; at++) l.have[at] += p->ammoCount[at];
+	BloodStatIterator it3(kStatItem);
+	while (auto a = it3.Next())
+	{
+		int n;
+		if (int at = ItemAmmo(a->spr.type, &n)) l.have[at] += n;
+	}
+	BloodStatIterator it4(kStatThing); // crates and the like that drop an item
+	while (auto a = it4.Next()) AddDrops(l, a);
+}
+
+// How many times over the player's guns can kill the map's enemies with the ammo counted (plus extra, if given).
+double Coverage(const AmmoLedger& l, const bool* owned, const int* extra = nullptr)
+{
+	double c = 0;
+	for (auto& g : ammoProfiles)
+		if (owned[g.gun] && l.need[g.ammo] > 0) c += (l.have[g.ammo] + (extra ? extra[g.ammo] : 0)) / l.need[g.ammo];
+	return c;
+}
+
+int HudAmount(const AmmoProfile& g, double units) { return int(g.ammo == 6 ? units / 10 + 0.5 : units + 0.5); } // the HUD counts spray in tens
+FString AmmoText(const AmmoProfile& g, int units) { return FStringf("%d %s", HudAmount(g, units), g.name); }
+
+// The supplies: the shortfall the ledger (counted before the kit was handed over) shows, shared evenly by the guns
+// that can hurt this map's enemies (the three bombs share one share). A gun whose pocket is full passes its share on.
+void SupplyAmmo(const bool* owned)
+{
+	auto p = getPlayer(myconnectindex);
+	if (!p || !p->GetActor() || !ledger.counted) return;
+	ledger.before = ledger.after = Coverage(ledger, owned);
+	double missing = rl_ammo_target / 100. - ledger.before;
+	TArray<const AmmoProfile*> guns;
+	for (auto& g : ammoProfiles) if (owned[g.gun] && ledger.need[g.ammo] > 0) guns.Push(&g);
+	for (int round = 0; round < 4 && missing > 0.001 && guns.Size() > 0; round++)
+	{
+		TArray<const AmmoProfile*> open;
+		int bombs = 0;
+		for (auto g : guns)
+		{
+			if (p->ammoCount[g->ammo] + ledger.given[g->ammo] >= gAmmoInfo[g->ammo].max) continue;
+			open.Push(g);
+			if (IsBomb(g->gun)) bombs++;
+		}
+		if (open.Size() == 0) break;
+		double share = missing / (int(open.Size()) - (bombs > 1 ? bombs - 1 : 0));
+		for (auto g : open)
+		{
+			double part = IsBomb(g->gun) ? share / bombs : share;
+			int room = gAmmoInfo[g->ammo].max - p->ammoCount[g->ammo] - ledger.given[g->ammo];
+			int units = std::min(room, int(std::ceil(part * ledger.need[g->ammo])));
+			ledger.given[g->ammo] += units;
+			missing -= units / ledger.need[g->ammo];
+		}
+	}
+	FString list;
+	for (auto& g : ammoProfiles)
+	{
+		int n = ledger.given[g.ammo];
+		if (n <= 0) continue;
+		p->ammoCount[g.ammo] = ClipHigh(p->ammoCount[g.ammo] + n, gAmmoInfo[g.ammo].max);
+		list.AppendFormat("%s%s", list.IsEmpty() ? "" : ", ", AmmoText(g, n).GetChars());
+	}
+	ledger.after = Coverage(ledger, owned, ledger.given);
+	if (list.IsNotEmpty()) Printf(PRINT_NOTIFY, "Supplies for this map: %s\n", list.GetChars());
+}
+
+//---------------------------------------------------------------------------
+//
 // pickups: rerolled within their category, by weight (rare ones stay rare)
 //
 //---------------------------------------------------------------------------
@@ -860,33 +1093,60 @@ void RetypeItem(DBloodActor* a, int type)
 	viewBackupSpriteLoc(a);
 }
 
-void RemixItems(std::mt19937& rng)
+// Ammo that fits a gun the player has or can find on the map; ammo that brings its own gun (the spray can, the
+// voodoo doll) always does.
+bool AmmoFits(int item, const bool* usable)
 {
-	TArray<DBloodActor*> items;
+	if (WeaponOf(item)) return true;
+	int n;
+	auto g = ProfileOfAmmo(ItemAmmo(item, &n));
+	return g && usable[g->gun];
+}
+
+int PickItem(std::mt19937& rng, const ItemCategory* cat, const bool* usable)
+{
+	auto weight = [&](int i) { return cat->picks[i].weight * (usable && AmmoFits(cat->picks[i].type, usable) ? 4 : 1); };
+	int total = 0;
+	for (int i = 0; i < cat->count; i++) total += weight(i);
+	int r = RandInt(rng, 0, total - 1);
+	for (int i = 0; i < cat->count; i++)
+	{
+		if (r < weight(i)) return cat->picks[i].type;
+		r -= weight(i);
+	}
+	return cat->picks[0].type;
+}
+
+void RemixItems(std::mt19937& rng, const bool* owned)
+{
+	TArray<DBloodActor*> items, ammo;
 	BloodStatIterator it(kStatItem);
 	while (auto a = it.Next()) items.Push(a);
+	bool usable[kWeapMax]; // the guns the player has, or can find on this map once it's rerolled
+	for (int w = 0; w < kWeapMax; w++) usable[w] = owned[w];
 	for (auto a : items)
 	{
+		// Keys, flags, quest items and anything unknown stay. So does an item wired into the map's script: picking it
+		// up sends a message (E1M6's fire armour opens a door), or a trigger acts on it. Blood sends the message only
+		// once the item is taken, which a reroll into something the player can't take yet would hold back. A "secret
+		// found" message only counts the secret. 12 such items on the stock maps.
 		auto cat = CategoryOf(a->spr.type);
-		if (!cat) continue; // keys, flags, quest items and anything unknown stay
-		// So does an item wired into the map's script: picking it up sends a message (E1M6's fire armour opens a
-		// door), or a trigger acts on it. Blood sends the message only once the item is taken, which a reroll into
-		// something the player can't take yet would hold back. A "secret found" message only counts the secret.
-		// 12 such items on the stock maps.
-		if (a->hasX() && ((a->xspr.txID != 0 && a->xspr.txID != kChannelSecretFound) || a->xspr.rxID != 0)) continue;
-		int total = 0;
-		for (int i = 0; i < cat->count; i++) total += cat->picks[i].weight;
-		int r = RandInt(rng, 0, total - 1);
-		for (int i = 0; i < cat->count; i++)
+		bool scripted = a->hasX() && ((a->xspr.txID != 0 && a->xspr.txID != kChannelSecretFound) || a->xspr.rxID != 0);
+		if (cat && !scripted)
 		{
-			if (r < cat->picks[i].weight)
+			if (cat->picks == ammoPicks)
 			{
-				RetypeItem(a, cat->picks[i].type);
-				break;
+				ammo.Push(a);
+				continue;
 			}
-			r -= cat->picks[i].weight;
+			RetypeItem(a, PickItem(rng, cat, nullptr));
 		}
+		if (int w = WeaponOf(a->spr.type)) usable[w] = true;
 	}
+	// Ammo last, leaning to those guns: their ammo weighs 4x. scripts/bloodmaps.py's census (the stock maps, a shotgun
+	// and tommy gun kit, the median map): the stock pickups could kill the map's enemies 0.75 times over with those two
+	// guns, 0.60 after an even reroll, 0.73 leaning 4x. A stock player, with every gun found so far, has 2.4.
+	for (auto a : ammo) RetypeItem(a, PickItem(rng, CategoryOf(a->spr.type), usable));
 }
 
 //---------------------------------------------------------------------------
@@ -960,16 +1220,21 @@ void Remix()
 	double depth = run.maps.Size() > 1 ? double(run.index) / double(run.maps.Size() - 1) : 0.;
 	RemixEnemies(rng, depth);
 	CovenantEnemies();
-	RemixItems(rng);
+	bool owned[kWeapMax];
+	OwnedGuns(getPlayer(myconnectindex), owned);
+	RemixItems(rng, owned);
 	PickCurse(rng);
 	SetupPressure();
+	ledger = AmmoLedger();
+	if (auto p = getPlayer(myconnectindex)) CountAmmo(ledger, p); // after the remix and Horde's count, before the kit
 	if (run.index == 0)
 	{
-		if (!run.kitGiven) GiveKit(); // after the remix, so none of it is rerolled
+		if (!run.kitGiven) GiveKit(); // after the remix, and counted out of the supplies: its ammo comes on top
 		run.kitGiven = true;
 		run.offerPending = false;
 	}
 	else RollOffers(rng, depth); // the ticker opens the choice once the map is running
+	SupplyAmmo(owned);
 }
 
 void LevelStarted()
@@ -2049,6 +2314,41 @@ CCMD(rl_cov_clear)
 {
 	for (auto& c : conditions) *c.cvar = 0;
 	Printf(PRINT_NOTIFY, "The Covenant is clear: Dread 0\n");
+}
+
+// This map's ammo: how it stood when the map started, and now.
+CCMD(rl_ammo)
+{
+	auto p = getPlayer(myconnectindex);
+	if (!run.active || run.over || gamestate != GS_LEVEL || !p || !p->GetActor())
+	{
+		Printf("rl_ammo: no run in progress\n");
+		return;
+	}
+	bool owned[kWeapMax];
+	OwnedGuns(p, owned);
+	if (ledger.counted)
+	{
+		FString given;
+		for (auto& g : ammoProfiles)
+			if (ledger.given[g.ammo] > 0) given.AppendFormat("%s%s", given.IsEmpty() ? "" : ", ", AmmoText(g, ledger.given[g.ammo]).GetChars());
+		Printf("At the start: %d enemies, %d health. Your guns' ammo, carried and on the map, could kill them %.2f times over;"
+			" the supplies (%s) made it %.2f. Target: %.2f (rl_ammo_target %d).\n", ledger.enemies, int(ledger.health), ledger.before,
+			given.IsEmpty() ? "none" : given.GetChars(), ledger.after, rl_ammo_target / 100., (int)rl_ammo_target);
+	}
+	AmmoLedger now;
+	CountAmmo(now, p);
+	Printf("Now: %d enemies, %d health; %.2f times over.\n", now.enemies, int(now.health), Coverage(now, owned));
+	for (auto& g : ammoProfiles)
+	{
+		if (!owned[g.gun]) continue;
+		int carried = p->ammoCount[g.ammo];
+		if (now.need[g.ammo] <= 0)
+			Printf("  %s: %d carried, no use against what's left\n", g.name, HudAmount(g, carried));
+		else
+			Printf("  %s: %d carried, %d more on the map; killing everything with it alone takes %d (%.2f times over)\n", g.name,
+				HudAmount(g, carried), HudAmount(g, now.have[g.ammo] - carried), HudAmount(g, now.need[g.ammo]), now.have[g.ammo] / now.need[g.ammo]);
+	}
 }
 
 CCMD(rl_kit)
