@@ -14,12 +14,12 @@
 // - eligible enemies (the base's shuffle rules: no bosses, critters, statues...;
 //   nor an enemy wired into the map's script, such as Cheogh on E1M7) reroll to
 //   random types from a threat budget that grows with depth (the stock map's
-//   total on the first map, 1.5x on the last), each looking as Blood's own maps
-//   place that type;
+//   total on the first map, 1.5x on the last); key carriers keep their kind;
 // - a chance growing from 5% to 25% makes each a champion: 2.5x health, 1.25x
 //   size, tinted, 1.5x damage;
-// - health, armor, ammo, weapon and powerup pickups reroll within their category
-//   (keys, the diving suit, jump boots and other quest-like items stay);
+// - health, armor, ammo, explosive, weapon and powerup pickups reroll within
+//   their category (keys, the diving suit, jump boots and other quest-like
+//   items stay, as do items wired into the map's script);
 // - from the second map on, a 25% chance that one of the base's timed effects
 //   curses the whole level (announced under the map's name).
 //
@@ -69,6 +69,7 @@
 #include "serializer.h"
 #include "v_draw.h"
 #include "v_font.h"
+#include "vm.h"
 #include "printf.h"
 
 extern TArray<VolumeRecord> volumes; // mapinfo.cpp: the loaded game's episodes
@@ -278,27 +279,6 @@ int KindCost(int type)
 
 struct Look { int pal; DVector2 scale; };
 
-// How Blood's own maps place each type, for a type the map being played doesn't have: every stock map (Blood and
-// Cryptic Passage) gives a type the same palette and size, and the cultists and spiders are told apart by it.
-// Black spiders are on no stock map and nothing spawns them: SPIDER2, the spider palette no other spider wears,
-// and a size between the red spider's and the Spider Mother's are a guess.
-Look StockLook(int type)
-{
-	auto look = [](int pal, int repeat) { return Look{ pal, DVector2(repeat * REPEAT_SCALE, repeat * REPEAT_SCALE) }; };
-	switch (type)
-	{
-	case kDudeSpiderBrown: return look(7, 16);
-	case kDudeSpiderRed: return look(4, 24);
-	case kDudeSpiderBlack: return look(8, 32);
-	case kDudeCultistTommy: return look(3, 40);
-	case kDudeCultistTesla: return look(11, 40);
-	case kDudeCultistTNT: return look(13, 40);
-	case kDudeGargoyleStone: return look(5, 40);
-	case kDudeZombieButcher: case kDudeGillBeast: return look(0, 48);
-	default: return look(0, 40); // the shotgun cultist, axe zombie, flesh gargoyle, phantasm, hell hound
-	}
-}
-
 void MakeChampion(DBloodActor* a)
 {
 	a->modFlags |= kModChampion;
@@ -322,6 +302,9 @@ void RemixEnemies(std::mt19937& rng, double depth)
 		// enemies of these types on Blood's and Cryptic Passage's maps.
 		if (a->xspr.txID != 0 || a->xspr.rxID != 0) continue;
 		eligible.Push(a);
+		// A key carrier keeps its kind (it can still be a champion): a gargoyle or phantasm in its place could drop
+		// the key over a pit or lava. 17 enemies on the stock maps carry one.
+		if (a->xspr.key > 0 || (a->xspr.dropMsg >= kItemKeyBase && a->xspr.dropMsg < kItemKeyMax)) continue;
 		if (a->sector() && !IsUnderwaterSector(a->sector())) reroll.Push(a); // swimmers stay what they are
 	}
 
@@ -344,9 +327,10 @@ void RemixEnemies(std::mt19937& rng, double depth)
 		for (unsigned k = 0; k < pool.Size(); k++) if (pool[k].cost <= cap) afford.Push(int(k));
 		const Kind& pick = afford.Size() ? pool[afford[RandInt(rng, 0, int(afford.Size()) - 1)]] : pool[0];
 		budget -= pick.cost;
-		auto mapLook = looks.CheckKey(pick.type); // the map's own look for that type, else the stock maps' one
-		Look look = mapLook ? *mapLook : StockLook(pick.type);
-		bmod::RetypeDude(reroll[i], pick.type, look.pal, look.scale);
+		// The map's own look for that type, if it has one. Either way the type's SEQ sets its own palette and size as it
+		// spawns (Tommy cultist 3, tesla 11, TNT 13, stone gargoyle 5...), so a type the map lacks still looks right.
+		auto look = looks.CheckKey(pick.type);
+		bmod::RetypeDude(reroll[i], pick.type, look ? look->pal : 0, look ? look->scale : DVector2(1, 1));
 	}
 
 	double chance = kChampionFirst + (kChampionLast - kChampionFirst) * depth;
@@ -373,9 +357,13 @@ const ItemPick armorPicks[] =
 const ItemPick ammoPicks[] =
 {
 	{ kItemAmmoSawedoffFew, 4 }, { kItemAmmoSawedoffBox, 2 }, { kItemAmmoTommygunFew, 4 }, { kItemAmmoTommygunDrum, 2 },
-	{ kItemAmmoFlares, 4 }, { kItemAmmoTNTBundle, 3 }, { kItemAmmoTNTBox, 1 }, { kItemAmmoSprayCan, 2 },
-	{ kItemAmmoProxBombBundle, 2 }, { kItemAmmoRemoteBombBundle, 2 }, { kItemAmmoTeslaCharge, 2 },
+	{ kItemAmmoFlares, 4 }, { kItemAmmoSprayCan, 2 }, { kItemAmmoTeslaCharge, 2 },
 	{ kItemAmmoGasolineCan, 2 }, { kItemAmmoTrappedSoul, 1 }, { kItemAmmoVoodooDoll, 1 },
+};
+// Explosives reroll only into explosives, so a map keeps the means to blast what it expects to be blasted.
+const ItemPick explosivePicks[] =
+{
+	{ kItemAmmoTNTBundle, 3 }, { kItemAmmoTNTBox, 1 }, { kItemAmmoProxBombBundle, 2 }, { kItemAmmoRemoteBombBundle, 2 },
 };
 const ItemPick weaponPicks[] =
 {
@@ -397,6 +385,7 @@ const ItemCategory itemCategories[] =
 	{ healthPicks, int(countof(healthPicks)) },
 	{ armorPicks, int(countof(armorPicks)) },
 	{ ammoPicks, int(countof(ammoPicks)) },
+	{ explosivePicks, int(countof(explosivePicks)) },
 	{ weaponPicks, int(countof(weaponPicks)) },
 	{ powerupPicks, int(countof(powerupPicks)) },
 };
@@ -454,6 +443,11 @@ void RemixItems(std::mt19937& rng)
 	{
 		auto cat = CategoryOf(a->spr.type);
 		if (!cat) continue; // keys, flags, quest items and anything unknown stay
+		// So does an item wired into the map's script: picking it up sends a message (E1M6's fire armour opens a
+		// door), or a trigger acts on it. Blood sends the message only once the item is taken, which a reroll into
+		// something the player can't take yet would hold back. A "secret found" message only counts the secret.
+		// 12 such items on the stock maps.
+		if (a->hasX() && ((a->xspr.txID != 0 && a->xspr.txID != kChannelSecretFound) || a->xspr.rxID != 0)) continue;
 		int total = 0;
 		for (int i = 0; i < cat->count; i++) total += cat->picks[i].weight;
 		int r = RandInt(rng, 0, total - 1);
@@ -628,7 +622,11 @@ bool StartRun(int episode, uint32_t seed)
 		Printf("rl_newrun: no maps found for this run\n");
 		return false;
 	}
-	if (run.active && !run.over) Printf(PRINT_NOTIFY, "Roguelite: the run in progress is abandoned\n");
+	if (run.active && !run.over)
+	{
+		Printf(PRINT_NOTIFY, "Roguelite: the run in progress is abandoned\n");
+		Bank(); // abandoning ends it: its ichor is banked, as when it ends any other way
+	}
 	run = Run();
 	run.active = true;
 	run.id = std::max((int)rl_runs, 0) + 1;
@@ -800,9 +798,9 @@ void OnDraw(DBloodPlayer* pPlayer)
 		DrawRunOver(pPlayer, sc);
 		return;
 	}
-	if (bmod::mods.hideHud) return; // the "No HUD" effect hides this too
+	DrawCurseTitle(); // even under the "No HUD" curse, which must announce itself too
+	if (bmod::mods.hideHud) return; // the "No HUD" effect hides the run line
 	DrawRunLine(sc);
-	DrawCurseTitle();
 }
 
 //---------------------------------------------------------------------------
@@ -814,6 +812,21 @@ void OnDraw(DBloodPlayer* pPlayer)
 
 DMenuDescriptor* menuDesc;        // the menu the items below were added to (compared only)
 TArray<DMenuItemBase*> menuItems; // the items added here
+
+// A menu entry that starts a run. While another run is in progress (being played, or continuable from its saves),
+// it asks first with Blood's yes/no message (OptionMenuItemSafeCommand), since starting a run ends the other one.
+DMenuItemBase* CreateRunItem(const char* label, const char* command, bool confirm)
+{
+	auto cls = confirm ? PClass::FindClass("OptionMenuItemSafeCommand") : nullptr;
+	auto init = cls ? dyn_cast<PFunction>(cls->FindSymbol("Init", false)) : nullptr;
+	if (!init) return CreateOptionMenuItemCommand(label, FName(command));
+	auto item = cls->CreateNew();
+	FString labelStr = label;
+	FString prompt = "This abandons the run in progress: its saves stop loading.\nStart a new run?";
+	VMValue params[] = { item, &labelStr, FName(command).GetIndex(), &prompt };
+	VMCall(init->Variants[0].Implementation, params, countof(params), nullptr, 0);
+	return (DMenuItemBase*)item;
+}
 
 void BuildMenu()
 {
@@ -843,6 +856,7 @@ void BuildMenu()
 	GetEpisodes(eps);
 	int count = int(eps.Size()), unlocked = Unlocked(count);
 	auto progress = GetProgress();
+	bool inProgress = (run.active && !run.over) || progress.activeRun != 0; // starting a run would end it
 	text(FStringf("Ichor banked: %d", (int)rl_ichor).GetChars(), CR_GOLD);
 	text(FStringf("Runs: %d   Won: %d", (int)rl_runs, (int)rl_wins).GetChars(), -1);
 	if (run.active && !run.over && gamestate == GS_LEVEL)
@@ -858,7 +872,7 @@ void BuildMenu()
 		if (e < unlocked)
 		{
 			if (first < 0) first = int(opt->mItems.Size());
-			add(CreateOptionMenuItemCommand(eps[e].name.GetChars(), FName(FStringf("rl_newrun %d", e + 1).GetChars())));
+			add(CreateRunItem(eps[e].name.GetChars(), FStringf("rl_newrun %d", e + 1).GetChars(), inProgress));
 		}
 		else text(FStringf("%s  (locked)", eps[e].name.GetChars()).GetChars(), CR_DARKGRAY);
 	}
@@ -866,12 +880,12 @@ void BuildMenu()
 	text("", -1);
 	header("The gauntlet");
 	if (count > 0 && unlocked >= count)
-		add(CreateOptionMenuItemCommand(progress.gauntletWon ? "Every episode in one run (won)" : "Every episode in one run", FName("rl_newrun gauntlet")));
+		add(CreateRunItem(progress.gauntletWon ? "Every episode in one run (won)" : "Every episode in one run", "rl_newrun gauntlet", inProgress));
 	else text("Unlocks once every episode is unlocked", CR_DARKGRAY);
 	text("", -1);
 	text("Winning an episode run unlocks the next one.", -1);
 	text("Dying ends the run. Starting a new run abandons the old one.", -1);
-	opt->mSelectedItem = first;
+	opt->mSelectedItem = inProgress ? -1 : first; // -1: the menu's first item (the skill), so Enter can't start a run by accident
 	opt->mScrollPos = 0;
 }
 
@@ -923,7 +937,14 @@ struct Registrar
 
 MapRecord* NextLevel(MapRecord* stockNext)
 {
-	if (!run.active || run.over || run.index < 0) return stockNext;
+	if (run.active && run.over)
+	{
+		// The player has died and an exit fires late (a delayed trigger): the level doesn't end, so the "Run over"
+		// screen stays instead of the stock next map loading outside the run.
+		gGameOptions.uGameFlags &= ~GF_AdvanceLevel;
+		return stockNext;
+	}
+	if (!run.active || run.index < 0) return stockNext;
 	if (run.exiting) // a second exit in the same tic: the same answer
 		return run.pending >= 0 && run.pending < int(run.maps.Size()) ? FindMapByName(run.maps[run.pending].GetChars()) : nullptr;
 	run.exiting = true;
@@ -952,6 +973,10 @@ void OnNewGame()
 	if (startingRun)
 	{
 		startingRun = false;
+		// Write the run's number and this game's active run now, so a crash mid-run can't lose them (its saves
+		// would be refused, and the next run would reuse its number). The last level's effects are off by now.
+		saveConfig = false;
+		WriteConfig();
 		return;
 	}
 	run = Run(); // a game outside the run; the run, if any, can still be continued from its saves
