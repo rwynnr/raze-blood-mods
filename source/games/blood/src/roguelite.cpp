@@ -166,7 +166,7 @@ constexpr int kSkipIchor = 10;                                // the reward choi
 
 struct KitItem
 {
-	FIntCVar* cvar;   // how many are bought
+	FIntCVarRef* cvar; // how many are bought
 	const char* name;
 	int item;         // the item handed over, as if picked up (its stock pickup amounts)
 	int count;        // how many of that item one purchase is
@@ -214,7 +214,7 @@ enum { kWrath, kFlesh, kHaste, kHorde, kChampions, kCurses, kFamine, kAusterity,
 
 struct Condition
 {
-	FIntCVar* cvar;
+	FIntCVarRef* cvar;
 	const char* name;
 	int dread;        // per rank
 };
@@ -268,6 +268,9 @@ bool refusedLoad;    // a save of a run that has ended was loaded: back to the m
 FString menuMessage; // shown when the game is next back at the main menu
 bool saveConfig;     // the meta progress changed: write the config at the main menu
 int nextCurseTry;
+
+int RandInt(std::mt19937& rng, int lo, int hi) { return std::uniform_int_distribution<int>(lo, hi)(rng); }
+double Rand01(std::mt19937& rng) { return std::uniform_real_distribution<double>(0., 1.)(rng); }
 
 //---------------------------------------------------------------------------
 //
@@ -532,8 +535,6 @@ void GrantReward(int id)
 	if (p->hasWeapon[kWeapDynamite]) GiveItem(p, kItemAmmoTNTBox);
 }
 
-int RandInt(std::mt19937& rng, int lo, int hi) { return std::uniform_int_distribution<int>(lo, hi)(rng); }
-double Rand01(std::mt19937& rng) { return std::uniform_real_distribution<double>(0., 1.)(rng); }
 
 //---------------------------------------------------------------------------
 //
