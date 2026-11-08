@@ -70,6 +70,7 @@ namespace bmod
 	double EnemyTimeScale(); // mods.enemyTimeScale * modeEnemyTimeScale
 
 	int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage);
+	int SpawnWave(int count); // the enemy wave: up to count enemies teleport in behind the player; returns how many came
 	void ModifyView(DVector3& pos, DRotator& angles, double interpfrac); // also drives shader effects
 	void ModifyShot(DBloodActor* shooter, DVector3& dv);                // actFireVector, before normalizing
 	double ScaleRange(DBloodActor* shooter, double range);               // actFireVector reach
