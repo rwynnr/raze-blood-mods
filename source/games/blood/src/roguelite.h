@@ -24,7 +24,8 @@ namespace rogue
 	MapRecord* NextLevel(MapRecord* stockNext);                            // levelEndLevel: a run picks its own next map (null: the run is won)
 	bool OnDeathRestart();                                                 // playerProcess, Use while dead in single player: true = handled
 	void OnNewGame();                                                      // GameInterface::NewGame
-	int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage); // actDamageSprite: champions hit harder
+	int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage); // actDamageSprite: champions and the Covenant's Wrath hit harder
+	int ScaleHealing(DBloodActor* actor, int add);                         // actHealDude: the Covenant's Famine heals less
 	void TintSprite(DBloodActor* owner, tspritetype* tspr);               // viewProcessSprites: champions are tinted
 	void Serialize(FSerializer& arc);                                      // SerializeGameState: the run's save block
 	void OnMenuOpened();                                                   // GameInterface::MenuOpened: lists the runs in the Roguelite menu

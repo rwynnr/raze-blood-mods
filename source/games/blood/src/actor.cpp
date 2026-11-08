@@ -2871,6 +2871,7 @@ DBloodActor* actDropObject(DBloodActor* actor, int nType)
 bool actHealDude(DBloodActor* actor, int add, int threshold)
 {
 	if (!actor) return false;
+	add = rogue::ScaleHealing(actor, add); // blood2d roguelite: the Covenant's Famine (stock outside a run)
 	add <<= 4;
 	threshold <<= 4;
 	if (actor->xspr.health < (unsigned)threshold)
