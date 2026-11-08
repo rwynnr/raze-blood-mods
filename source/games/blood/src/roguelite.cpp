@@ -1205,7 +1205,7 @@ void SetupCrypt()
 		bool open = PortalOpen(i, int(eps.Size()));
 		sect->floorshade = open ? 0 : 48;
 		sect->ceilingshade = open ? 4 : 48;
-		for (auto& wal : sect->walls) wal.shade = !open ? 48 : wal.walltexture() == vortex ? -20 : 4;
+		for (auto& wal : sect->walls) wal.shade = !open ? 48 : wal.walltexture == vortex ? -20 : 4;
 	}
 	auto p = getPlayer(myconnectindex);
 	if (p && p->GetActor()) // standing in a portal at the start doesn't count as walking in
