@@ -21,8 +21,10 @@ class DBloodPlayer;
 namespace rogue
 {
 	// DBloodActor::modFlags: a champion (elite) enemy; a pickup holding its own amount of ammo (in xspr.data1); a red
-	// champion (the rarer tier; also a champion); a missile from the run's forged gun
-	enum { kModChampion = 1, kModBigPickup = 2, kModRedChampion = 4, kModForged = 8 };
+	// champion (the rarer tier; also a champion); a missile from the run's forged gun, with bits 16-32 its offspring code
+	// (0 the gun's own shot, 1 a Litany's offspring, 2 offspring flying back to you, 3 the gun's own shot, split) and 64
+	// for one bought with blood (the Blood Price)
+	enum { kModChampion = 1, kModBigPickup = 2, kModRedChampion = 4, kModForged = 8, kModOffspring = 48, kModBloodBought = 64 };
 
 	MapRecord* NextLevel(MapRecord* stockNext);                            // levelEndLevel: a run picks its own next map (null: the run is won)
 	bool OnDeathRestart();                                                 // playerProcess, Use while dead in single player: true = handled
@@ -42,6 +44,14 @@ namespace rogue
 		ForgeImpact(DBloodActor* missile, DBloodActor* hit);
 		~ForgeImpact();
 		bool active = false;
+		DBloodActor* missile = nullptr;
+		int type = 0;                                                      // the missile's type (the stock code changes it)
+		bool liveHit = false, sky = false, larder = false, fetch = false;
+	};
+	struct ForgeExplosion                                                  // actCheckExplosion: a forged blast (Brimstone Leap)
+	{
+		ForgeExplosion(DBloodActor* explosion);
+		~ForgeExplosion();
 	};
 	int TakePickup(DBloodActor* item, int room);                           // PickupAmmo, PickupWeapon: the ammo a run's pickup gives (-1: stock)
 	bool PickupTaken(DBloodActor* item, const char*& msg);                 // PickUp: names the amount; true = the rest stays on the map

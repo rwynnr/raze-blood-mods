@@ -37,6 +37,9 @@
 // the Armory, fires the runes' payload in place of its own primary fire: the
 // stock fire function still runs (hands, sounds, ammo, timing), its shots are
 // swallowed and their aims recorded, and the payload goes out along them.
+// Litanies: two parts of a forged gun that together wake an effect neither has
+// (docs/roguelite-forge.md). Shown once both are carved, kept in the Book across
+// runs; at most two sing on a gun; banes add a point of Dread.
 //
 // Dying ends the run: a "Run over" screen, then the main menu (no reload).
 // Finishing the last map wins it: "Run complete" at the menu, and the next
@@ -170,6 +173,8 @@ RL_FORGE(rl_forge_path, 2)
 RL_FORGE(rl_forge_wound, 2)
 RL_FORGE(rl_forge_penance, 1)
 CVARD(Int, rl_forge_added, 0, CVAR_ARCHIVE, "roguelite Forge: the Vessel the Forge itself put in the kit (taken out again with it)")
+CVARD(String, rl_forge_sing, "", CVAR_ARCHIVE, "roguelite Forge: Litanies chosen to sing (ids), and '-id' for ones silenced")
+CVARD(String, rl_litanies, "", CVAR_ARCHIVE, "roguelite Forge: the Litanies found (ids), kept across runs")
 
 BEGIN_BLD_NS
 
@@ -349,6 +354,62 @@ constexpr int kForgeHealPerSecond = 10;              // most the forge heals you
 constexpr double kHoundCone = 25, kHoundRange = 1024; // degrees, world units
 const int forgeSlotMax[kForgeSlots] = { 3, 2, 2, 2, 1 };
 
+//---------------------------------------------------------------------------
+//
+// Litanies: pairs of parts that wake an effect neither has
+//
+//---------------------------------------------------------------------------
+
+enum { kLitShears, kLitCerberus, kLitBloodFeud, kLitCenser, kLitHymn, kLitCandle, kLitRequiem, kLitLarder, kLitLastRites,
+	kLitWitchfire, kLitFetch, kLitLeap, kNumLitanies };
+enum { kKindBoon, kKindGamble, kKindBane, kKindOddity };
+enum { kRivalMiss = 1, kRivalGrave = 2 }; // Litanies that change the same thing can't both sing
+struct ForgePart { int slot, value; };   // a Vessel part is its own round: it needs no Mouth carved
+struct Litany
+{
+	const char* id;
+	const char* name;
+	ForgePart a, b;
+	int kind;
+	const char* sentence;
+	int rivals;
+};
+const Litany litanies[kNumLitanies] =
+{
+	{ "shears", "The Shears", { kForgeMouth, kMouthCleaver }, { kForgePath, kPathChoir }, kKindBoon,
+		"Aimed at a foe, the three cleavers close on it like shears.", 0 },
+	{ "cerberus", "Cerberus", { kForgeMouth, kMouthHellmouth }, { kForgePath, kPathHound }, kKindBoon,
+		"Each hunting fireball grows a second head that hunts another foe.", 0 },
+	{ "bloodfeud", "Blood Feud", { kForgePath, kPathHound }, { kForgePenance, kPenanceBloodPrice }, kKindBoon,
+		"Dry, your hunters go for whoever last drew your blood.", 0 },
+	{ "censer", "The Censer", { kForgeVessel, kVesselShotgun }, { kForgeWound, kWoundPyre }, kKindBoon,
+		"Each pull also swings three spray-can flames along the spread.", 0 },
+	{ "hymn", "Hymn of Ash", { kForgeMouth, kMouthHellmouth }, { kForgePath, kPathChoir }, kKindGamble,
+		"A fireball that strikes flesh gives a round back; stone drinks one.", 0 },
+	{ "candle", "Corpse-Candle", { kForgeVessel, kVesselFlare }, { kForgeWound, kWoundGrave }, kKindGamble,
+		"A flare lodged in flesh is a fuse: a bigger blast in 1.5 s.", 0 },
+	{ "requiem", "Requiem", { kForgePath, kPathChoir }, { kForgeWound, kWoundGrave }, kKindGamble,
+		"Blasts that land together ring out as one, bigger; it can reach you.", kRivalGrave },
+	{ "larder", "The Larder of Knives", { kForgeMouth, kMouthCleaver }, { kForgeWound, kWoundGrave }, kKindGamble,
+		"Missed cleavers stick and wait; whoever comes near sets them off.", kRivalMiss | kRivalGrave },
+	{ "lastrites", "Last Rites", { kForgeMouth, kMouthHellmouth }, { kForgePenance, kPenanceBloodPrice }, kKindBane,
+		"Dry pulls can kill you; near death, blood-bought fireballs burst bigger.", 0 },
+	{ "witchfire", "Witchfire", { kForgeMouth, kMouthCleaver }, { kForgeWound, kWoundPyre }, kKindBane,
+		"A cleaver striking a burning foe scatters its fire on all near, you too.", 0 },
+	{ "fetch", "The Fetch", { kForgeMouth, kMouthCleaver }, { kForgePath, kPathHound }, kKindOddity,
+		"A hunting cleaver that strikes stone flies back; catch it to heal.", kRivalMiss },
+	{ "leap", "Brimstone Leap", { kForgeMouth, kMouthHellmouth }, { kForgeWound, kWoundGrave }, kKindOddity,
+		"Your own blasts throw you instead of wounding you; their fire still bites.", 0 },
+};
+const char* const litanyKinds[] = { "boon", "gamble", "bane", "oddity" };
+const char* const circleNames[kForgeSlots] = { "the Vessel", "the Mouth", "the Path", "the Wound", "the Penance" };
+constexpr int kMaxSinging = 2;
+
+// The Litany announced on this map, and which have fired here (each is announced once a map).
+int litanyShown = -1, litanyShownAt = INT_MIN / 2;
+unsigned litanyFired;
+constexpr int kLitanyTitle = 2 * kClock;
+
 struct Run
 {
 	bool active = false;
@@ -376,6 +437,7 @@ struct Run
 	int nextOvertime = 0;         // Hourglass: PlayClock of the next wave past the par time
 	int unspent = 0;              // kit points not spent: ichor once the first map is cleared
 	int forge[kForgeSlots] = {};  // the Forge's recipe, as it was when the run started
+	int litanies = 0;             // the Litanies that sing on it (bits)
 };
 
 Run run;
@@ -676,6 +738,124 @@ const char* RuneName(int slot, int value)
 	return forgeVessels[value].name;
 }
 
+// Litanies: is a part carved, is a Litany lit (both its parts are), and which sing (two at most).
+bool PartCarved(const int* f, const ForgePart& part)
+{
+	if (part.slot == kForgeVessel) return f[kForgeVessel] == part.value && !f[kForgeMouth];
+	return f[kForgeVessel] && f[part.slot] == part.value;
+}
+
+bool LitanyLit(const int* f, int k) { return PartCarved(f, litanies[k].a) && PartCarved(f, litanies[k].b); }
+
+FString PartName(const ForgePart& part)
+{
+	if (part.slot == kForgeVessel) return FStringf("the %s's own round", forgeVessels[part.value].name);
+	return RuneName(part.slot, part.value);
+}
+
+TArray<FString> SingList()
+{
+	auto v = FString(*rl_forge_sing).Split(",", FString::TOK_SKIPEMPTY);
+	return v;
+}
+
+int LitanyIndex(const char* id)
+{
+	for (int k = 0; k < kNumLitanies; k++) if (!stricmp(litanies[k].id, id)) return k;
+	return -1;
+}
+
+// The singing set: the Litanies chosen to sing (lit ones, in the order chosen), then by default the first lit ones in
+// table order that aren't banes or silenced; rivals give way to the first; two at most.
+int ResolveSinging(const int* f)
+{
+	int sing = 0, count = 0, rivals = 0;
+	auto take = [&](int k)
+	{
+		if (k < 0 || count >= kMaxSinging || (sing & (1 << k)) || !LitanyLit(f, k) || (litanies[k].rivals & rivals)) return;
+		sing |= 1 << k;
+		rivals |= litanies[k].rivals;
+		count++;
+	};
+	auto list = SingList();
+	unsigned silenced = 0;
+	for (auto& e : list)
+	{
+		if (e[0] == '-') { int k = LitanyIndex(e.GetChars() + 1); if (k >= 0) silenced |= 1u << k; }
+		else take(LitanyIndex(e.GetChars()));
+	}
+	for (int k = 0; k < kNumLitanies; k++)
+		if (litanies[k].kind != kKindBane && !(silenced & (1u << k))) take(k);
+	return sing;
+}
+
+bool LitanyFound(int k)
+{
+	auto found = FString(*rl_litanies).Split(",", FString::TOK_SKIPEMPTY);
+	for (auto& e : found) if (!e.CompareNoCase(litanies[k].id)) return true;
+	return false;
+}
+
+unsigned litanyNew; // found this session (the menu says "new")
+
+// Both parts carved: the Litany is found, and the Book keeps it.
+void DiscoverLitanies(const int* f)
+{
+	for (int k = 0; k < kNumLitanies; k++)
+	{
+		if (!LitanyLit(f, k) || LitanyFound(k)) continue;
+		FString found = *rl_litanies;
+		found.AppendFormat("%s%s", found.IsEmpty() ? "" : ",", litanies[k].id);
+		rl_litanies = found.GetChars();
+		litanyNew |= 1u << k;
+		saveConfig = true;
+		Printf(PRINT_NOTIFY, "Litany found: %s\n", litanies[k].name);
+	}
+}
+
+// The lit Litanies of a recipe, in table order (the Forge menu's lines).
+int LitLitanies(const int* f, int* out, int most)
+{
+	int n = 0;
+	for (int k = 0; k < kNumLitanies && n < most; k++) if (LitanyLit(f, k)) out[n++] = k;
+	return n;
+}
+
+// A hint at the Litanies a recipe could still wake: their missing part's circle, never the rune.
+FString LitanyRiddle(const int* f)
+{
+	if (!f[kForgeVessel]) return "";
+	int stirs[kForgeSlots] = {}, total = 0;
+	for (int k = 0; k < kNumLitanies; k++)
+	{
+		if (LitanyLit(f, k)) continue;
+		bool a = PartCarved(f, litanies[k].a), b = PartCarved(f, litanies[k].b);
+		if (a == b) continue;
+		auto& missing = a ? litanies[k].b : litanies[k].a;
+		if (missing.slot == kForgeVessel) continue;
+		stirs[missing.slot]++;
+		total++;
+	}
+	if (!total) return "";
+	FString s = FStringf("%d more %s stir: ", total, total == 1 ? "Litany" : "Litanies");
+	bool first = true;
+	for (int slot = 0; slot < kForgeSlots; slot++)
+	{
+		if (!stirs[slot]) continue;
+		s.AppendFormat("%s%d in %s circle", first ? "" : ", ", stirs[slot], circleNames[slot]);
+		first = false;
+	}
+	return s;
+}
+
+// The run's Dread: the Covenant's, and a point for each bane that sings.
+int RunDread()
+{
+	int d = Dread(run.cov);
+	for (int k = 0; k < kNumLitanies; k++) if ((run.litanies & (1 << k)) && litanies[k].kind == kKindBane) d++;
+	return d;
+}
+
 // The run's first map: the kit is handed over (after the remix, so none of it is rerolled).
 void GiveKit()
 {
@@ -690,7 +870,12 @@ void GiveKit()
 		if (run.kit[i] > 1) list.AppendFormat(" x%d", run.kit[i]);
 	}
 	if (list.IsNotEmpty()) Printf(PRINT_NOTIFY, "Your kit: %s\n", list.GetChars());
-	if (run.forge[kForgeVessel]) Printf(PRINT_NOTIFY, "Your forged gun: %s\n", ForgeName(run.forge).GetChars());
+	if (run.forge[kForgeVessel])
+	{
+		FString sing;
+		for (int k = 0; k < kNumLitanies; k++) if (run.litanies & (1 << k)) sing.AppendFormat("%s%s", sing.IsEmpty() ? "" : " and ", litanies[k].name);
+		Printf(PRINT_NOTIFY, "Your forged gun: %s%s%s\n", ForgeName(run.forge).GetChars(), sing.IsEmpty() ? "" : "; singing: ", sing.GetChars());
+	}
 }
 
 //---------------------------------------------------------------------------
@@ -1842,7 +2027,7 @@ void WriteConfig()
 }
 
 // The run's ichor with the Covenant's bonus: +10% per point of Dread.
-int BankedIchor() { return int(run.ichor * (1. + kDreadIchor * Dread(run.cov)) + 0.5); }
+int BankedIchor() { return int(run.ichor * (1. + kDreadIchor * RunDread()) + 0.5); }
 
 void Bank()
 {
@@ -1858,7 +2043,7 @@ void Bank()
 
 FString RunStats()
 {
-	int dread = Dread(run.cov);
+	int dread = RunDread();
 	FString bonus = dread ? FStringf(", +%d%% for Dread %d", int(kDreadIchor * 100 * dread + 0.5), dread) : FString();
 	return FStringf("Maps cleared: %d of %d\nKills: %d (%d champions)\nIchor: +%d%s (banked: %d)",
 		run.cleared, int(run.maps.Size()), run.kills, run.champions, BankedIchor(), bonus.GetChars(), (int)rl_ichor);
@@ -1940,6 +2125,7 @@ bool StartRun(int episode, uint32_t seed)
 	for (int i = 0; i < kNumKit; i++) run.kit[i] = *kitItems[i].cvar;
 	for (int c = 0; c < kNumConditions; c++) run.cov[c] = *conditions[c].cvar;
 	ForgeRecipe(run.forge);
+	run.litanies = ResolveSinging(run.forge);
 	run.unspent = budget - cost;
 	startingRun = true;
 	saveConfig = true;
@@ -2113,6 +2299,7 @@ void OnEvent(const bmod::EventInfo& ev)
 	switch (ev.type)
 	{
 	case bmod::Event::LevelStart:
+		ResetLitanies();
 		bmod::modeActorSpeed = RedSpeed; // only actors a run marked are faster
 		bmod::modeWaveSpawned = WaveSpawned;
 		if (IsCryptLevel()) SetupCrypt();
@@ -2120,6 +2307,13 @@ void OnEvent(const bmod::EventInfo& ev)
 		LevelStarted();
 		break;
 	case bmod::Event::SaveLoaded:
+		ResetLitanies();
+		if (run.active && !run.over && Sings(kLitCandle)) // lodged candles get a fresh fuse
+		{
+			BloodStatIterator it(kStatFlare);
+			while (auto f = it.Next())
+				if ((f->modFlags & kModForged) && f->insector()) candles.Push({ f, PlayClock + kClock * 3 / 2, f->spr.pos, f->sector() });
+		}
 		bmod::modeActorSpeed = RedSpeed;
 		bmod::modeWaveSpawned = WaveSpawned;
 		nextCurseTry = 0;
@@ -2259,6 +2453,17 @@ void DrawCurseTitle()
 		DTA_FullscreenScale, FSMode_Fit320x200, DTA_Alpha, alpha, TAG_DONE);
 }
 
+void DrawLitanyTitle()
+{
+	int age = PlayClock - litanyShownAt;
+	if (litanyShown < 0 || litanyShown >= kNumLitanies || age < 0 || age >= kLitanyTitle) return;
+	double alpha = std::clamp((kLitanyTitle - age) / (0.5 * kClock), 0., 1.);
+	FStringf title("Litany: %s", litanies[litanyShown].name);
+	double w = SmallFont->StringWidth(title.GetChars());
+	DrawText(twod, SmallFont, CR_GOLD, 160 - w / 2, 50 + 2 * BigFont->GetHeight() + 24, title.GetChars(), DTA_FullscreenScale, FSMode_Fit320x200,
+		DTA_Alpha, alpha, TAG_DONE);
+}
+
 void DrawRunOver(DBloodPlayer* pPlayer, double sc)
 {
 	auto actor = pPlayer ? pPlayer->GetActor() : nullptr;
@@ -2364,6 +2569,7 @@ void OnDraw(DBloodPlayer* pPlayer)
 		return;
 	}
 	DrawCurseTitle(); // even under the "No HUD" curse, which must announce itself too
+	DrawLitanyTitle();
 	if (bmod::mods.hideHud) return; // the "No HUD" effect hides the run line
 	DrawRunLine(sc);
 }
@@ -2523,7 +2729,24 @@ void UpdateMenus()
 			SetLabel(m->mItems[3], ForgeAmmoLine(f));
 			SetLabel(m->mItems[4], forgeNote);
 		}
+		// Items 6-10: Vessel..Penance; 11 blank; 12 the Litanies' heading; 13-16 the lit Litanies; 17 the riddle.
+		if (m->mItems.Size() > 17)
+		{
+			int lit[4], n = LitLitanies(f, lit, 4), sing = ResolveSinging(f);
+			for (int i = 0; i < 4; i++)
+			{
+				if (i >= n) { SetLabel(m->mItems[13 + i], " "); continue; }
+				int k = lit[i];
+				auto& L = litanies[k];
+				SetLabel(m->mItems[13 + i], FStringf("%s %s (%s%s)%s: %s", (sing & (1 << k)) ? "[sings]" : "[silent]", L.name, litanyKinds[L.kind],
+					L.kind == kKindBane ? ", +1 Dread" : "", (litanyNew & (1u << k)) ? " NEW" : "", L.sentence));
+			}
+			FString riddle = LitanyRiddle(f);
+			if (riddle.IsEmpty() && f[kForgeVessel] && !n) riddle = "No Litany yet: carve runes from other circles.";
+			SetLabel(m->mItems[17], riddle.IsEmpty() ? FString(" ") : riddle);
+		}
 	}
+	BuildBookMenu();
 	if (auto m = FindOptionMenu("RogueliteCovenant"))
 	{
 		int dread = ChosenDread();
@@ -2531,6 +2754,38 @@ void UpdateMenus()
 		if (m->mItems.Size())
 			SetLabel(m->mItems[0], dread ? FStringf("Dread %d: +%d%% ichor", dread, int(kDreadIchor * 100 * dread + 0.5)) : FString("No conditions: Dread 0"));
 	}
+}
+
+// The Book of Litanies: the found ones with their parts, the rest as riddles.
+void BuildBookMenu()
+{
+	auto opt = FindOptionMenu("RogueliteBook");
+	if (!opt) return;
+	opt->mItems.Clear();
+	auto add = [&](DMenuItemBase* item)
+	{
+		if (!item) return;
+		GC::WriteBarrier(opt, item);
+		opt->mItems.Push(item);
+	};
+	auto text = [&](const FString& t, int color) { add(CreateOptionMenuItemStaticText(t.GetChars(), color < 0 ? -1 : 0x12340000 | color)); };
+	int found = 0;
+	for (int k = 0; k < kNumLitanies; k++) if (LitanyFound(k)) found++;
+	opt->mTitle.Format("The Book of Litanies: %d of %d", found, kNumLitanies);
+	text(" ", -1);
+	static const int kindColour[] = { CR_GREEN, CR_GOLD, CR_RED, CR_PURPLE };
+	for (int k = 0; k < kNumLitanies; k++)
+	{
+		auto& L = litanies[k];
+		if (LitanyFound(k))
+		{
+			text(FStringf("%s (%s): %s + %s", L.name, litanyKinds[L.kind], PartName(L.a).GetChars(), PartName(L.b).GetChars()), kindColour[L.kind]);
+			text(L.sentence, CR_GRAY);
+		}
+		else text(FStringf("??? (%s): a part of %s and one of %s", litanyKinds[L.kind], circleNames[L.a.slot], circleNames[L.b.slot]), CR_DARKGRAY);
+	}
+	opt->mSelectedItem = -1;
+	opt->mScrollPos = 0;
 }
 
 void BuildPickMenu()
@@ -2598,6 +2853,7 @@ struct Registrar
 	{
 		bmod::AddListener(OnEvent);
 		bmod::AddTicker(OnTick);
+		bmod::AddTicker([] { ForgeTick(); });
 		bmod::AddDrawer(OnDraw);
 		::gModMainMenuHook = [] { OnMainMenu(); };
 		::gModMapIntroHook = [](MapRecord* map, CutsceneDef* stock) { return MapIntro(map, stock); };
@@ -2686,6 +2942,13 @@ static bool forgeEmitting;             // the Forge's own shots pass
 static TArray<DBloodActor*> forgeHits; // what the Forge's hitscans hit this pull (for the Pyre)
 static int forgeImpacts;               // inside a forged missile's impact: its healing is capped
 static int forgeHealSecond = -1, forgeHealed;
+static DBloodActor* forgeScent;          // Blood Feud: the last foe that drew your blood (compared, never followed)
+static int forgeScentAt = INT_MIN / 2;
+static DBloodActor* forgeExplosionNow;   // Brimstone Leap: the forged blast being worked out
+static TArray<DBloodActor*> forgeKicked; // the blasts that have thrown you already
+static bool Sings(int k) { return run.active && !run.over && (run.litanies & (1 << k)); }
+constexpr double kLeapKick = -14;        // Brimstone Leap's throw, upward (z grows down)
+static void LitanyFired(int k);
 
 //---------------------------------------------------------------------------
 //
@@ -2737,8 +3000,27 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
 	if (!source || !target || damage <= 0) return damage;
 	if (forgeEmitting && source->IsPlayerActor() && target != source && target->IsDudeActor() && !target->IsPlayerActor())
 		if (forgeHits.Find(target) == forgeHits.Size()) forgeHits.Push(target); // a forged hitscan's hit
+	// Brimstone Leap: your own forged blast throws you, the first tic it reaches you, and doesn't wound you.
+	if (forgeExplosionNow && target->IsPlayerActor() && target == getPlayer(myconnectindex)->GetActor())
+	{
+		if (forgeKicked.Find(forgeExplosionNow) == forgeKicked.Size())
+		{
+			if (forgeKicked.Size() > 64) forgeKicked.Clear();
+			forgeKicked.Push(forgeExplosionNow);
+			DVector2 away = target->spr.pos.XY() - forgeExplosionNow->spr.pos.XY();
+			if (away.LengthSquared() > 1) target->vel.XY() += away.Unit() * 4.;
+			target->vel.Z = std::min(target->vel.Z, kLeapKick); // a little over a jump (-11.7): a 64-unit ledge from your feet
+			LitanyFired(kLitLeap);
+		}
+		return 0;
+	}
 	auto s = source;
 	for (int i = 0; i < 2 && s && !s->IsDudeActor(); i++) s = s->GetOwner(); // a missile's or explosion's owner
+	if (s && s != target && s->IsDudeActor() && !s->IsPlayerActor() && target->IsPlayerActor())
+	{
+		forgeScent = s; // Blood Feud's quarry
+		forgeScentAt = PlayClock;
+	}
 	if (!s || s == target || !s->IsDudeActor() || s->IsPlayerActor()) return damage;
 	if (s->modFlags & kModRedChampion) damage += damage / 2;  // red champions hit 1.5x
 	else if (s->modFlags & kModChampion) damage += damage / 4; // champions 1.25x
@@ -2784,39 +3066,201 @@ static bool BloodPriced() { return run.forge[kForgePenance] == kPenanceBloodPric
 static bool CanPayInBlood(DBloodPlayer* p)
 {
 	auto a = p ? p->GetActor() : nullptr;
-	return a && a->hasX() && a->xspr.health > unsigned((kBloodPrice << 4) + 16);
+	if (!a || !a->hasX() || a->xspr.health <= 0) return false;
+	if (Sings(kLitLastRites)) return true; // Last Rites: at any health
+	return a->xspr.health > unsigned((kBloodPrice << 4) + 16);
 }
 
 // Taken from health directly, as the dry life leech feeds on you, but never to death and never scaled by skill.
 static bool PayInBlood(DBloodPlayer* p)
 {
 	if (!CanPayInBlood(p)) return false;
-	p->GetActor()->xspr.health -= kBloodPrice << 4;
+	auto a = p->GetActor();
+	if (a->xspr.health < unsigned((kBloodPrice << 4) + 16)) // only Last Rites gets here: the price is your life
+	{
+		LitanyFired(kLitLastRites);
+		actDamageSprite(a, a, kDamageFall, 1000 << 4);
+		return false; // the killing pull fires nothing
+	}
+	a->xspr.health -= kBloodPrice << 4;
 	return true;
 }
 
 // The Hound's Nose: the nearest foe within the cone ahead, in sight.
-static DBloodActor* HoundTarget(DBloodPlayer* p, const DVector3& aim)
+// The nearest live foe in sight from a point, within a cone around a heading and a range (exclude: one not to pick).
+static DBloodActor* HoundFoe(const DVector3& from, sectortype* sect, DAngle heading, double cone, double range, DBloodActor* exclude = nullptr)
 {
-	auto pl = p->GetActor();
-	DVector3 eye(pl->spr.pos.XY(), p->zWeapon);
-	DAngle ahead = aim.XY().Angle();
 	DBloodActor* best = nullptr;
-	double bestDist = kHoundRange;
+	double bestDist = range;
 	BloodStatIterator it(kStatDude);
 	while (auto a = it.Next())
 	{
-		if (a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !AllowedKillType(a) || !a->insector()) continue;
-		DVector2 d = a->spr.pos.XY() - eye.XY();
+		if (a == exclude || a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !AllowedKillType(a) || !a->insector()) continue;
+		DVector2 d = a->spr.pos.XY() - from.XY();
 		double dist = d.Length();
-		if (dist >= bestDist || absangle(d.Angle(), ahead).Degrees() > kHoundCone) continue;
+		if (dist >= bestDist || absangle(d.Angle(), heading).Degrees() > cone) continue;
 		double top, bottom;
 		GetActorExtents(a, &top, &bottom);
-		if (!cansee(eye, pl->sector(), DVector3(a->spr.pos.XY(), (top + bottom) / 2), a->sector())) continue;
+		if (!cansee(from, sect, DVector3(a->spr.pos.XY(), (top + bottom) / 2), a->sector())) continue;
 		best = a;
 		bestDist = dist;
 	}
 	return best;
+}
+
+static DBloodActor* HoundTarget(DBloodPlayer* p, const DVector3& aim)
+{
+	auto pl = p->GetActor();
+	return HoundFoe(DVector3(pl->spr.pos.XY(), p->zWeapon), pl->sector(), aim.XY().Angle(), kHoundCone, kHoundRange);
+}
+
+static DVector3 MiddleOf(DBloodActor* a)
+{
+	double top, bottom;
+	GetActorExtents(a, &top, &bottom);
+	return DVector3(a->spr.pos.XY(), (top + bottom) / 2);
+}
+
+static int Offspring(DBloodActor* a) { return (a->modFlags & kModOffspring) >> 4; }
+static void SetOffspring(DBloodActor* a, int code) { a->modFlags = uint8_t((a->modFlags & ~kModOffspring) | ((code & 3) << 4)); }
+
+// A missile a Litany spawns away from the gun (a second head, a cleaver flying back): the player's, forged, with its
+// offspring code, set up as actFireMissile does but without its trace from the shooter's eye.
+static DBloodActor* ForgeSpawnMissile(const DVector3& pos, sectortype* sect, const DVector3& dir, int type, int offspring)
+{
+	auto p = getPlayer(myconnectindex);
+	if (!p || !p->GetActor() || !sect || type < kMissileBase || type >= kMissileMax || dir.LengthSquared() <= 0) return nullptr;
+	auto pl = p->GetActor();
+	auto& mi = missileInfo[type - kMissileBase];
+	auto m = actSpawnSprite(sect, pos, kStatProjectile, true);
+	if (!m) return nullptr;
+	m->spr.cstat2 |= CSTAT2_SPRITE_MAPPED;
+	m->spr.type = type;
+	m->spr.shade = mi.shade;
+	m->spr.pal = 0;
+	m->clipdist = mi.fClipDist();
+	m->spr.flags = 1;
+	m->spr.scale = DVector2(mi.xrepeat * REPEAT_SCALE, mi.yrepeat * REPEAT_SCALE);
+	m->spr.setspritetexture(mi.textureID());
+	m->spr.Angles.Yaw = dir.XY().Angle() + mapangle(mi.angleOfs);
+	m->vel = dir.Unit() * mi.fVelocity();
+	m->SetOwner(pl);
+	m->spr.cstat |= CSTAT_SPRITE_BLOCK;
+	m->SetTarget(nullptr);
+	m->modFlags |= kModForged;
+	SetOffspring(m, offspring);
+	evPostActor(m, 600, kCallbackRemove);
+	actBuildMissile(m, pl);
+	return m;
+}
+
+// A blast of the player's: small (a TNT stick, 75), standard (a bundle, 150) or large (225), forged.
+static void ForgeBlast(const DVector3& pos, sectortype* sect, int kind)
+{
+	auto p = getPlayer(myconnectindex);
+	if (!p || !p->GetActor() || !sect) return;
+	auto t = actSpawnThing(sect, pos, kind == 0 ? kThingArmedTNTStick : kThingArmedTNTBundle);
+	if (!t) return;
+	t->SetOwner(p->GetActor());
+	t->modFlags |= kModForged;
+	actExplodeSprite(t);
+	if (kind >= 2 && t->spr.statnum == kStatExplosion) // retyped to the large explosion: actCheckExplosion reads its type
+	{
+		auto& e = explodeInfo[kExplosionLarge];
+		t->spr.type = kExplosionLarge;
+		t->spr.scale = DVector2(e.repeat * REPEAT_SCALE, e.repeat * REPEAT_SCALE);
+		t->xspr.data1 = e.ticks;
+		t->xspr.data2 = e.quakeEffect;
+		t->xspr.data3 = e.flashEffect;
+		sfxPlay3DSound(t, 305, -1, 0);
+	}
+}
+
+// Healing from a Litany, under the Forge's cap (and Famine).
+static void ForgeHeal(int n)
+{
+	auto p = getPlayer(myconnectindex);
+	if (!p || !p->GetActor() || p->GetActor()->xspr.health <= 0) return;
+	forgeImpacts++;
+	actHealDude(p->GetActor(), n, getDudeInfo(kDudePlayer1)->startHealth);
+	forgeImpacts--;
+}
+
+// A burn that tops up to n, never adds (adding climbs to the 2400 cap).
+static void BurnTo(DBloodActor* source, DBloodActor* a, int n)
+{
+	if (!a || !a->hasX() || a->xspr.burnTime >= unsigned(n)) return;
+	if (!a->xspr.burnTime) evPostActor(a, 0, kCallbackFXFlameLick);
+	actBurnSprite(source, a, n - a->xspr.burnTime);
+}
+
+// A singing Litany at work: announced the first time on each map.
+static void LitanyFired(int k)
+{
+	if (k < 0 || k >= kNumLitanies || (litanyFired & (1u << k))) return;
+	litanyFired |= 1u << k;
+	litanyShown = k;
+	litanyShownAt = PlayClock;
+	Printf(PRINT_NOTIFY, "Litany: %s\n", litanies[k].name);
+}
+
+// Witchfire: when the Pyre lit each foe (a foe burning but not listed counts as lit long ago).
+struct LitAt { DBloodActor* actor; int at; };
+static TArray<LitAt> forgeLit;
+static void NoteLit(DBloodActor* a)
+{
+	for (auto& l : forgeLit) if (l.actor == a) { l.at = PlayClock; return; }
+	if (forgeLit.Size() > 64) forgeLit.Delete(0);
+	forgeLit.Push({ a, PlayClock });
+}
+static int LitFor(DBloodActor* a)
+{
+	for (auto& l : forgeLit) if (l.actor == a) return PlayClock - l.at;
+	return INT_MAX / 2;
+}
+
+// Hymn of Ash: a pull's refunds, and which missile belongs to which pull.
+struct HymnPull { int refundsLeft, ammo, at; };
+struct HymnShot { DBloodActor* missile; int pull; };
+static TArray<HymnPull> hymnPulls;
+static TArray<HymnShot> hymnShots;
+static int hymnNow = -1;            // the pull being fired (for point-blank impacts)
+static bool forgeBloodBoughtNow;    // the pull being fired was paid in blood (Last Rites, point blank)
+
+// Corpse-Candle's lit flares, Requiem's waiting blasts, the Fetch's cleavers to send back.
+struct Candle { DBloodActor* flare; int blowAt; DVector3 pos; sectortype* sect; };
+struct Toll { DVector3 pos; sectortype* sect; int at; };
+struct Fetching { DVector3 pos; sectortype* sect; };
+static TArray<Candle> candles;
+static TArray<Toll> tolls;
+static TArray<Fetching> fetching;
+static int witchfireNext = INT_MIN / 2;
+
+static void ResetLitanies()
+{
+	forgeScent = nullptr;
+	forgeScentAt = INT_MIN / 2;
+	forgeExplosionNow = nullptr;
+	forgeKicked.Clear();
+	forgeLit.Clear();
+	hymnPulls.Clear();
+	hymnShots.Clear();
+	hymnNow = -1;
+	forgeBloodBoughtNow = false;
+	candles.Clear();
+	tolls.Clear();
+	fetching.Clear();
+	witchfireNext = INT_MIN / 2;
+	litanyFired = 0;
+	litanyShown = -1;
+}
+
+static bool IsLive(DBloodActor* a, int stat)
+{
+	if (!a) return false;
+	BloodStatIterator it(stat);
+	while (auto b = it.Next()) if (b == a) return true;
+	return false;
 }
 
 static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, int spent)
@@ -2834,21 +3278,35 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 	// The ammo: the stock function took a round a round fired; the rest of the drink is taken here. Short, the payload
 	// shrinks to what was paid for; dry with the Blood Price, the pull is paid in health (or not fired at all).
 	double share = 1;
+	int roundsPaid = units * r.drink;
+	bool bloodPaid = false;
 	if (!gInfiniteAmmo)
 	{
 		int owed = units * r.drink, paid = std::max(spent, 0);
 		int extra = std::min(std::max(owed - paid, 0), p->ammoCount[v.ammo]);
 		if (extra > 0) UseAmmo(p, v.ammo, extra);
 		paid += extra;
+		roundsPaid = paid;
 		if (paid < owed)
 		{
-			if (BloodPriced() && PayInBlood(p)) share = 1;
+			if (BloodPriced() && PayInBlood(p)) share = 1, bloodPaid = true;
 			else if (paid > 0) share = double(paid) / owed;
 			else return; // nothing paid: nothing fires
 		}
 	}
 
 	DBloodActor* target = run.forge[kForgePath] == kPathHound && r.missile ? HoundTarget(p, shots[0].dv) : nullptr;
+	// Blood Feud: a pull paid in blood hunts whoever last drew your blood, anywhere in sight.
+	if (bloodPaid && run.forge[kForgePath] == kPathHound && Sings(kLitBloodFeud) && forgeScent && IsLive(forgeScent, kStatDude)
+		&& forgeScent->hasX() && forgeScent->xspr.health > 0 && PlayClock - forgeScentAt >= 0 && PlayClock - forgeScentAt < 5 * kClock)
+	{
+		DVector3 eye(pl->spr.pos.XY(), p->zWeapon);
+		if ((forgeScent->spr.pos.XY() - eye.XY()).Length() <= 2048 && cansee(eye, pl->sector(), MiddleOf(forgeScent), forgeScent->sector()))
+		{
+			target = forgeScent;
+			LitanyFired(kLitBloodFeud);
+		}
+	}
 	TArray<ForgeAim> out;
 	if (mouth)
 	{
@@ -2867,26 +3325,42 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 		for (int i = 0; i < count; i++) out.Push(shots[i]);
 	}
 	if (out.Size() == 0) return;
+	DVector3 from(pl->spr.pos.XY(), p->zWeapon);
 	if (target) // aim at the foe, so the hunt starts on it (the stock homing only steers sideways and down)
-	{
-		double top, bottom;
-		GetActorExtents(target, &top, &bottom);
-		DVector3 at(target->spr.pos.XY(), (top + bottom) / 2);
-		DVector3 from(pl->spr.pos.XY(), p->zWeapon);
-		for (auto& s : out) if (s.missile) s.dv = (at - from).Unit();
-	}
+		for (auto& s : out) if (s.missile) s.dv = (MiddleOf(target) - from).Unit();
+	bool shears = false;
 	if (fan > 1)
 	{
+		// The Shears: with a foe close to the aim, each fan's three cleavers converge on it from the barrel's sides.
+		DBloodActor* quarry = Sings(kLitShears) && mouth == kMouthCleaver ? HoundFoe(from, pl->sector(), out[0].dv.XY().Angle(), 5, 1024) : nullptr;
 		TArray<ForgeAim> fanned;
 		for (auto& s : out)
-			for (double a : { -10., 0., 10. })
+			for (int i = 0; i < 3; i++)
 			{
 				auto t = s;
-				t.dv = DVector3(s.dv.XY().Rotated(DAngle::fromDeg(a)), s.dv.Z);
+				if (quarry)
+				{
+					double off = (i - 1) * 24.;
+					DVector3 start = from + DVector3((pl->spr.Angles.Yaw + DAngle90).ToVector() * off, 0);
+					t.off = s.off + off;
+					t.dv = (MiddleOf(quarry) - start).Unit();
+				}
+				else t.dv = DVector3(s.dv.XY().Rotated(DAngle::fromDeg((i - 1) * 10.)), s.dv.Z);
 				fanned.Push(t);
 			}
 		out = std::move(fanned);
+		if (quarry) shears = true, LitanyFired(kLitShears);
 	}
+
+	// Hymn of Ash: the pull's refunds (one a fireball on flesh, up to the drink less one, never more than it paid).
+	hymnNow = -1;
+	if (Sings(kLitHymn) && mouth == kMouthHellmouth)
+	{
+		if (hymnPulls.Size() > 32) { hymnPulls.Clear(); hymnShots.Clear(); }
+		hymnPulls.Push({ std::max(std::min(r.drink, roundsPaid) - 1, 0), v.ammo, PlayClock });
+		hymnNow = int(hymnPulls.Size()) - 1;
+	}
+	forgeBloodBoughtNow = bloodPaid;
 
 	int missiles = 0, vectors = 0;
 	forgeHits.Clear();
@@ -2898,14 +3372,14 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 			if (missiles++ >= kForgeMissiles) continue;
 			auto m = actFireMissile(pl, s.off, s.zoff, s.dv, s.type);
 			if (!m) continue;
-			m->modFlags |= kModForged;
+			m->modFlags |= kModForged | (bloodPaid ? kModBloodBought : 0);
+			if (shears) m->spr.cstat &= ~CSTAT_SPRITE_BLOCK; // converging blades don't strike each other
+			if (hymnNow >= 0) hymnShots.Push({ m, hymnNow });
 			if (target)
 			{
 				m->SetTarget(target);
 				// The stock homing sets the full speed sideways and keeps vel.Z: give it the slope to the foe's middle.
-				double top, bottom;
-				GetActorExtents(target, &top, &bottom);
-				DVector3 d = DVector3(target->spr.pos.XY(), (top + bottom) / 2) - m->spr.pos;
+				DVector3 d = MiddleOf(target) - m->spr.pos;
 				double flat = d.XY().Length();
 				if (flat > 1) m->vel.Z = missileInfo[m->spr.type - kMissileBase].fVelocity() * d.Z / flat;
 			}
@@ -2916,9 +3390,29 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 			actFireVector(pl, s.off, s.zoff, s.dv, VECTOR_TYPE(s.type));
 		}
 	}
+	// The Censer: three spray-can flames along the leftmost, middle and rightmost pellets.
+	if (Sings(kLitCenser) && !mouth && vessel == kVesselShotgun && out.Size() >= 3)
+	{
+		DAngle aim = shots[0].dv.XY().Angle();
+		TArray<int> order;
+		for (unsigned i = 0; i < out.Size(); i++) if (!out[i].missile) order.Push(int(i));
+		if (order.Size() >= 3)
+		{
+			std::sort(order.begin(), order.end(), [&](int a, int b) { return deltaangle(aim, out[a].dv.XY().Angle()).Degrees() < deltaangle(aim, out[b].dv.XY().Angle()).Degrees(); });
+			for (int i : { order[0], order[order.Size() / 2], order[order.Size() - 1] })
+			{
+				auto m = actFireMissile(pl, out[i].off, out[i].zoff, out[i].dv, kMissileFlameSpray);
+				if (m) { m->modFlags |= kModForged; SetOffspring(m, 1); }
+			}
+			LitanyFired(kLitCenser);
+		}
+	}
 	forgeEmitting = false;
+	hymnNow = -1;
+	forgeBloodBoughtNow = false;
 	if (run.forge[kForgeWound] == kWoundPyre)
-		for (auto t : forgeHits) if (t->hasX() && t->xspr.health > 0) actBurnSprite(pl, t, kPyreBurn);
+		for (auto t : forgeHits)
+			if (t->hasX() && t->xspr.health > 0) { actBurnSprite(pl, t, kPyreBurn); NoteLit(t); }
 	forgeHits.Clear();
 }
 
@@ -2976,31 +3470,277 @@ bool ForgeLoadedWeapon(DBloodPlayer* pPlayer, int weapon)
 	return weapon == forgeVessels[v].weapon && pPlayer->hasWeapon[weapon] && pPlayer->ammoCount[forgeVessels[v].ammo] == 0 && CanPayInBlood(pPlayer);
 }
 
-ForgeImpact::ForgeImpact(DBloodActor* missile, DBloodActor* hit)
+ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit)
 {
-	if (!missile || !run.active || run.over) return;
-	auto owner = missile->GetOwner();
+	if (!m || !run.active || run.over) return;
+	auto owner = m->GetOwner();
 	// A missile fired point blank hits before EmitForge has marked it: while it emits, the player's missiles are forged.
 	bool emitted = forgeEmitting && owner && owner->IsPlayerActor();
-	if (!(missile->modFlags & kModForged) && !emitted) return;
+	if (!(m->modFlags & kModForged) && !emitted) return;
 	active = true;
+	missile = m;
+	type = m->spr.type;
 	forgeImpacts++;
-	// The Pyre: at emission its hits are burned once each by EmitForge; later impacts burn here.
-	if (!emitted && run.forge[kForgeWound] == kWoundPyre && hit && hit->IsDudeActor() && !hit->IsPlayerActor() && hit->hasX() && hit->xspr.health > 0)
-		actBurnSprite(owner, hit, kPyreBurn);
-	if (run.forge[kForgeWound] == kWoundGrave && missile->insector())
+	liveHit = hit && hit->IsDudeActor() && !hit->IsPlayerActor() && hit->hasX() && hit->xspr.health > 0;
+	sky = !hit && m->insector() && (m->sector()->ceilingstat & CSTAT_SECTOR_SKY) && m->spr.pos.Z <= m->sector()->ceilingz + 4;
+	int offspring = Offspring(m);
+	bool bloodBought = (m->modFlags & kModBloodBought) || (emitted && forgeBloodBoughtNow);
+
+	// Witchfire: a cleaver striking a foe that has burned a while scatters its fire on every body near, you too.
+	if (Sings(kLitWitchfire) && type == kMissileButcherKnife && liveHit && hit->xspr.burnTime > 0 && LitFor(hit) >= kClock / 4
+		&& PlayClock >= witchfireNext)
 	{
-		if (auto blast = actSpawnThing(missile->sector(), missile->spr.pos, kThingArmedTNTStick))
+		witchfireNext = PlayClock + kClock / 2;
+		BloodStatIterator it(kStatDude);
+		while (auto d = it.Next())
 		{
-			blast->SetOwner(owner);
-			actExplodeSprite(blast); // a small blast, the player's
+			if (d == hit || !d->hasX() || d->xspr.health <= 0 || (d->spr.pos.XY() - hit->spr.pos.XY()).Length() > 128) continue;
+			if (!cansee(MiddleOf(hit), hit->sector(), MiddleOf(d), d->sector())) continue;
+			BurnTo(owner, d, kPyreBurn);
+		}
+		LitanyFired(kLitWitchfire);
+	}
+	// The Pyre: at emission its hits are burned once each by EmitForge; later impacts burn here (a top-up for offspring).
+	if (!emitted && run.forge[kForgeWound] == kWoundPyre && liveHit)
+	{
+		if (offspring) BurnTo(owner, hit, kPyreBurn);
+		else actBurnSprite(owner, hit, kPyreBurn);
+		NoteLit(hit);
+	}
+	// Hymn of Ash: a fireball on flesh gives a round back; one on stone (or nothing) drinks one more.
+	if (Sings(kLitHymn) && type == kMissileFireballNapalm && offspring == 0)
+	{
+		int pull = emitted ? hymnNow : -1;
+		for (auto& h : hymnShots) if (h.missile == m) pull = h.pull;
+		auto p = getPlayer(myconnectindex);
+		if (pull >= 0 && pull < int(hymnPulls.Size()) && p && p->GetActor())
+		{
+			auto& rec = hymnPulls[pull];
+			if (liveHit && rec.refundsLeft > 0)
+			{
+				rec.refundsLeft--;
+				p->ammoCount[rec.ammo] = ClipHigh(p->ammoCount[rec.ammo] + 1, gAmmoInfo[rec.ammo].max);
+				sfxPlay3DSound(p->GetActor(), 782, -1, 0);
+				LitanyFired(kLitHymn);
+			}
+			else if (!hit) UseAmmo(p, rec.ammo, 1);
 		}
 	}
+	// Last Rites: a blood-bought fireball near death bursts bigger.
+	if (Sings(kLitLastRites) && type == kMissileFireballNapalm && bloodBought && owner && owner->hasX())
+	{
+		int health = owner->xspr.health >> 4;
+		if (health < 50 && m->insector())
+		{
+			ForgeBlast(m->spr.pos, m->sector(), health < 20 ? 2 : 1);
+			LitanyFired(kLitLastRites);
+		}
+	}
+	if (run.forge[kForgeWound] == kWoundGrave && m->insector())
+	{
+		bool flesh = hit && (hit->IsDudeActor() || hit->spr.statnum == kStatThing) && GetExtInfo(hit->spr.spritetexture()).surftype == kSurfFlesh;
+		if (Sings(kLitCandle) && type == kMissileFlareRegular && flesh)
+		{
+			// Corpse-Candle: the flare lodged in flesh holds the blast; it bursts bigger in 1.5 s, or when its bearer dies.
+			if (candles.Size() < 16) candles.Push({ m, PlayClock + kClock * 3 / 2, m->spr.pos, m->sector() });
+			sfxPlay3DSound(m, 450, -1, 0);
+			LitanyFired(kLitCandle);
+		}
+		else if (Sings(kLitLarder) && type == kMissileButcherKnife && !liveHit && !sky && offspring == 0)
+			larder = true; // the Larder of Knives: a missed cleaver sticks and waits (the destructor sets it)
+		else if (Sings(kLitRequiem))
+		{
+			if (tolls.Size() < 32) tolls.Push({ m->spr.pos, m->sector(), PlayClock }); // Requiem: it waits to ring with the others
+		}
+		else ForgeBlast(m->spr.pos, m->sector(), 0); // the Grave's small blast, the player's
+	}
+	// The Fetch: a hunting cleaver that strikes anything but a foe (not the sky) flies back (the destructor queues it).
+	if (Sings(kLitFetch) && type == kMissileButcherKnife && !liveHit && !sky && offspring == 0 && run.forge[kForgePath] == kPathHound)
+		fetch = true;
 }
 
 ForgeImpact::~ForgeImpact()
 {
-	if (active) forgeImpacts--;
+	if (!active) return;
+	forgeImpacts--;
+	if (!missile || !missile->insector()) return;
+	if (larder)
+	{
+		// The stock impact turned the cleaver into a puff of debris: it stays a cleaver, stuck where it struck.
+		seqKill(missile);
+		missile->spr.setspritetexture(missileInfo[kMissileButcherKnife - kMissileBase].textureID());
+		missile->spr.type = kSpriteDecoration;
+		missile->vel.Zero();
+		if (missile->hasX()) missile->xspr.data2 = kClock; // it arms in a second
+		actPostSprite(missile, kStatDecoration);
+		// Eight at most: a ninth sets off the oldest.
+		TArray<DBloodActor*> knives;
+		BloodStatIterator it(kStatDecoration);
+		while (auto a = it.Next()) if (a != missile && (a->modFlags & kModForged) && a->spr.type == kSpriteDecoration) knives.Push(a);
+		if (knives.Size() >= 8)
+		{
+			ForgeBlast(knives[0]->spr.pos, knives[0]->sector(), 0);
+			actPostSprite(knives[0], kStatFree);
+		}
+	}
+	else if (fetch)
+	{
+		DVector3 back = missile->spr.pos;
+		if (missile->vel.LengthSquared() > 0) back -= missile->vel.Unit() * 4;
+		if (fetching.Size() < 8) fetching.Push({ back, missile->sector() });
+		seqKill(missile);
+		actPostSprite(missile, kStatFree);
+	}
+}
+
+// Brimstone Leap: while a forged blast is worked out, the damage it does you is turned into a throw (ScaleDamage).
+ForgeExplosion::ForgeExplosion(DBloodActor* explosion)
+{
+	forgeExplosionNow = explosion && (explosion->modFlags & kModForged) && Sings(kLitLeap) ? explosion : nullptr;
+}
+
+ForgeExplosion::~ForgeExplosion() { forgeExplosionNow = nullptr; }
+
+// The Litanies that live between shots: second heads, candles, tolls, knives, cleavers flying back.
+static void ForgeTick()
+{
+	if (!run.active || run.over || crypt.in || gamestate != GS_LEVEL || !run.litanies) return;
+	auto p = getPlayer(myconnectindex);
+	if (!p || !p->GetActor()) return;
+	auto pl = p->GetActor();
+
+	// Cerberus: a hunting fireball 256 from you grows a second head for another foe (8 forged fireballs at most).
+	if (Sings(kLitCerberus))
+	{
+		TArray<DBloodActor*> heads;
+		int flying = 0;
+		BloodStatIterator it(kStatProjectile);
+		while (auto m = it.Next())
+		{
+			if (!(m->modFlags & kModForged) || m->spr.type != kMissileFireballNapalm) continue;
+			flying++;
+			auto t = m->GetTarget();
+			if (Offspring(m) == 0 && t && t->hasX() && t->xspr.health > 0 && (m->spr.pos.XY() - pl->spr.pos.XY()).Length() >= 256) heads.Push(m);
+		}
+		for (auto m : heads)
+		{
+			if (flying >= kForgeMissiles || !m->insector()) break;
+			auto second = HoundFoe(m->spr.pos, m->sector(), m->vel.XY().Angle(), kHoundCone, kHoundRange, m->GetTarget());
+			if (!second) continue;
+			DVector3 dir = (MiddleOf(second) - m->spr.pos).Unit();
+			auto head = ForgeSpawnMissile(m->spr.pos + dir * 8, m->sector(), dir, kMissileFireballNapalm, 1);
+			SetOffspring(m, 3);
+			if (!head) continue;
+			head->SetTarget(second);
+			flying++;
+			LitanyFired(kLitCerberus);
+		}
+	}
+	// Corpse-Candle: the lodged flare's blast, when its fuse runs out or its bearer dies.
+	for (int i = int(candles.Size()) - 1; i >= 0; i--)
+	{
+		auto& c = candles[i];
+		bool lodged = IsLive(c.flare, kStatFlare);
+		if (lodged && c.flare->insector()) { c.pos = c.flare->spr.pos; c.sect = c.flare->sector(); }
+		if (PlayClock >= c.blowAt || !lodged)
+		{
+			ForgeBlast(c.pos, c.sect, 1);
+			candles.Delete(i);
+		}
+	}
+	// Requiem: blasts that landed together ring out as one: two as a standard, three or more as a large.
+	{
+		TArray<Toll> ready;
+		for (int i = int(tolls.Size()) - 1; i >= 0; i--)
+			if (PlayClock - tolls[i].at >= 8) { ready.Push(tolls[i]); tolls.Delete(i); }
+		while (ready.Size())
+		{
+			TArray<Toll> group;
+			group.Push(ready[0]);
+			ready.Delete(0);
+			for (int i = int(ready.Size()) - 1; i >= 0; i--)
+			{
+				bool near = true;
+				for (auto& g : group) if ((g.pos - ready[i].pos).Length() > 128) near = false;
+				if (near) { group.Push(ready[i]); ready.Delete(i); }
+			}
+			DVector3 mid(0, 0, 0);
+			for (auto& g : group) mid += g.pos;
+			mid /= double(group.Size());
+			auto sect = group[0].sect;
+			updatesector(mid.XY(), &sect);
+			if (!sect) sect = group[0].sect;
+			ForgeBlast(mid, sect, group.Size() >= 3 ? 2 : group.Size() == 2 ? 1 : 0);
+			if (group.Size() >= 2) LitanyFired(kLitRequiem);
+		}
+	}
+	// The Larder of Knives: an armed knife goes off when a body comes within 64 of it, you included.
+	if (Sings(kLitLarder))
+	{
+		TArray<DBloodActor*> blown;
+		BloodStatIterator it(kStatDecoration);
+		while (auto k = it.Next())
+		{
+			if (!(k->modFlags & kModForged) || k->spr.type != kSpriteDecoration || !k->hasX() || !k->insector()) continue;
+			if (k->xspr.data2 > 0) { k->xspr.data2--; continue; }
+			BloodStatIterator di(kStatDude);
+			while (auto d = di.Next())
+			{
+				if (!d->hasX() || d->xspr.health <= 0 || (d->spr.pos.XY() - k->spr.pos.XY()).Length() > 64 || std::abs(d->spr.pos.Z - k->spr.pos.Z) > 64) continue;
+				if (!cansee(k->spr.pos, k->sector(), MiddleOf(d), d->sector())) continue;
+				blown.Push(k);
+				break;
+			}
+		}
+		for (auto k : blown)
+		{
+			ForgeBlast(k->spr.pos, k->sector(), 0);
+			actPostSprite(k, kStatFree);
+			LitanyFired(kLitLarder);
+		}
+	}
+	// The Fetch: cleavers that struck stone fly back at your chest; caught within 48, they heal you 5.
+	if (Sings(kLitFetch))
+	{
+		DVector3 chest(pl->spr.pos.XY(), p->zWeapon);
+		int twins = 0;
+		BloodStatIterator it(kStatProjectile);
+		while (auto m = it.Next()) if ((m->modFlags & kModForged) && Offspring(m) == 2) twins++;
+		for (auto& f : fetching)
+		{
+			if (twins >= 8) break;
+			DVector3 dir = chest - f.pos;
+			if (dir.LengthSquared() <= 1) continue;
+			auto twin = ForgeSpawnMissile(f.pos, f.sect, dir.Unit(), kMissileButcherKnife, 2);
+			if (!twin) continue;
+			evPostActor(twin, 3 * kClock, kCallbackRemove);
+			twins++;
+			LitanyFired(kLitFetch);
+		}
+		fetching.Clear();
+		TArray<DBloodActor*> caught;
+		BloodStatIterator it2(kStatProjectile);
+		while (auto m = it2.Next())
+		{
+			if (!(m->modFlags & kModForged) || Offspring(m) != 2) continue;
+			DVector3 d = chest - m->spr.pos;
+			if (d.Length() < 48) { caught.Push(m); continue; }
+			m->vel = d.Unit() * missileInfo[m->spr.type - kMissileBase].fVelocity();
+		}
+		for (auto m : caught)
+		{
+			evKillActor(m);
+			actPostSprite(m, kStatFree);
+			ForgeHeal(5);
+			sfxPlay3DSound(pl, 780, -1, 0);
+		}
+	}
+	// Hymn of Ash's records last as long as a missile can fly.
+	for (int i = int(hymnPulls.Size()) - 1; i >= 0 && hymnPulls.Size() && PlayClock - hymnPulls[0].at > 5 * kClock; i--)
+	{
+		hymnPulls.Clear();
+		hymnShots.Clear();
+	}
 }
 
 int ScaleHealing(DBloodActor* actor, int add)
@@ -3062,6 +3802,7 @@ void ForgeChanged()
 		*cvars[slot] = f[slot];
 	}
 	for (int slot = 0; slot < kForgeSlots; slot++) last[slot] = f[slot];
+	DiscoverLitanies(f);
 	if (forgeNote.IsNotEmpty()) Printf(PRINT_NOTIFY, "The Forge: %s\n", forgeNote.GetChars());
 	forgeChecking = false;
 	UpdateMenus();
@@ -3088,6 +3829,12 @@ void CovenantChanged() { UpdateMenus(); }
 
 void TintSprite(DBloodActor* owner, tspritetype* tspr)
 {
+	if (owner && tspr && owner == forgeScent && Sings(kLitBloodFeud) && PlayClock - forgeScentAt < 5 * kClock)
+	{
+		auto p = getPlayer(myconnectindex);
+		if (p && p->ammoCount[forgeVessels[run.forge[kForgeVessel]].ammo] == 0)
+			tspr->shade = int8_t(std::clamp(tspr->shade + int(24 * (0.5 + 0.5 * sin(PlayClock * 0.12))), -128, 127)); // Blood Feud's quarry
+	}
 	if (!owner || !tspr || !(owner->modFlags & kModChampion)) return;
 	int pal = (owner->modFlags & kModRedChampion) ? rl_elite_red_pal : rl_elite_pal;
 	if (pal > 0 && pal < MAXREALPAL && lookups.checkTable(pal)) tspr->pal = pal;
@@ -3124,6 +3871,7 @@ void Serialize(FSerializer& arc)
 			arc.Array("kit", run.kit, kNumKit);
 			arc.Array("offers", run.offers, 3);
 			arc.Array("forge", run.forge, kForgeSlots);
+			arc("litanies", run.litanies);
 			arc.EndObject();
 		}
 		return;
@@ -3159,6 +3907,7 @@ void Serialize(FSerializer& arc)
 		arc.Array("kit", loaded.kit, kNumKit);
 		arc.Array("offers", loaded.offers, 3);
 		arc.Array("forge", loaded.forge, kForgeSlots);
+		arc("litanies", loaded.litanies);
 		arc.EndObject();
 		has = true;
 	}
@@ -3291,6 +4040,98 @@ CCMD(rl_pick)
 	M_ClearMenus();
 }
 
+// Sing or silence the n-th lit Litany of the recipe (the Forge menu's Litany lines).
+CCMD(rl_forge_sing)
+{
+	int f[kForgeSlots];
+	ForgeRecipe(f);
+	int lit[4], n = LitLitanies(f, lit, 4);
+	int i = argv.argc() > 1 ? atoi(argv[1]) - 1 : -1;
+	if (i < 0 || i >= n) return;
+	int k = lit[i];
+	auto list = SingList();
+	auto drop = [&](const char* id) { for (int j = int(list.Size()) - 1; j >= 0; j--) if (!list[j].CompareNoCase(id) || (list[j][0] == '-' && !list[j].Mid(1).CompareNoCase(id))) list.Delete(j); };
+	auto write = [&]
+	{
+		FString out;
+		for (auto& e : list) out.AppendFormat("%s%s", out.IsEmpty() ? "" : ",", e.GetChars());
+		rl_forge_sing = out.GetChars();
+	};
+	if (ResolveSinging(f) & (1 << k))
+	{
+		drop(litanies[k].id);
+		list.Push(FStringf("-%s", litanies[k].id));
+	}
+	else
+	{
+		drop(litanies[k].id);
+		list.Push(litanies[k].id);
+		write();
+		// A third (or a rival) silences the oldest chosen until this one sings.
+		for (int guard = 0; guard < 8 && !(ResolveSinging(f) & (1 << k)); guard++)
+		{
+			for (int j = 0; j < int(list.Size()); j++)
+			{
+				if (list[j][0] == '-' || !list[j].CompareNoCase(litanies[k].id)) continue;
+				FString id = list[j];
+				list.Delete(j);
+				list.Push(FStringf("-%s", id.GetChars()));
+				break;
+			}
+			write();
+		}
+	}
+	write();
+	UpdateMenus();
+}
+
+CCMD(rl_litanies)
+{
+	int found = 0;
+	for (int k = 0; k < kNumLitanies; k++) if (LitanyFound(k)) found++;
+	Printf("The Book of Litanies: %d of %d found\n", found, kNumLitanies);
+	for (int k = 0; k < kNumLitanies; k++)
+	{
+		auto& L = litanies[k];
+		if (LitanyFound(k)) Printf("  %s (%s): %s + %s. %s\n", L.name, litanyKinds[L.kind], PartName(L.a).GetChars(), PartName(L.b).GetChars(), L.sentence);
+		else Printf("  ??? (%s): a part of %s and one of %s\n", litanyKinds[L.kind], circleNames[L.a.slot], circleNames[L.b.slot]);
+	}
+	if (run.active && !run.over && run.litanies)
+		for (int k = 0; k < kNumLitanies; k++) if (run.litanies & (1 << k)) Printf("Singing in this run: %s\n", litanies[k].name);
+}
+
+// Every legal recipe: the Litanies it lights and the two that sing by default.
+CCMD(rl_litanies_audit)
+{
+	int recipes = 0, none = 0;
+	int f[kForgeSlots];
+	for (f[kForgeVessel] = 1; f[kForgeVessel] <= forgeSlotMax[kForgeVessel]; f[kForgeVessel]++)
+	for (f[kForgeMouth] = 0; f[kForgeMouth] <= forgeSlotMax[kForgeMouth]; f[kForgeMouth]++)
+	for (f[kForgePath] = 0; f[kForgePath] <= forgeSlotMax[kForgePath]; f[kForgePath]++)
+	for (f[kForgeWound] = 0; f[kForgeWound] <= forgeSlotMax[kForgeWound]; f[kForgeWound]++)
+	for (f[kForgePenance] = 0; f[kForgePenance] <= forgeSlotMax[kForgePenance]; f[kForgePenance]++)
+	{
+		bool legal = true;
+		for (int slot = kForgeMouth; slot < kForgeSlots; slot++) if (ForgeIllegal(f, slot)) legal = false;
+		if (!legal) continue;
+		recipes++;
+		FString lit;
+		int sing = 0, count = 0, rivals = 0;
+		for (int k = 0; k < kNumLitanies; k++)
+		{
+			if (!LitanyLit(f, k)) continue;
+			lit.AppendFormat("%s%s", lit.IsEmpty() ? "" : ", ", litanies[k].name);
+			if (count < kMaxSinging && litanies[k].kind != kKindBane && !(litanies[k].rivals & rivals)) { sing |= 1 << k; rivals |= litanies[k].rivals; count++; }
+		}
+		int parts = (f[kForgeMouth] != 0) + (f[kForgePath] != 0) + (f[kForgeWound] != 0) + (f[kForgePenance] != 0);
+		if (lit.IsEmpty() && parts >= 2) none++;
+		FString singing;
+		for (int k = 0; k < kNumLitanies; k++) if (sing & (1 << k)) singing.AppendFormat("%s%s", singing.IsEmpty() ? "" : ", ", litanies[k].name);
+		Printf("%s: %s%s%s\n", ForgeName(f).GetChars(), lit.IsEmpty() ? "none" : lit.GetChars(), singing.IsEmpty() ? "" : "; sing: ", singing.GetChars());
+	}
+	Printf("%d legal recipes; %d with two or more runes light no Litany\n", recipes, none);
+}
+
 CCMD(rl_forge_clear)
 {
 	rl_forge_vessel = 0; // ForgeChanged takes a gun the Forge put in the kit out again
@@ -3314,6 +4155,7 @@ CCMD(rl_forge)
 		if (run.active && !run.over)
 		{
 			for (int slot = 0; slot < kForgeSlots; slot++) run.forge[slot] = f[slot];
+			run.litanies = ResolveSinging(run.forge);
 			Printf("(forged into the run in progress, for testing; its kit is as it was)\n");
 		}
 	}
