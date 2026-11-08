@@ -268,6 +268,7 @@ bool refusedLoad;    // a save of a run that has ended was loaded: back to the m
 FString menuMessage; // shown when the game is next back at the main menu
 bool saveConfig;     // the meta progress changed: write the config at the main menu
 int nextCurseTry;
+bool backToCrypt;    // a run was won: back to the Crypt after the stock end of the episode
 
 int RandInt(std::mt19937& rng, int lo, int hi) { return std::uniform_int_distribution<int>(lo, hi)(rng); }
 double Rand01(std::mt19937& rng) { return std::uniform_real_distribution<double>(0., 1.)(rng); }
@@ -480,14 +481,23 @@ void RollOffers(std::mt19937& rng, double depth)
 			if (w > 0) guns.Push({ g.item, w });
 		}
 	}
-	armour.Push({ kItemArmorBody, 3 });
-	armour.Push({ kItemArmorFire, 2 });
-	armour.Push({ kItemArmorSpirit, 2 });
-	if (depth >= 0.5) armour.Push({ kItemArmorSuper, 1 });
+	// Armour that would add nothing (already at its caps) isn't offered.
+	auto addsArmour = [&](int item)
+	{
+		auto& a = armorData[item - kItemArmorBasic];
+		return (a.armor0 && p->armor[0] < a.armor0max) || (a.armor1 && p->armor[1] < a.armor1max) || (a.armor2 && p->armor[2] < a.armor2max);
+	};
+	if (addsArmour(kItemArmorBody)) armour.Push({ kItemArmorBody, 3 });
+	if (addsArmour(kItemArmorFire)) armour.Push({ kItemArmorFire, 2 });
+	if (addsArmour(kItemArmorSpirit)) armour.Push({ kItemArmorSpirit, 2 });
+	if (depth >= 0.5 && addsArmour(kItemArmorSuper)) armour.Push({ kItemArmorSuper, 1 });
 	auto packFull = [&](int item) { return p->packSlots[gItemData[item - kItemBase].packSlot].curAmount >= 100; };
 	if (!packFull(kItemHealthDoctorBag)) care.Push({ kItemHealthDoctorBag, 3 });
-	care.Push({ kItemHealthLifeEssense, 2 });
-	if (depth >= 0.3) care.Push({ kItemHealthLifeSeed, 1 });
+	// Healing only where it would heal: below the item's cap, and not under heavy Famine.
+	int health = p->GetActor() ? int(p->GetActor()->xspr.health >> 4) : 0;
+	bool famished = run.cov[kFamine] >= 3;
+	if (!famished && health < gPowerUpInfo[kItemHealthLifeEssense - kItemBase].maxTime) care.Push({ kItemHealthLifeEssense, 2 });
+	if (!famished && depth >= 0.3 && health < gPowerUpInfo[kItemHealthLifeSeed - kItemBase].maxTime) care.Push({ kItemHealthLifeSeed, 1 });
 	if (!packFull(kItemBeastVision)) care.Push({ kItemBeastVision, 1 });
 	if (!packFull(kItemJumpBoots)) care.Push({ kItemJumpBoots, 1 });
 
@@ -633,10 +643,11 @@ int KindCost(int type)
 
 struct Look { int pal; DVector2 scale; };
 
-void MakeChampion(DBloodActor* a)
+void MakeChampion(DBloodActor* a, bool grow = true)
 {
 	a->modFlags |= kModChampion;
 	a->xspr.health = uint32_t(a->xspr.health * kChampionHealth);
+	if (!grow) return;
 	a->spr.scale *= kChampionSize;
 	a->xspr.scale = int((a->xspr.scale ? a->xspr.scale : 256) * kChampionSize); // SEQ frames keep the size
 }
@@ -709,7 +720,9 @@ void CovenantEnemies()
 	while (auto a = it.Next())
 	{
 		if (a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0) continue;
-		if (wardens && !(a->modFlags & kModChampion)) MakeChampion(a);
+		// Bosses and scripted enemies don't grow: a bigger Tchernobog could catch on a low ceiling.
+		bool plain = bmod::ShuffleEligible(a, false) && a->xspr.txID == 0 && a->xspr.rxID == 0;
+		if (wardens && !(a->modFlags & kModChampion)) MakeChampion(a, plain);
 		a->xspr.health = uint32_t(a->xspr.health * flesh);
 	}
 }
@@ -733,6 +746,12 @@ void Pressure()
 {
 	if (run.extraEnemies > 0 && PlayClock >= run.nextWave)
 	{
+		TArray<DBloodActor*> kinds;
+		if (!bmod::WaveKinds(kinds))
+		{
+			run.extraEnemies = 0; // a wave copies the kinds alive on the map: none left, no more Horde
+			return;
+		}
 		int came = bmod::SpawnWave(std::min(run.extraEnemies, 3 + run.cov[kHorde]));
 		run.extraEnemies -= came;
 		run.nextWave = PlayClock + (came ? 50 : 5) * kClock; // no room behind the player: try again soon
@@ -967,6 +986,7 @@ void LevelStarted()
 	run.index = run.pending;
 	run.pending = -1;
 	run.exiting = false;
+	bmod::modeEnemyTimeScale = 1. + 0.15 * run.cov[kHaste]; // from the first tic (the ticker keeps it after)
 	Remix();
 }
 
@@ -1034,6 +1054,7 @@ void RunWon()
 	}
 	menuMessage.Format("RUN COMPLETE\n\n%s\n\n%s%s%s", RunName(run.episode).GetChars(), RunStats().GetChars(),
 		news.IsEmpty() ? "" : "\n\n", news.GetChars());
+	backToCrypt = true;
 	run = Run();
 }
 
@@ -1086,6 +1107,159 @@ bool StartRun(int episode, uint32_t seed)
 
 //---------------------------------------------------------------------------
 //
+// the Crypt: the hub between runs, like the House in Hades. rlcrypt.map is
+// ours (tools/blood2d/rlcrypt.py writes it into raze.pk3) and is drawn with
+// Blood's own art. It marks its features with invisible sprites (xsprite
+// data4 = 'RL', data1 = the feature). Walking into a portal starts a run; Use
+// at the weapon wall opens the Armory, at the altar the Covenant, at the
+// tombstone the Roguelite menu. Dying, or winning, brings you back here.
+//
+//---------------------------------------------------------------------------
+
+const char* const kCryptMap = "rlcrypt.map";
+constexpr int kMarkerTag = 0x524C;
+enum { kFeatArmory = 1, kFeatCovenant = 2, kFeatRecords = 3, kFeatPortal = 10, kNumPortals = 6 };
+constexpr double kUseRange = 48;    // world units (16 map units) from a feature's marker: about one bay
+constexpr double kLabelRange = 64;  // a portal's name shows within this (the alcoves are 40 apart)
+constexpr int kNoticeTime = 4 * kClock;
+
+struct Crypt
+{
+	bool in = false;                       // the current level is the Crypt
+	DVector2 feat[4];                      // the Armory, the Covenant and the Records markers (index = feature id)
+	bool hasFeat[4] = {};
+	sectortype* portal[kNumPortals] = {};  // each portal's alcove
+	DVector2 portalPos[kNumPortals];
+	int lastPortal = -1;                   // the portal the player stood in last tic: walking in starts a run
+	int confirmPortal = -1;                // walked into once while a run can still be continued: again to abandon it
+	int confirmClock = INT_MIN / 2;
+	FString notice;                        // a short line under the crosshair
+	int noticeClock = INT_MIN / 2;
+};
+
+Crypt crypt;
+FString cryptMessage; // shown once the Crypt is up (a run's result)
+
+bool CryptAvailable() { return fileSystem.FileExists(kCryptMap); }
+bool IsCryptLevel() { return currentLevel && currentLevel->fileName.CompareNoCase(kCryptMap) == 0; }
+
+bool EnterCrypt()
+{
+	if (!isBlood() || numplayers > 1 || !CryptAvailable()) return false;
+	auto map = SetupUserMap(kCryptMap);
+	if (!map) return false;
+	M_ClearMenus();
+	DeferredStartGame(map, rl_skill);
+	return true;
+}
+
+void CryptNotice(const FString& text)
+{
+	crypt.notice = text;
+	crypt.noticeClock = PlayClock;
+}
+
+// The run a portal starts: portals 0-4 are the game's first five episodes, portal 5 the gauntlet
+// (only when there's more than one episode). -1 = nothing behind it.
+int PortalRun(int i, int count)
+{
+	if (i == kNumPortals - 1) return count > 1 ? 0 : -1;
+	return i < count ? i + 1 : -1;
+}
+
+bool PortalOpen(int i, int count)
+{
+	int r = PortalRun(i, count);
+	return r == 0 ? Unlocked(count) >= count : r > 0 && r <= Unlocked(count);
+}
+
+void SetupCrypt()
+{
+	crypt = Crypt();
+	crypt.in = true;
+	BloodStatIterator it(kStatDecoration);
+	while (auto a = it.Next())
+	{
+		if (!a->hasX() || a->xspr.data4 != kMarkerTag) continue;
+		int id = a->xspr.data1;
+		if (id >= kFeatArmory && id <= kFeatRecords)
+		{
+			crypt.feat[id] = a->spr.pos.XY();
+			crypt.hasFeat[id] = true;
+		}
+		else if (id >= kFeatPortal && id < kFeatPortal + kNumPortals)
+		{
+			crypt.portal[id - kFeatPortal] = a->sector();
+			crypt.portalPos[id - kFeatPortal] = a->spr.pos.XY();
+		}
+	}
+	// Locked and unused portals go dark; open ones get rlcrypt.py's alcove lighting back (an older save of the
+	// Crypt may hold one dark that has opened since). Keep these in step with the generator.
+	TArray<Episode> eps;
+	GetEpisodes(eps);
+	auto vortex = tileGetTextureID(1019);
+	for (int i = 0; i < kNumPortals; i++)
+	{
+		auto sect = crypt.portal[i];
+		if (!sect) continue;
+		bool open = PortalOpen(i, int(eps.Size()));
+		sect->floorshade = open ? 0 : 48;
+		sect->ceilingshade = open ? 4 : 48;
+		for (auto& wal : sect->walls) wal.shade = !open ? 48 : wal.walltexture() == vortex ? -20 : 4;
+	}
+	auto p = getPlayer(myconnectindex);
+	if (p && p->GetActor()) // standing in a portal at the start doesn't count as walking in
+		for (int i = 0; i < kNumPortals; i++) if (crypt.portal[i] && crypt.portal[i] == p->GetActor()->sector()) crypt.lastPortal = i;
+}
+
+void EnterPortal(int i)
+{
+	TArray<Episode> eps;
+	GetEpisodes(eps);
+	int count = int(eps.Size()), r = PortalRun(i, count);
+	if (r < 0) CryptNotice("This portal is sealed");
+	else if (!PortalOpen(i, count))
+		CryptNotice(r == 0 ? FString("The gauntlet opens once every episode is unlocked") :
+			FStringf("%s is locked: win a run of %s first", eps[r - 1].name.GetChars(), eps[r - 2].name.GetChars()));
+	else if (GetProgress().activeRun != 0 && (crypt.confirmPortal != i || PlayClock - crypt.confirmClock > 10 * kClock))
+	{
+		crypt.confirmPortal = i;
+		crypt.confirmClock = PlayClock;
+		CryptNotice("A run can still be continued from its saves: walk in again to abandon it");
+	}
+	else StartRun(r, uint32_t(std::random_device{}())); // refuses (with a message) a kit over the run's points
+}
+
+void CryptTick()
+{
+	if (cryptMessage.IsNotEmpty())
+	{
+		FString msg = cryptMessage;
+		cryptMessage = "";
+		M_StartMessage(msg.GetChars(), 1);
+		return;
+	}
+	auto p = getPlayer(myconnectindex);
+	if (!p || !p->GetActor()) return;
+	int in = -1;
+	for (int i = 0; i < kNumPortals; i++) if (crypt.portal[i] && crypt.portal[i] == p->GetActor()->sector()) in = i;
+	if (in == crypt.lastPortal) return;
+	crypt.lastPortal = in;
+	if (in >= 0) EnterPortal(in);
+}
+
+// The feature the player is close enough to use, or 0.
+int NearFeature(DBloodPlayer* p)
+{
+	if (!crypt.in || !p || !p->GetActor()) return 0;
+	auto pos = p->GetActor()->spr.pos.XY();
+	for (int id = kFeatArmory; id <= kFeatRecords; id++)
+		if (crypt.hasFeat[id] && (crypt.feat[id] - pos).Length() <= kUseRange) return id;
+	return 0;
+}
+
+//---------------------------------------------------------------------------
+//
 // events and the ticker
 //
 //---------------------------------------------------------------------------
@@ -1095,10 +1269,14 @@ void OnEvent(const bmod::EventInfo& ev)
 	switch (ev.type)
 	{
 	case bmod::Event::LevelStart:
+		if (IsCryptLevel()) SetupCrypt();
+		else crypt.in = false;
 		LevelStarted();
 		break;
 	case bmod::Event::SaveLoaded:
 		nextCurseTry = 0;
+		if (IsCryptLevel()) SetupCrypt();
+		else crypt.in = false;
 		if (run.active && !run.over) StartCurse(); // effects aren't saved: the curse comes back on
 		break;
 	case bmod::Event::Kill:
@@ -1130,8 +1308,13 @@ void OnTick()
 		return;
 	}
 	bmod::modeEnemyTimeScale = run.active && !run.over ? 1. + 0.15 * run.cov[kHaste] : 1.; // the Covenant's Haste lasts the run
+	if (crypt.in)
+	{
+		CryptTick();
+		return;
+	}
 	if (!run.active || run.over) return;
-	if (run.offerPending && gamestate == GS_LEVEL && !M_Active())
+	if (run.offerPending && gamestate == GS_LEVEL && !M_Active() && PlayClock - run.levelClock >= kClock / 2)
 	{
 		OpenRewardChoice(); // closing it without a choice opens it again: pick a reward, or nothing for a little ichor
 		return;
@@ -1152,6 +1335,16 @@ void OnMainMenu()
 	{
 		saveConfig = false;
 		WriteConfig(); // effects are off by now (level teardown), so nothing they flip gets saved
+	}
+	if (backToCrypt)
+	{
+		// A run was won: after the stock end of the episode, back to the Crypt with the result.
+		backToCrypt = false;
+		cryptMessage = menuMessage;
+		menuMessage = "";
+		if (EnterCrypt()) return;
+		menuMessage = cryptMessage;
+		cryptMessage = "";
 	}
 	if (menuMessage.IsNotEmpty())
 	{
@@ -1241,13 +1434,79 @@ void DrawRunOver(DBloodPlayer* pPlayer, double sc)
 	if (!actor || seqGetStatus(actor) >= 0) return; // Use does nothing until the death animation is over
 	auto keys = Bindings.GetKeysForCommand("+open");
 	FString keyName = keys.Size() ? C_NameKeys(keys.Data(), std::min<int>(keys.Size(), 2)) : FString("Use");
-	FStringf prompt("Press %s to return to the main menu", keyName.GetChars());
+	FStringf prompt("Press %s to return to %s", keyName.GetChars(), CryptAvailable() ? "the Crypt" : "the main menu");
 	bool blink = (PlayClock / 30) & 1;
 	DrawCentered(SmallFont, blink ? CR_WHITE : CR_GOLD, y + lh, prompt.GetChars(), ssc);
 }
 
+// The Crypt: what Use does where you stand, the nearest portal's run, and the latest notice.
+void DrawCrypt(DBloodPlayer* pPlayer)
+{
+	if (bmod::mods.hideHud) return;
+	double sc = twod->GetHeight() / 480., ssc = 1.5 * sc, y = twod->GetHeight() * 0.62;
+	auto line = [&](const FString& text, int color)
+	{
+		DrawCentered(SmallFont, color, y, text.GetChars(), ssc);
+		y += SmallFont->GetHeight() * ssc + 4 * sc;
+	};
+	TArray<Episode> eps;
+	GetEpisodes(eps);
+	int count = int(eps.Size());
+	switch (NearFeature(pPlayer))
+	{
+	case kFeatArmory:
+		line(FStringf("Use: the Armory (your kit: %d points)", KitCost()), CR_GOLD);
+		break;
+	case kFeatCovenant:
+	{
+		int dread = ChosenDread();
+		line(dread ? FStringf("Use: the Covenant (Dread %d)", dread) : FString("Use: the Covenant (no conditions)"), CR_GOLD);
+		break;
+	}
+	case kFeatRecords:
+		line(FStringf("Use: the Records (ichor %d, runs %d, won %d)", (int)rl_ichor, (int)rl_runs, (int)rl_wins), CR_GOLD);
+		break;
+	default:
+		break;
+	}
+	auto actor = pPlayer ? pPlayer->GetActor() : nullptr;
+	if (actor)
+	{
+		int best = -1;
+		double bestDist = kLabelRange;
+		for (int i = 0; i < kNumPortals; i++)
+		{
+			if (!crypt.portal[i]) continue;
+			double d = (crypt.portalPos[i] - actor->spr.pos.XY()).Length();
+			if (d < bestDist)
+			{
+				best = i;
+				bestDist = d;
+			}
+		}
+		if (best >= 0)
+		{
+			int r = PortalRun(best, count);
+			if (r < 0) line("A sealed portal", CR_DARKGRAY);
+			else if (!PortalOpen(best, count)) line(FStringf("%s (locked)", RunName(r).GetChars()), CR_DARKGRAY);
+			else
+			{
+				int budget = Budget(r, rl_cov_austerity), cost = KitCost();
+				line(FStringf("%s: %d kit points (your kit: %d)", RunName(r).GetChars(), budget, cost), cost > budget ? CR_RED : CR_WHITE);
+			}
+		}
+	}
+	int age = PlayClock - crypt.noticeClock;
+	if (crypt.notice.IsNotEmpty() && age >= 0 && age < kNoticeTime) line(crypt.notice, CR_ORANGE);
+}
+
 void OnDraw(DBloodPlayer* pPlayer)
 {
+	if (crypt.in)
+	{
+		DrawCrypt(pPlayer);
+		return;
+	}
 	if (!run.active) return;
 	double sc = twod->GetHeight() / 480.;
 	if (run.over)
@@ -1272,15 +1531,18 @@ TArray<DMenuItemBase*> menuItems; // the items added here
 
 // A menu entry that starts a run. While another run is in progress (being played, or continuable from its saves),
 // it asks first with Blood's yes/no message (OptionMenuItemSafeCommand), since starting a run ends the other one.
-DMenuItemBase* CreateRunItem(const char* label, const char* command, bool confirm)
+DMenuItemBase* CreateRunItem(const char* label, const char* command, bool confirm,
+	const char* prompt = "This abandons the run in progress: its saves stop loading.\nStart a new run?")
 {
 	auto cls = confirm ? PClass::FindClass("OptionMenuItemSafeCommand") : nullptr;
 	auto init = cls ? dyn_cast<PFunction>(cls->FindSymbol("Init", false)) : nullptr;
 	if (!init) return CreateOptionMenuItemCommand(label, FName(command));
 	auto item = cls->CreateNew();
-	FString labelStr = label;
-	FString prompt = "This abandons the run in progress: its saves stop loading.\nStart a new run?";
-	VMValue params[] = { item, &labelStr, FName(command).GetIndex(), &prompt };
+	FString labelStr = label, promptStr = prompt;
+	// One tic later: the yes/no box closes after running the command, and would take a message the command
+	// opens (a kit over the run's points) down with it.
+	FStringf delayed("wait 1; %s", command);
+	VMValue params[] = { item, &labelStr, FName(delayed.GetChars()).GetIndex(), &promptStr };
 	VMCall(init->Variants[0].Implementation, params, countof(params), nullptr, 0);
 	return (DMenuItemBase*)item;
 }
@@ -1322,8 +1584,15 @@ void BuildMenu()
 		text("A run is in progress: load one of its saves to go on", -1);
 	text("", -1);
 
-	header("Episode runs");
 	int first = -1;
+	if (CryptAvailable() && !(crypt.in && gamestate == GS_LEVEL))
+	{
+		first = int(opt->mItems.Size());
+		add(CreateRunItem("Enter the Crypt: the Armory, the Covenant, the portals", "rl_crypt", run.active && !run.over && gamestate == GS_LEVEL,
+			"This leaves the run in progress (it can be continued from its saves).\nGo to the Crypt?"));
+		text("", -1);
+	}
+	header("Episode runs");
 	for (int e = 0; e < count; e++)
 	{
 		if (e < unlocked)
@@ -1514,7 +1783,7 @@ MapRecord* NextLevel(MapRecord* stockNext)
 bool OnDeathRestart()
 {
 	if (!run.active || !run.over) return false;
-	gameaction = ga_mainmenu; // no reload: the run is over
+	if (!EnterCrypt()) gameaction = ga_mainmenu; // no reload: the run is over; back to the Crypt (or the menu)
 	return true;
 }
 
@@ -1529,8 +1798,22 @@ void OnNewGame()
 		WriteConfig();
 		return;
 	}
-	run = Run(); // a game outside the run; the run, if any, can still be continued from its saves
+	run = Run(); // a game outside the run (or the Crypt); the run, if any, can still be continued from its saves
 	bmod::modeEnemyTimeScale = 1.;
+	if (saveConfig)
+	{
+		saveConfig = false;
+		WriteConfig(); // a run that ended (back to the Crypt) changed the progress; the last level's effects are off
+	}
+}
+
+bool OnUse(DBloodPlayer* pPlayer)
+{
+	int id = NearFeature(pPlayer);
+	if (!id) return false;
+	M_StartControlPanel(false);
+	M_SetMenu(FName(id == kFeatArmory ? "RogueliteArmory" : id == kFeatCovenant ? "RogueliteCovenant" : "RogueliteMenu"));
+	return true;
 }
 
 int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
@@ -1638,6 +1921,7 @@ void Serialize(FSerializer& arc)
 	run = std::move(loaded);
 	run.active = true;
 	run.curseClock = INT_MIN / 2;
+	bmod::modeEnemyTimeScale = run.over ? 1. : 1. + 0.15 * run.cov[kHaste];
 }
 
 void OnMenuOpened()
@@ -1730,6 +2014,11 @@ CCMD(rl_unlock)
 	p.unlocked = !stricmp(argv[1], "all") ? std::max(count, 1) : std::clamp(atoi(argv[1]), 1, std::max(count, 1));
 	SetProgress(p);
 	Printf(PRINT_NOTIFY, "Roguelite: %d of %d episodes unlocked%s\n", p.unlocked, count, count > 0 && p.unlocked >= count ? ", the gauntlet is open" : "");
+}
+
+CCMD(rl_crypt)
+{
+	if (!EnterCrypt()) Printf("rl_crypt: Blood single player only, and the Crypt (rlcrypt.map) must be in raze.pk3\n");
 }
 
 CCMD(rl_pick)
