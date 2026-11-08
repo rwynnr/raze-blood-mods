@@ -15,8 +15,10 @@
 //   nor an enemy wired into the map's script, such as Cheogh on E1M7) reroll to
 //   random types from a threat budget that grows with depth (the stock map's
 //   total on the first map, 1.5x on the last); key carriers keep their kind;
-// - a chance growing from 5% to 25% makes each a champion: 2.5x health, 1.25x
-//   size, tinted, 1.5x damage;
+// - a chance growing from 6% to 18% makes each a champion (2.5x health,
+//   1.25x size and damage, tinted blue), and a rarer one, from 4% to 12%, a
+//   red champion: 5x health, 1.5x damage, 1.4x size, moving and animating
+//   1.35x as fast, and it doesn't flinch;
 // - health, armor, ammo, explosive, weapon and powerup pickups reroll within
 //   their category (keys, the diving suit, jump boots and other quest-like
 //   items stay, as do items wired into the map's script); ammo leans to the
@@ -96,6 +98,7 @@ CUSTOM_CVARD(Int, rl_skill, 2, CVAR_ARCHIVE, "roguelite: skill of new runs, 0-4 
 // recolour a whole sprite; the others recolour a few colour ranges (robes, spiders, players). Blue stands out most
 // against Blood's warm colours, and no stock enemy wears it (stone gargoyles wear GRAY).
 CVARD(Int, rl_elite_pal, 10, CVAR_ARCHIVE, "roguelite: palette lookup that tints champions (0 = none; 10 blue, 2 red, 9 orange)")
+CVARD(Int, rl_elite_red_pal, 2, CVAR_ARCHIVE, "roguelite: palette lookup that tints red champions (0 = none; 2 red)")
 CVARD(Int, rl_ammo_target, 150, CVAR_ARCHIVE, "roguelite: each map's pickups hold this percent of the ammo your guns need for its enemies (150 = 1.5x; 0 = stock amounts)")
 
 // Meta progress, kept across runs. Blood and Cryptic Passage share a config, so what belongs to one game's episodes
@@ -160,11 +163,16 @@ namespace
 {
 
 constexpr int kClock = 120;                                   // PlayClock units per second
-constexpr int kIchorKill = 1, kIchorChampion = 5, kIchorMap = 10;
-// Spike 2's gentler base: the threat budget stays at each map's stock total, champions are rarer and softer, and
-// curses come only with the Covenant's Curses. The Covenant's conditions make it harder from there.
-constexpr double kChampionFirst = 0.04, kChampionLast = 0.12; // champion chance on a run's first and last map
-constexpr double kChampionHealth = 2.0, kChampionSize = 1.25; // and 1.25x damage (ScaleDamage)
+constexpr int kIchorKill = 1, kIchorChampion = 5, kIchorRed = 15, kIchorMap = 10;
+// Spike 2's gentler base: the threat budget stays at each map's stock total, and curses come only with the Covenant's
+// Curses. The Covenant's conditions make it harder from there. Champions came back up after the second playtest
+// ("the champions could be upped a bit in both frequency and health, and an additional level to them, like a red
+// champion that is as rare as the current ones but holds a lot more HP, speed, etc."): the old 4-12% and 2x went to
+// 6-18% and 2.5x, and red champions took the old rate.
+constexpr double kChampionFirst = 0.06, kChampionLast = 0.18; // champion chance on a run's first and last map
+constexpr double kChampionHealth = 2.5, kChampionSize = 1.25; // and 1.25x damage (ScaleDamage)
+constexpr double kRedFirst = 0.04, kRedLast = 0.12;           // red champions: the rarer tier
+constexpr double kRedHealth = 5.0, kRedSize = 1.4, kRedSpeed = 1.35; // and 1.5x damage; they don't flinch
 constexpr double kCurseChance = 0.25;                         // per map, from the second on, with the Covenant's Curses
 constexpr int kCurseTitle = 5 * kClock;                       // how long a curse is announced
 constexpr int kSkipIchor = 10;                                // the reward choice's "nothing" pays this
@@ -654,14 +662,18 @@ int KindCost(int type)
 
 struct Look { int pal; DVector2 scale; };
 
-void MakeChampion(DBloodActor* a, bool grow = true)
+void MakeChampion(DBloodActor* a, bool grow = true, bool red = false)
 {
-	a->modFlags |= kModChampion;
-	a->xspr.health = uint32_t(a->xspr.health * kChampionHealth);
+	a->modFlags |= kModChampion | (red ? kModRedChampion : 0);
+	a->xspr.health = uint32_t(a->xspr.health * (red ? kRedHealth : kChampionHealth));
 	if (!grow) return;
-	a->spr.scale *= kChampionSize;
-	a->xspr.scale = int((a->xspr.scale ? a->xspr.scale : 256) * kChampionSize); // SEQ frames keep the size
+	double size = red ? kRedSize : kChampionSize;
+	a->spr.scale *= size;
+	a->xspr.scale = int((a->xspr.scale ? a->xspr.scale : 256) * size); // SEQ frames keep the size
 }
+
+// The red champions' speed, for the base's modeActorSpeed (set as each map starts and on each load).
+double RedSpeed(DBloodActor* a) { return a && (a->modFlags & kModRedChampion) ? kRedSpeed : 1.; }
 
 void RemixEnemies(std::mt19937& rng, double depth)
 {
@@ -708,8 +720,15 @@ void RemixEnemies(std::mt19937& rng, double depth)
 		bmod::RetypeDude(reroll[i], pick.type, look ? look->pal : 0, look ? look->scale : DVector2(1, 1));
 	}
 
+	// One roll each: a red champion, a champion, or neither. The Covenant's Champions multiplies both.
 	double chance = (kChampionFirst + (kChampionLast - kChampionFirst) * depth) * (1 + run.cov[kChampions]);
-	for (auto a : eligible) if (Rand01(rng) < chance) MakeChampion(a);
+	double red = (kRedFirst + (kRedLast - kRedFirst) * depth) * (1 + run.cov[kChampions]);
+	for (auto a : eligible)
+	{
+		double r = Rand01(rng);
+		if (r < red) MakeChampion(a, true, true);
+		else if (r < red + chance) MakeChampion(a);
+	}
 }
 
 // The run's last map of an episode: its boss map.
@@ -1833,11 +1852,13 @@ void OnEvent(const bmod::EventInfo& ev)
 	switch (ev.type)
 	{
 	case bmod::Event::LevelStart:
+		bmod::modeActorSpeed = RedSpeed; // only actors a run marked are faster
 		if (IsCryptLevel()) SetupCrypt();
 		else crypt.in = false;
 		LevelStarted();
 		break;
 	case bmod::Event::SaveLoaded:
+		bmod::modeActorSpeed = RedSpeed;
 		nextCurseTry = 0;
 		ledger = AmmoLedger(); // rl_ammo's "at the start" belongs to the map as it started, not to this load
 		if (IsCryptLevel()) SetupCrypt();
@@ -1847,10 +1868,10 @@ void OnEvent(const bmod::EventInfo& ev)
 	case bmod::Event::Kill:
 		if (run.active && !run.over && AllowedKillType(ev.actor))
 		{
-			bool champion = (ev.actor->modFlags & kModChampion) != 0;
+			bool champion = (ev.actor->modFlags & kModChampion) != 0, red = (ev.actor->modFlags & kModRedChampion) != 0;
 			run.kills++;
 			if (champion) run.champions++;
-			run.ichor += champion ? kIchorChampion : kIchorKill;
+			run.ichor += red ? kIchorRed : champion ? kIchorChampion : kIchorKill;
 		}
 		break;
 	case bmod::Event::PlayerDeath:
@@ -2432,11 +2453,14 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
 	auto s = source;
 	for (int i = 0; i < 2 && s && !s->IsDudeActor(); i++) s = s->GetOwner(); // a missile's or explosion's owner
 	if (!s || s == target || !s->IsDudeActor() || s->IsPlayerActor()) return damage;
-	if (s->modFlags & kModChampion) damage += damage / 4; // champions hit 1.25x
+	if (s->modFlags & kModRedChampion) damage += damage / 2;  // red champions hit 1.5x
+	else if (s->modFlags & kModChampion) damage += damage / 4; // champions 1.25x
 	if (run.active && !run.over && target->IsPlayerActor() && run.cov[kWrath] > 0)
 		damage = int(damage * (1. + 0.2 * run.cov[kWrath]) + 0.5); // the Covenant's Wrath
 	return damage;
 }
+
+bool Unflinching(DBloodActor* actor) { return actor && (actor->modFlags & kModRedChampion); }
 
 int ScaleHealing(DBloodActor* actor, int add)
 {
@@ -2450,7 +2474,7 @@ void CovenantChanged() { UpdateMenus(); }
 void TintSprite(DBloodActor* owner, tspritetype* tspr)
 {
 	if (!owner || !tspr || !(owner->modFlags & kModChampion)) return;
-	int pal = rl_elite_pal;
+	int pal = (owner->modFlags & kModRedChampion) ? rl_elite_red_pal : rl_elite_pal;
 	if (pal > 0 && pal < MAXREALPAL && lookups.checkTable(pal)) tspr->pal = pal;
 	tspr->shade = int8_t(std::max(tspr->shade - 12, -128)); // and a little brighter
 }
