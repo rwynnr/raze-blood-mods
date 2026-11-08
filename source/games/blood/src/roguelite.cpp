@@ -9,13 +9,14 @@
 // is seeded per run. Weapons, ammo, armor and the pack carry over as usual.
 //
 // Each level start remixes the map:
-// - eligible enemies (the base's shuffle rules: no bosses, critters, statues...)
-//   reroll to random types from a threat budget that grows with depth (the
-//   stock map's total on the first map, 1.5x on the last);
+// - eligible enemies (the base's shuffle rules: no bosses, critters, statues...;
+//   nor an enemy whose death ends the level) reroll to random types from a
+//   threat budget that grows with depth (the stock map's total on the first
+//   map, 1.5x on the last);
 // - a chance growing from 5% to 25% makes each a champion: 2.5x health, 1.25x
 //   size, tinted, 1.5x damage;
 // - health, armor, ammo, weapon and powerup pickups reroll within their category
-//   (keys, the diving suit and other quest-like items stay);
+//   (keys, the diving suit, jump boots and other quest-like items stay);
 // - from the second map on, a 25% chance that one of the base's timed effects
 //   curses the whole level (announced under the map's name).
 //
@@ -239,6 +240,7 @@ void RemixEnemies(std::mt19937& rng, double depth)
 	while (auto a = it.Next())
 	{
 		if (!bmod::ShuffleEligible(a, false)) continue;
+		if (a->xspr.txID == kChannelLevelExitNormal || a->xspr.txID == kChannelLevelExitSecret) continue; // its death ends the level: a boss
 		eligible.Push(a);
 		if (!looks.CheckKey(a->spr.type)) looks.Insert(a->spr.type, { a->spr.pal, a->spr.scale });
 		if (a->sector() && !IsUnderwaterSector(a->sector())) reroll.Push(a); // swimmers stay what they are
@@ -300,11 +302,12 @@ const ItemPick weaponPicks[] =
 	{ kItemWeaponFlarePistol, 3 }, { kItemWeaponSawedoff, 3 }, { kItemWeaponTommygun, 3 },
 	{ kItemWeaponNapalmLauncher, 2 }, { kItemWeaponTeslaCannon, 2 }, { kItemWeaponLifeLeech, 1 },
 };
-// Not the diving suit, gas mask or asbestos armor (levels can need them), nor the crystal ball (multiplayer only).
+// Not the diving suit, jump boots, gas mask or asbestos armor (a level can need them to get through),
+// nor the crystal ball (multiplayer only).
 const ItemPick powerupPicks[] =
 {
-	{ kItemShadowCloak, 2 }, { kItemDeathMask, 1 }, { kItemJumpBoots, 2 }, { kItemTwoGuns, 2 },
-	{ kItemReflectShots, 2 }, { kItemBeastVision, 2 }, { kItemShroomDelirium, 1 },
+	{ kItemShadowCloak, 2 }, { kItemDeathMask, 1 }, { kItemTwoGuns, 2 }, { kItemReflectShots, 2 },
+	{ kItemBeastVision, 2 }, { kItemShroomDelirium, 1 },
 };
 
 struct ItemCategory { const ItemPick* picks; int count; };
@@ -751,7 +754,7 @@ void BuildMenu()
 	int count = int(eps.Size()), unlocked = Unlocked(count);
 	text(FStringf("Ichor banked: %d", (int)rl_ichor).GetChars(), CR_GOLD);
 	text(FStringf("Runs: %d   Won: %d", (int)rl_runs, (int)rl_wins).GetChars(), -1);
-	if (run.active && !run.over)
+	if (run.active && !run.over && gamestate == GS_LEVEL)
 		text(FStringf("Playing: %s, map %d of %d", RunName(run.episode).GetChars(), run.index + 1, int(run.maps.Size())).GetChars(), CR_WHITE);
 	else if (rl_activerun != 0)
 		text("A run is in progress: load one of its saves to go on", -1);
