@@ -7,6 +7,7 @@
 //---------------------------------------------------------------------------
 
 #include "ns.h"
+#include <cmath>
 #include "build.h"
 #include "blood.h"
 #include "c_cvars.h"
@@ -247,6 +248,15 @@ int ScaleBlast(int damage)
 // their animation ticks. 1.0 leaves stock behavior untouched.
 double modeEnemyTimeScale = 1;
 double EnemyTimeScale() { return mods.enemyTimeScale * modeEnemyTimeScale; }
+double (*modeActorSpeed)(DBloodActor* actor) = nullptr;
+
+// One enemy's own speed factor (modeActorSpeed), 1 for players and when no mode sets one.
+static double ActorSpeed(DBloodActor* actor)
+{
+	if (!modeActorSpeed || !actor || actor->IsPlayerActor()) return 1;
+	double f = modeActorSpeed(actor);
+	return f > 1 ? f : 1;
+}
 
 static double enemyAcc;
 static int enemyPassesThisTic = 1;
@@ -267,13 +277,19 @@ int AiFrame() { return EnemyTimeScale() == 1 ? gFrameCount : aiFrame; }
 
 int DudeMoveSteps(DBloodActor* actor)
 {
-	return (actor && actor->IsPlayerActor()) ? 1 : enemyPassesThisTic;
+	if (actor && actor->IsPlayerActor()) return 1;
+	int steps = enemyPassesThisTic;
+	double f = ActorSpeed(actor);
+	if (f > 1) // the part over 1 as an extra step on that share of the tics (1.35: 35 tics in 100)
+		steps += int(std::floor((gFrameCount + 1) * (f - 1)) - std::floor(gFrameCount * (f - 1)));
+	return steps;
 }
 
 int SeqTicks(DBloodActor* owner, int nTicks)
 {
-	double scale = EnemyTimeScale();
-	if (scale == 1 || !owner || owner->spr.statnum != kStatDude || owner->IsPlayerActor()) return nTicks;
+	if (!owner || owner->spr.statnum != kStatDude || owner->IsPlayerActor()) return nTicks;
+	double scale = EnemyTimeScale() * ActorSpeed(owner);
+	if (scale == 1) return nTicks;
 	return int(nTicks * scale + 0.5);
 }
 
