@@ -181,6 +181,12 @@ BEGIN_BLD_NS
 namespace rogue
 {
 
+// The Forge's Litanies, defined after the run's code (see "the Forge at work").
+static void ResetLitanies();
+static void LitaniesLoaded();
+static void ForgeTick();
+static bool Sings(int k);
+
 namespace
 {
 
@@ -2307,13 +2313,7 @@ void OnEvent(const bmod::EventInfo& ev)
 		LevelStarted();
 		break;
 	case bmod::Event::SaveLoaded:
-		ResetLitanies();
-		if (run.active && !run.over && Sings(kLitCandle)) // lodged candles get a fresh fuse
-		{
-			BloodStatIterator it(kStatFlare);
-			while (auto f = it.Next())
-				if ((f->modFlags & kModForged) && f->insector()) candles.Push({ f, PlayClock + kClock * 3 / 2, f->spr.pos, f->sector() });
-		}
+		LitaniesLoaded();
 		bmod::modeActorSpeed = RedSpeed;
 		bmod::modeWaveSpawned = WaveSpawned;
 		nextCurseTry = 0;
@@ -2708,6 +2708,8 @@ FString KitFitText()
 	check(0, "the gauntlet");
 	return over.IsEmpty() ? FString("This kit fits every run.") : FStringf("Too many points for: %s", over.GetChars());
 }
+
+void BuildBookMenu();
 
 void UpdateMenus()
 {
@@ -3253,6 +3255,16 @@ static void ResetLitanies()
 	witchfireNext = INT_MIN / 2;
 	litanyFired = 0;
 	litanyShown = -1;
+}
+
+// A save loaded: the lists start clean, and lodged candles get a fresh fuse.
+static void LitaniesLoaded()
+{
+	ResetLitanies();
+	if (!run.active || run.over || !Sings(kLitCandle)) return;
+	BloodStatIterator it(kStatFlare);
+	while (auto f = it.Next())
+		if ((f->modFlags & kModForged) && f->insector()) candles.Push({ f, PlayClock + kClock * 3 / 2, f->spr.pos, f->sector() });
 }
 
 static bool IsLive(DBloodActor* a, int stat)
