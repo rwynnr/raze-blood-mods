@@ -7,16 +7,19 @@
 // maps (the chain of normal exits from the episode's first map, so secret maps
 // are skipped) are shuffled with the last one (the boss) kept last. Everything
 // is seeded per run. Weapons, ammo, armor and the pack carry over as usual.
+// An episode's opening movie plays when the run enters the episode, whichever
+// map comes first, and not again when the episode's first map comes up later.
 //
 // Each level start remixes the map:
 // - eligible enemies (the base's shuffle rules: no bosses, critters, statues...;
-//   nor an enemy whose death ends the level) reroll to random types from a
-//   threat budget that grows with depth (the stock map's total on the first
-//   map, 1.5x on the last);
+//   nor an enemy wired into the map's script, such as Cheogh on E1M7) reroll to
+//   random types from a threat budget that grows with depth (the stock map's
+//   total on the first map, 1.5x on the last); key carriers keep their kind;
 // - a chance growing from 5% to 25% makes each a champion: 2.5x health, 1.25x
 //   size, tinted, 1.5x damage;
-// - health, armor, ammo, weapon and powerup pickups reroll within their category
-//   (keys, the diving suit, jump boots and other quest-like items stay);
+// - health, armor, ammo, explosive, weapon and powerup pickups reroll within
+//   their category (keys, the diving suit, jump boots and other quest-like
+//   items stay, as do items wired into the map's script);
 // - from the second map on, a 25% chance that one of the base's timed effects
 //   curses the whole level (announced under the map's name).
 //
@@ -32,17 +35,19 @@
 //   rl_newrun <episode|gauntlet> [seed]  start a run (episode = 1..N in the game's own list) at rl_skill
 //   rl_status                            the run in progress and the meta progress
 //   rl_clearmap                          end the run's current map as cleared, as if its exit was used
-//   rl_resetprogress                     lock the episodes again and empty the ichor bank
+//   rl_unlock <count|all>                set how many of this game's episodes are unlocked (testing)
+//   rl_resetprogress                     lock this game's episodes again; empty the ichor bank and the wins
 //   openmenu RogueliteMenu               the Roguelite menu (it is also on the main menu)
 // CVARs: rl_skill (0-4, set by the menu), rl_elite_pal (the champions' tint, a palette lookup number:
-// 0-14 in Blood, 0 = none), and the meta progress, kept in the config: rl_unlocked, rl_ichor, rl_runs,
-// rl_wins, rl_gauntletwon, rl_activerun (the run whose saves can still be continued, 0 = none).
+// 0-14 in Blood, 0 = none), and the meta progress, kept in the config: rl_progress (per game, since
+// Blood and Cryptic Passage share a config: episodes unlocked, the gauntlet won, the run whose saves can
+// still be continued) and, shared by both, rl_ichor, rl_runs, rl_wins.
 //
 // Hooks into stock code (one-liners): levelEndLevel (the next map), playerProcess (Use while dead),
 // GameInterface::NewGame, SerializeGameState (the save block), DBloodActor::modFlags (champions, saved
 // with the actor), actDamageSprite and viewProcessSprites (champion damage and tint),
-// GameInterface::MenuOpened (the menu's run list), and the core main loop's return to the main menu
-// (the run's result and writing the config).
+// GameInterface::MenuOpened (the menu's run list), the core main loop's return to the main menu
+// (the run's result and writing the config), and the core intermission's choice of a map's intro movie.
 //
 //---------------------------------------------------------------------------
 
@@ -64,25 +69,29 @@
 #include "serializer.h"
 #include "v_draw.h"
 #include "v_font.h"
+#include "vm.h"
 #include "printf.h"
 
 extern TArray<VolumeRecord> volumes; // mapinfo.cpp: the loaded game's episodes
 extern void (*gModMainMenuHook)();   // core main loop: the game has just gone back to the main menu
+extern CutsceneDef* (*gModMapIntroHook)(MapRecord* map, CutsceneDef* stock); // core intermission: the movie entering a map plays
 
 CUSTOM_CVARD(Int, rl_skill, 2, CVAR_ARCHIVE, "roguelite: skill of new runs, 0-4 (Blood's five skills)")
 {
 	if (self < 0) self = 0;
 	else if (self > 4) self = 4;
 }
-CVARD(Int, rl_elite_pal, 10, CVAR_ARCHIVE, "roguelite: palette lookup that tints champions (0 = none; 10 cold blue, 2 or 7 red)")
+// Of Blood's 15 palette lookups only 2 (BEAST, red), 5 (GRAY), 6 (GRAYISH), 9 (FLAME, orange) and 10 (COLD, blue)
+// recolour a whole sprite; the others recolour a few colour ranges (robes, spiders, players). Blue stands out most
+// against Blood's warm colours, and no stock enemy wears it (stone gargoyles wear GRAY).
+CVARD(Int, rl_elite_pal, 10, CVAR_ARCHIVE, "roguelite: palette lookup that tints champions (0 = none; 10 blue, 2 red, 9 orange)")
 
-// Meta progress, kept across runs.
-CVARD(Int, rl_unlocked, 1, CVAR_ARCHIVE, "roguelite: episodes unlocked, in the game's order (winning an episode run unlocks the next)")
+// Meta progress, kept across runs. Blood and Cryptic Passage share a config, so what belongs to one game's episodes
+// is kept per game in rl_progress; the ichor bank and the run counts are shared.
+CVARD(String, rl_progress, "", CVAR_ARCHIVE, "roguelite: per game, '<game>=<episodes unlocked>,<gauntlet won>,<run that can be continued>;...'")
 CVARD(Int, rl_ichor, 0, CVAR_ARCHIVE, "roguelite: ichor banked by the runs that have ended")
 CVARD(Int, rl_runs, 0, CVAR_ARCHIVE, "roguelite: runs started (also numbers them)")
 CVARD(Int, rl_wins, 0, CVAR_ARCHIVE, "roguelite: runs won")
-CVARD(Bool, rl_gauntletwon, false, CVAR_ARCHIVE, "roguelite: the gauntlet has been won")
-CVARD(Int, rl_activerun, 0, CVAR_ARCHIVE, "roguelite: the run whose saves can still be continued (0 = none)")
 
 BEGIN_BLD_NS
 
@@ -104,7 +113,7 @@ struct Run
 {
 	bool active = false;
 	bool over = false;            // the player died: the "Run over" screen shows until Use
-	int id = 0;                   // the run's number; only rl_activerun can be continued from a save
+	int id = 0;                   // the run's number; only the game's active run can be continued from a save
 	uint32_t seed = 0;
 	int skill = 2;
 	int episode = 0;              // 1..N in the game's episode list; 0 = the gauntlet
@@ -123,6 +132,52 @@ bool refusedLoad;    // a save of a run that has ended was loaded: back to the m
 FString menuMessage; // shown when the game is next back at the main menu
 bool saveConfig;     // the meta progress changed: write the config at the main menu
 int nextCurseTry;
+
+//---------------------------------------------------------------------------
+//
+// this game's progress: one "<game>=<unlocked>,<gauntlet won>,<active run>"
+// entry per game in rl_progress (game: Raze's filter name, Blood.Blood or
+// Blood.Cryptic), entries separated by ';'
+//
+//---------------------------------------------------------------------------
+
+struct Progress
+{
+	int unlocked = 1;         // episodes unlocked, in the game's order
+	bool gauntletWon = false;
+	int activeRun = 0;        // the run whose saves can still be continued, 0 = none
+};
+
+Progress GetProgress()
+{
+	Progress p;
+	auto entries = FString(*rl_progress).Split(";", FString::TOK_SKIPEMPTY);
+	for (auto& entry : entries)
+	{
+		auto eq = entry.IndexOf('=');
+		if (eq <= 0 || entry.Left(eq).CompareNoCase(LumpFilter) != 0) continue;
+		auto values = entry.Mid(eq + 1).Split(",");
+		if (values.Size() > 0) p.unlocked = std::max(int(values[0].ToLong()), 1);
+		if (values.Size() > 1) p.gauntletWon = values[1].ToLong() != 0;
+		if (values.Size() > 2) p.activeRun = int(values[2].ToLong());
+	}
+	return p;
+}
+
+void SetProgress(const Progress& p)
+{
+	FString out;
+	auto entries = FString(*rl_progress).Split(";", FString::TOK_SKIPEMPTY);
+	for (auto& entry : entries)
+	{
+		auto eq = entry.IndexOf('=');
+		if (eq <= 0 || entry.Left(eq).CompareNoCase(LumpFilter) == 0) continue; // this game's old entry (or a broken one)
+		out.AppendFormat("%s;", entry.GetChars());
+	}
+	out.AppendFormat("%s=%d,%d,%d", LumpFilter.GetChars(), p.unlocked, int(p.gauntletWon), p.activeRun);
+	rl_progress = out.GetChars();
+	saveConfig = true;
+}
 
 int RandInt(std::mt19937& rng, int lo, int hi) { return std::uniform_int_distribution<int>(lo, hi)(rng); }
 double Rand01(std::mt19937& rng) { return std::uniform_real_distribution<double>(0., 1.)(rng); }
@@ -150,7 +205,7 @@ void GetEpisodes(TArray<Episode>& out)
 	}
 }
 
-int Unlocked(int count) { return std::clamp((int)rl_unlocked, 1, std::max(count, 1)); }
+int Unlocked(int count) { return std::clamp(GetProgress().unlocked, 1, std::max(count, 1)); }
 
 // An episode's regular maps: its first map, then each map's normal exit until the episode ends.
 // Maps that only a secret exit leads to are not on this chain.
@@ -240,9 +295,16 @@ void RemixEnemies(std::mt19937& rng, double depth)
 	while (auto a = it.Next())
 	{
 		if (!bmod::ShuffleEligible(a, false)) continue;
-		if (a->xspr.txID == kChannelLevelExitNormal || a->xspr.txID == kChannelLevelExitSecret) continue; // its death ends the level: a boss
-		eligible.Push(a);
 		if (!looks.CheckKey(a->spr.type)) looks.Insert(a->spr.type, { a->spr.pal, a->spr.scale });
+		// An enemy wired into the map's script stays as Blood placed it and is never a champion: one whose death
+		// sends a message (Cheogh and his gargoyles on E1M7 feed the kill counter that opens the exit; the boss rush
+		// on E4M8; a door that opens when its guard dies), or one that a trigger wakes or moves: 137 of the 4083
+		// enemies of these types on Blood's and Cryptic Passage's maps.
+		if (a->xspr.txID != 0 || a->xspr.rxID != 0) continue;
+		eligible.Push(a);
+		// A key carrier keeps its kind (it can still be a champion): a gargoyle or phantasm in its place could drop
+		// the key over a pit or lava. 17 enemies on the stock maps carry one.
+		if (a->xspr.key > 0 || (a->xspr.dropMsg >= kItemKeyBase && a->xspr.dropMsg < kItemKeyMax)) continue;
 		if (a->sector() && !IsUnderwaterSector(a->sector())) reroll.Push(a); // swimmers stay what they are
 	}
 
@@ -265,7 +327,9 @@ void RemixEnemies(std::mt19937& rng, double depth)
 		for (unsigned k = 0; k < pool.Size(); k++) if (pool[k].cost <= cap) afford.Push(int(k));
 		const Kind& pick = afford.Size() ? pool[afford[RandInt(rng, 0, int(afford.Size()) - 1)]] : pool[0];
 		budget -= pick.cost;
-		auto look = looks.CheckKey(pick.type); // the map's own look for that type, else the one Blood spawns with
+		// The map's own look for that type, if it has one. Either way the type's SEQ sets its own palette and size as it
+		// spawns (Tommy cultist 3, tesla 11, TNT 13, stone gargoyle 5...), so a type the map lacks still looks right.
+		auto look = looks.CheckKey(pick.type);
 		bmod::RetypeDude(reroll[i], pick.type, look ? look->pal : 0, look ? look->scale : DVector2(1, 1));
 	}
 
@@ -293,9 +357,13 @@ const ItemPick armorPicks[] =
 const ItemPick ammoPicks[] =
 {
 	{ kItemAmmoSawedoffFew, 4 }, { kItemAmmoSawedoffBox, 2 }, { kItemAmmoTommygunFew, 4 }, { kItemAmmoTommygunDrum, 2 },
-	{ kItemAmmoFlares, 4 }, { kItemAmmoTNTBundle, 3 }, { kItemAmmoTNTBox, 1 }, { kItemAmmoSprayCan, 2 },
-	{ kItemAmmoProxBombBundle, 2 }, { kItemAmmoRemoteBombBundle, 2 }, { kItemAmmoTeslaCharge, 2 },
+	{ kItemAmmoFlares, 4 }, { kItemAmmoSprayCan, 2 }, { kItemAmmoTeslaCharge, 2 },
 	{ kItemAmmoGasolineCan, 2 }, { kItemAmmoTrappedSoul, 1 }, { kItemAmmoVoodooDoll, 1 },
+};
+// Explosives reroll only into explosives, so a map keeps the means to blast what it expects to be blasted.
+const ItemPick explosivePicks[] =
+{
+	{ kItemAmmoTNTBundle, 3 }, { kItemAmmoTNTBox, 1 }, { kItemAmmoProxBombBundle, 2 }, { kItemAmmoRemoteBombBundle, 2 },
 };
 const ItemPick weaponPicks[] =
 {
@@ -317,6 +385,7 @@ const ItemCategory itemCategories[] =
 	{ healthPicks, int(countof(healthPicks)) },
 	{ armorPicks, int(countof(armorPicks)) },
 	{ ammoPicks, int(countof(ammoPicks)) },
+	{ explosivePicks, int(countof(explosivePicks)) },
 	{ weaponPicks, int(countof(weaponPicks)) },
 	{ powerupPicks, int(countof(powerupPicks)) },
 };
@@ -374,6 +443,11 @@ void RemixItems(std::mt19937& rng)
 	{
 		auto cat = CategoryOf(a->spr.type);
 		if (!cat) continue; // keys, flags, quest items and anything unknown stay
+		// So does an item wired into the map's script: picking it up sends a message (E1M6's fire armour opens a
+		// door), or a trigger acts on it. Blood sends the message only once the item is taken, which a reroll into
+		// something the player can't take yet would hold back. A "secret found" message only counts the secret.
+		// 12 such items on the stock maps.
+		if (a->hasX() && ((a->xspr.txID != 0 && a->xspr.txID != kChannelSecretFound) || a->xspr.rxID != 0)) continue;
 		int total = 0;
 		for (int i = 0; i < cat->count; i++) total += cat->picks[i].weight;
 		int r = RandInt(rng, 0, total - 1);
@@ -486,7 +560,12 @@ void WriteConfig()
 void Bank()
 {
 	rl_ichor = rl_ichor + run.ichor;
-	if (rl_activerun == run.id) rl_activerun = 0;
+	auto p = GetProgress();
+	if (p.activeRun == run.id)
+	{
+		p.activeRun = 0;
+		SetProgress(p);
+	}
 	saveConfig = true;
 }
 
@@ -513,14 +592,17 @@ void RunWon()
 	GetEpisodes(eps);
 	int count = int(eps.Size());
 	FString news;
+	auto p = GetProgress();
 	if (run.episode == 0)
 	{
-		rl_gauntletwon = true;
+		p.gauntletWon = true;
+		SetProgress(p);
 		news = "The gauntlet is won!";
 	}
 	else if (run.episode >= Unlocked(count) && run.episode < count)
 	{
-		rl_unlocked = run.episode + 1;
+		p.unlocked = run.episode + 1;
+		SetProgress(p);
 		news.Format("Unlocked: %s", eps[run.episode].name.GetChars());
 		if (run.episode + 1 >= count) news += "\nThe gauntlet is open: every episode in one run.";
 	}
@@ -540,12 +622,18 @@ bool StartRun(int episode, uint32_t seed)
 		Printf("rl_newrun: no maps found for this run\n");
 		return false;
 	}
-	if (run.active && !run.over) Printf(PRINT_NOTIFY, "Roguelite: the run in progress is abandoned\n");
+	if (run.active && !run.over)
+	{
+		Printf(PRINT_NOTIFY, "Roguelite: the run in progress is abandoned\n");
+		Bank(); // abandoning ends it: its ichor is banked, as when it ends any other way
+	}
 	run = Run();
 	run.active = true;
 	run.id = std::max((int)rl_runs, 0) + 1;
 	rl_runs = run.id;
-	rl_activerun = run.id;
+	auto p = GetProgress();
+	p.activeRun = run.id;
+	SetProgress(p);
 	run.seed = seed;
 	run.skill = rl_skill;
 	run.episode = episode;
@@ -710,9 +798,9 @@ void OnDraw(DBloodPlayer* pPlayer)
 		DrawRunOver(pPlayer, sc);
 		return;
 	}
-	if (bmod::mods.hideHud) return; // the "No HUD" effect hides this too
+	DrawCurseTitle(); // even under the "No HUD" curse, which must announce itself too
+	if (bmod::mods.hideHud) return; // the "No HUD" effect hides the run line
 	DrawRunLine(sc);
-	DrawCurseTitle();
 }
 
 //---------------------------------------------------------------------------
@@ -724,6 +812,21 @@ void OnDraw(DBloodPlayer* pPlayer)
 
 DMenuDescriptor* menuDesc;        // the menu the items below were added to (compared only)
 TArray<DMenuItemBase*> menuItems; // the items added here
+
+// A menu entry that starts a run. While another run is in progress (being played, or continuable from its saves),
+// it asks first with Blood's yes/no message (OptionMenuItemSafeCommand), since starting a run ends the other one.
+DMenuItemBase* CreateRunItem(const char* label, const char* command, bool confirm)
+{
+	auto cls = confirm ? PClass::FindClass("OptionMenuItemSafeCommand") : nullptr;
+	auto init = cls ? dyn_cast<PFunction>(cls->FindSymbol("Init", false)) : nullptr;
+	if (!init) return CreateOptionMenuItemCommand(label, FName(command));
+	auto item = cls->CreateNew();
+	FString labelStr = label;
+	FString prompt = "This abandons the run in progress: its saves stop loading.\nStart a new run?";
+	VMValue params[] = { item, &labelStr, FName(command).GetIndex(), &prompt };
+	VMCall(init->Variants[0].Implementation, params, countof(params), nullptr, 0);
+	return (DMenuItemBase*)item;
+}
 
 void BuildMenu()
 {
@@ -752,11 +855,13 @@ void BuildMenu()
 	TArray<Episode> eps;
 	GetEpisodes(eps);
 	int count = int(eps.Size()), unlocked = Unlocked(count);
+	auto progress = GetProgress();
+	bool inProgress = (run.active && !run.over) || progress.activeRun != 0; // starting a run would end it
 	text(FStringf("Ichor banked: %d", (int)rl_ichor).GetChars(), CR_GOLD);
 	text(FStringf("Runs: %d   Won: %d", (int)rl_runs, (int)rl_wins).GetChars(), -1);
 	if (run.active && !run.over && gamestate == GS_LEVEL)
 		text(FStringf("Playing: %s, map %d of %d", RunName(run.episode).GetChars(), run.index + 1, int(run.maps.Size())).GetChars(), CR_WHITE);
-	else if (rl_activerun != 0)
+	else if (progress.activeRun != 0)
 		text("A run is in progress: load one of its saves to go on", -1);
 	text("", -1);
 
@@ -767,7 +872,7 @@ void BuildMenu()
 		if (e < unlocked)
 		{
 			if (first < 0) first = int(opt->mItems.Size());
-			add(CreateOptionMenuItemCommand(eps[e].name.GetChars(), FName(FStringf("rl_newrun %d", e + 1).GetChars())));
+			add(CreateRunItem(eps[e].name.GetChars(), FStringf("rl_newrun %d", e + 1).GetChars(), inProgress));
 		}
 		else text(FStringf("%s  (locked)", eps[e].name.GetChars()).GetChars(), CR_DARKGRAY);
 	}
@@ -775,13 +880,39 @@ void BuildMenu()
 	text("", -1);
 	header("The gauntlet");
 	if (count > 0 && unlocked >= count)
-		add(CreateOptionMenuItemCommand(rl_gauntletwon ? "Every episode in one run (won)" : "Every episode in one run", FName("rl_newrun gauntlet")));
+		add(CreateRunItem(progress.gauntletWon ? "Every episode in one run (won)" : "Every episode in one run", "rl_newrun gauntlet", inProgress));
 	else text("Unlocks once every episode is unlocked", CR_DARKGRAY);
 	text("", -1);
 	text("Winning an episode run unlocks the next one.", -1);
 	text("Dying ends the run. Starting a new run abandons the old one.", -1);
-	opt->mSelectedItem = first;
+	opt->mSelectedItem = inProgress ? -1 : first; // -1: the menu's first item (the skill), so Enter can't start a run by accident
 	opt->mScrollPos = 0;
+}
+
+//---------------------------------------------------------------------------
+//
+// the movie entering a map: Blood ties an episode's opening movie to the
+// episode's first map (The Way of All Flesh: Caleb rising from his grave, on
+// E1M1), and Dead Reckoning's other one to its boss map. In a run, the opening
+// movie plays when the run enters the episode, on whichever map comes first,
+// and not again when the episode's first map comes up later; a movie on any
+// other map stays with its map (the boss map is the run's last anyway).
+//
+//---------------------------------------------------------------------------
+
+CutsceneDef* MapIntro(MapRecord* map, CutsceneDef* stock)
+{
+	if (!map || !run.active || run.over || run.pending < 0 || run.pending >= int(run.maps.Size())
+		|| run.maps[run.pending].CompareNoCase(map->labelName) != 0)
+		return stock; // not the run going to its next map: stock
+	auto vol = FindVolume(map->cluster);
+	auto start = vol ? FindMapByName(vol->startmap.GetChars()) : nullptr;
+	if (!start) return stock;
+	auto prev = run.pending > 0 ? FindMapByName(run.maps[run.pending - 1].GetChars()) : nullptr;
+	bool entering = !prev || prev->cluster != map->cluster;
+	if (entering) return &start->intro;
+	static CutsceneDef none = [] { CutsceneDef c; c.function = "none"; return c; }(); // plays nothing, and nothing in its place
+	return start == map ? &none : stock;
 }
 
 struct Registrar
@@ -792,6 +923,7 @@ struct Registrar
 		bmod::AddTicker(OnTick);
 		bmod::AddDrawer(OnDraw);
 		::gModMainMenuHook = [] { OnMainMenu(); };
+		::gModMapIntroHook = [](MapRecord* map, CutsceneDef* stock) { return MapIntro(map, stock); };
 	}
 } registrar;
 
@@ -805,7 +937,14 @@ struct Registrar
 
 MapRecord* NextLevel(MapRecord* stockNext)
 {
-	if (!run.active || run.over || run.index < 0) return stockNext;
+	if (run.active && run.over)
+	{
+		// The player has died and an exit fires late (a delayed trigger): the level doesn't end, so the "Run over"
+		// screen stays instead of the stock next map loading outside the run.
+		gGameOptions.uGameFlags &= ~GF_AdvanceLevel;
+		return stockNext;
+	}
+	if (!run.active || run.index < 0) return stockNext;
 	if (run.exiting) // a second exit in the same tic: the same answer
 		return run.pending >= 0 && run.pending < int(run.maps.Size()) ? FindMapByName(run.maps[run.pending].GetChars()) : nullptr;
 	run.exiting = true;
@@ -834,6 +973,10 @@ void OnNewGame()
 	if (startingRun)
 	{
 		startingRun = false;
+		// Write the run's number and this game's active run now, so a crash mid-run can't lose them (its saves
+		// would be refused, and the next run would reuse its number). The last level's effects are off by now.
+		saveConfig = false;
+		WriteConfig();
 		return;
 	}
 	run = Run(); // a game outside the run; the run, if any, can still be continued from its saves
@@ -902,7 +1045,7 @@ void Serialize(FSerializer& arc)
 	}
 	run = Run();
 	if (!has) return; // a save outside any run: stock Blood
-	if (loaded.id <= 0 || loaded.id != rl_activerun || loaded.index < 0 || loaded.index >= int(loaded.maps.Size()))
+	if (loaded.id <= 0 || loaded.id != GetProgress().activeRun || loaded.index < 0 || loaded.index >= int(loaded.maps.Size()))
 	{
 		refusedLoad = true; // that run has ended: the ticker sends the game back to the menu
 		return;
@@ -981,8 +1124,26 @@ CCMD(rl_status)
 	FString list;
 	for (int e = 0; e < count; e++) list.AppendFormat("%s%s%s", e ? ", " : "", eps[e].name.GetChars(), e < unlocked ? "" : " (locked)");
 	Printf("Episodes: %s\n", count ? list.GetChars() : "none found");
-	Printf("Gauntlet: %s. Ichor banked: %d. Runs: %d, won: %d. Run that can be continued: %d\n",
-		rl_gauntletwon ? "won" : count > 0 && unlocked >= count ? "open" : "locked", (int)rl_ichor, (int)rl_runs, (int)rl_wins, (int)rl_activerun);
+	auto p = GetProgress();
+	Printf("Gauntlet: %s. Run that can be continued: %d (%s)\n", p.gauntletWon ? "won" : count > 0 && unlocked >= count ? "open" : "locked",
+		p.activeRun, LumpFilter.GetChars());
+	Printf("Ichor banked: %d. Runs: %d, won: %d (all games)\n", (int)rl_ichor, (int)rl_runs, (int)rl_wins);
+}
+
+CCMD(rl_unlock)
+{
+	TArray<Episode> eps;
+	GetEpisodes(eps);
+	int count = int(eps.Size());
+	if (argv.argc() < 2)
+	{
+		Printf("usage: rl_unlock <count|all>   (%d of %d episodes unlocked)\n", Unlocked(count), count);
+		return;
+	}
+	auto p = GetProgress();
+	p.unlocked = !stricmp(argv[1], "all") ? std::max(count, 1) : std::clamp(atoi(argv[1]), 1, std::max(count, 1));
+	SetProgress(p);
+	Printf(PRINT_NOTIFY, "Roguelite: %d of %d episodes unlocked%s\n", p.unlocked, count, count > 0 && p.unlocked >= count ? ", the gauntlet is open" : "");
 }
 
 CCMD(rl_clearmap)
@@ -998,13 +1159,11 @@ CCMD(rl_clearmap)
 CCMD(rl_resetprogress)
 {
 	// rl_runs keeps counting, so an old run's saves never match a new run's number.
-	rl_unlocked = 1;
+	SetProgress(Progress());
 	rl_ichor = 0;
 	rl_wins = 0;
-	rl_gauntletwon = false;
-	rl_activerun = 0;
 	saveConfig = true;
-	Printf(PRINT_NOTIFY, "Roguelite: progress reset (episodes locked, ichor bank empty)\n");
+	Printf(PRINT_NOTIFY, "Roguelite: progress reset (this game's episodes locked; ichor bank and wins emptied)\n");
 }
 
 } // namespace rogue

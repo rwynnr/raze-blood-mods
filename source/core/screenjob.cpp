@@ -54,6 +54,7 @@ static PType* maprecordtype;
 static PType* summaryinfotype;
 static int ticks;
 static SummaryInfo summaryinfo;
+CutsceneDef* (*gModMapIntroHook)(MapRecord* map, CutsceneDef* stock); // blood2d mod: may pick another movie for entering a map (the roguelite's shuffled runs)
 
 //=============================================================================
 //
@@ -238,7 +239,7 @@ void ShowIntermission(MapRecord* fromMap, MapRecord* toMap, SummaryInfo* info, C
 
 		if (toMap) 
 		{
-			if (!cl_nostartscreens && !CreateCutscene(&toMap->intro, runner, toMap, !!fromMap))
+			if (!cl_nostartscreens && !CreateCutscene(gModMapIntroHook ? gModMapIntroHook(toMap, &toMap->intro) : &toMap->intro, runner, toMap, !!fromMap))
 			{
 				if  (tocluster == nullptr || !CreateCutscene(&tocluster->intro, runner, toMap, !!fromMap))
 					CreateCutscene(&globalCutscenes.DefaultMapIntro, runner, toMap, !!fromMap);
