@@ -1605,6 +1605,7 @@ void ProcessInput(DBloodPlayer* pPlayer)
 			pPlayer->posture = kPostureCrouch;
 		break;
 	}
+	if ((pInput->actions & SB_OPEN) && rogue::OnUse(pPlayer)) pInput->actions &= ~SB_OPEN; // blood2d roguelite: the Crypt's Armory, altar and tombstone
 	if (pInput->actions & SB_OPEN)
 	{
 		HitInfo result;
