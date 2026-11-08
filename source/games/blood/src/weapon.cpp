@@ -218,8 +218,6 @@ static bool CheckWeaponAmmo(DBloodPlayer* pPlayer, int weapon, int ammotype, int
 		return 1;
 	if (weapon == kWeapLifeLeech && pPlayer->GetActor()->xspr.health > 0)
 		return 1;
-	if (rogue::ForgeLoadedWeapon(pPlayer, weapon)) // blood2d roguelite: the Forge's Blood Price, dry
-		return 1;
 	return pPlayer->ammoCount[ammotype] >= count;
 }
 
@@ -2670,7 +2668,7 @@ void WeaponProcess(DBloodPlayer* pPlayer) {
 			}
 			else
 			{
-				if (CheckWeaponAmmo(pPlayer, nWeapon, nAmmoType, 1))
+				if (CheckWeaponAmmo(pPlayer, nWeapon, nAmmoType, 1) || rogue::ForgeLoadedWeapon(pPlayer, nWeapon)) // blood2d roguelite: Blood Price
 					WeaponRaise(pPlayer);
 				else
 				{
@@ -2700,7 +2698,7 @@ void WeaponProcess(DBloodPlayer* pPlayer) {
 		for (; i <= v4c; i++)
 		{
 			int v6c = (pPlayer->weaponMode[nWeapon] + i) % v4c;
-			if (CheckWeaponAmmo(pPlayer, nWeapon, weaponModes[nWeapon].ammoType, 1))
+			if (CheckWeaponAmmo(pPlayer, nWeapon, weaponModes[nWeapon].ammoType, 1) || rogue::ForgeLoadedWeapon(pPlayer, nWeapon)) // blood2d roguelite
 			{
 				WeaponLower(pPlayer);
 				pPlayer->weaponMode[nWeapon] = v6c;
