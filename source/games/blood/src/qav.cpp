@@ -276,7 +276,7 @@ void QAV::Play(int start, int end, int nCallback, DBloodPlayer* pData)
 			}
 
 			if (pFrame->nCallbackId > 0 && nCallback != -1) {
-				qavClientCallback[nCallback](pFrame->nCallbackId, pData);
+				rogue::WeaponCallback(nCallback, pFrame->nCallbackId, pData); // blood2d roguelite: the Forge (else the stock callback)
 			}
 		}
 	}
