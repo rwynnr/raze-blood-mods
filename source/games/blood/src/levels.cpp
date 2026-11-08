@@ -258,6 +258,7 @@ void levelEndLevel(int secret)
 	gGameOptions.uGameFlags |= GF_AdvanceLevel;
 	if (!secret) gNextLevel = FindNextMap(currentLevel);
 	else gNextLevel = FindNextSecretMap(currentLevel);
+	gNextLevel = rogue::NextLevel(gNextLevel); // blood2d roguelite: a run picks its own next map
 }
 
 //---------------------------------------------------------------------------

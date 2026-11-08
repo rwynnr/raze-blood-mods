@@ -689,6 +689,7 @@ set( NOT_COMPILED_SOURCE_FILES
 	games/blood/src/prediction.cpp
 	games/blood/src/preload.cpp
 	games/blood/src/qav.cpp
+	games/blood/src/roguelite.cpp
 	games/blood/src/sbar.cpp
 	games/blood/src/sectorfx.cpp
 	games/blood/src/seq.cpp

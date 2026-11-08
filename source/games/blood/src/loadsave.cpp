@@ -481,6 +481,8 @@ void DBloodActor::Serialize(FSerializer& arc)
 			("explosionflag", explosionhackflag)
 			("spritehit", hit)
 			("owneractor", ownerActor);
+		uint8_t noModFlags = 0;
+		arc("modflags", modFlags, &noModFlags); // blood2d mods: per-actor flags (written only when set)
 
 	}
 
@@ -747,6 +749,7 @@ void GameInterface::SerializeGameState(FSerializer& arc)
 #ifdef NOONE_EXTENSIONS
 	SerializeNNExts(arc);
 #endif
+	rogue::Serialize(arc); // blood2d roguelite: the run's save block
 
 	if (arc.isReading())
 	{

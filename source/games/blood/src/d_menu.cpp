@@ -147,6 +147,7 @@ void UpdateNetworkMenus(void)
 void GameInterface::MenuOpened()
 {
 	itemBloodQAV.reset(new CGameMenuItemQAV(160, 100, "BDRIP.QAV", true));
+	rogue::OnMenuOpened(); // blood2d roguelite: list the runs in the Roguelite menu
 }
 
 void GameInterface::MenuClosed()

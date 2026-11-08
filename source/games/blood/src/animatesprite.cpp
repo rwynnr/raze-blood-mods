@@ -840,6 +840,7 @@ void viewProcessSprites(tspriteArray& tsprites, const DVector3& cPos, DAngle cA,
 
 			if (pXSector && pXSector->color) copyfloorpal(pTSprite, pSector);
 			if (powerupCheck(pPlayer, kPwUpBeastVision) > 0) pTSprite->shade = -128;
+			rogue::TintSprite(owneractor, pTSprite); // blood2d roguelite: champions are tinted
 
 			if (IsPlayerSprite(pTSprite)) {
 				DBloodPlayer* thisPlayer = getPlayer(pTSprite->type - kDudePlayer1);

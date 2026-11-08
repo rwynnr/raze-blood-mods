@@ -30,6 +30,7 @@ public:
 	DVector3 basePoint;
 	EventObject condition[2];
 	bool explosionhackflag; // this originally hijacked the target field which is not safe when working with pointers.
+	uint8_t modFlags = 0; // blood2d mods: per-actor flags, saved (rogue::kModChampion)
 
 	// transient data (not written to savegame)
 	int cumulDamage;

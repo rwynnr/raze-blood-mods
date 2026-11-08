@@ -33,6 +33,7 @@ LISTMENU "MainMenu"
 		position 160, 45
 		Linespacing 20
 		BloodTextItem "$MNU_NEWGAME", "n", "EpisodeMenu"
+		BloodTextItem "Roguelite", "r", "RogueliteMenu"	// blood2d roguelite (games/blood/src/roguelite.cpp)
 		//BloodTextItem "$MNU_MULTIPLAYER", "m", "MultiMenu"
 		BloodTextItem "$MNU_OPTIONS", "o", "OptionsMenu"
 		BloodTextItem "$MNU_LOADGAME", "l", "LoadGameMenu"
@@ -106,6 +107,7 @@ LISTMENU "IngameMenu"
 		CaptionItem "Blood"
 		Linespacing 17
 		BloodTextItem "$MNU_NEWGAME", "n", "EpisodeMenu"
+		BloodTextItem "Roguelite", "r", "RogueliteMenu"	// blood2d roguelite (games/blood/src/roguelite.cpp)
 		BloodTextItem "$MNU_OPTIONS", "o", "OptionsMenu"
 		BloodTextItem "$MNU_SAVEGAME", "s", "SaveGameMenu"
 		BloodTextItem "$MNU_LOADGAME", "l", "LoadGameMenu"
@@ -2166,3 +2168,27 @@ OptionMenu "EngineCredits3"
 	StaticText "Pär \"Parkar\" Karlsson", 0
 }
 
+
+//-------------------------------------------------------------------------------------------
+//
+// blood2d roguelite (games/blood/src/roguelite.cpp; reached from the main menu in Blood only).
+// The runs (one per episode, then the gauntlet) are added below these items by roguelite.cpp
+// whenever a menu opens, so the locks and the ichor bank are current.
+//
+//-------------------------------------------------------------------------------------------
+
+OptionValue "RogueliteSkills"
+{
+	0, "$STILL KICKING"
+	1, "$PINK ON THE INSIDE"
+	2, "$LIGHTLY BROILED"
+	3, "$WELL DONE"
+	4, "$EXTRA CRISPY"
+}
+
+OptionMenu "RogueliteMenu" protected
+{
+	Title "Roguelite"
+	Option "Skill",							"rl_skill", "RogueliteSkills"
+	StaticText ""
+}
