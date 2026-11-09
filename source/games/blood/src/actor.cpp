@@ -2871,7 +2871,10 @@ DBloodActor* actDropObject(DBloodActor* actor, int nType)
 bool actHealDude(DBloodActor* actor, int add, int threshold)
 {
 	if (!actor) return false;
-	add = rogue::ScaleHealing(actor, add); // blood2d roguelite: the Covenant's Famine (stock outside a run)
+	// blood2d roguelite: the Covenant's Famine, the Forge's cleavers (stock outside a run); nothing left: no heal sound
+	int scaled = rogue::ScaleHealing(actor, add);
+	if (add > 0 && scaled <= 0) return false;
+	add = scaled;
 	add <<= 4;
 	threshold <<= 4;
 	if (actor->xspr.health < (unsigned)threshold)
@@ -3805,7 +3808,7 @@ static void actImpactMissile(DBloodActor* missileActor, int hitCode)
 	walltype* pWallHit = nullptr;
 
 	actHitcodeToData(hitCode, &gHitInfo, &actorHit, &pWallHit);
-	rogue::ForgeImpact forgeImpact(missileActor, actorHit); // blood2d roguelite: a forged missile's Wound, for this impact
+	rogue::ForgeImpact forgeImpact(missileActor, actorHit, hitCode, pWallHit); // blood2d roguelite: a forged missile's Wound, for this impact
 
 	const THINGINFO* pThingInfo = nullptr;
 	DUDEINFO* pDudeInfo = nullptr;

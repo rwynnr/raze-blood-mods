@@ -2255,7 +2255,7 @@ OptionValue "RLForgeMouth"
 {
 	0, "None: the gun's own round"
 	1, "Hellmouth (20): napalm fireballs"
-	2, "Cleaver's Psalm (15): cleavers that heal you"
+	2, "Cleaver's Psalm (15): cleavers that heal you as they wound"
 }
 OptionValue "RLForgePath"
 {
@@ -2266,7 +2266,7 @@ OptionValue "RLForgePath"
 OptionValue "RLForgeWound"
 {
 	0, "None"
-	1, "Pyre (10): sets foes alight"
+	1, "Pyre (10): a lodged flare sets foes alight"
 	2, "Gravedigger's Blast (20): missiles burst where they land"
 }
 OptionValue "RLForgePenance"
