@@ -4071,8 +4071,25 @@ static bool PayInBlood(DBloodPlayer* p)
 	return true;
 }
 
+// A foe not yet in the fight, which no shot should hunt: a buried axe zombie still under the earth and a laying one still
+// on the floor (neither can be shot until it rises, and a blast beside one wakes it), and a gargoyle statue (it takes no
+// damage, and wakes only as the map's wiring says). By its AI state, not its hitscan bit: a phantasm's idle and moving
+// frames lack that bit, and it's a foe all the same.
+static bool Dormant(DBloodActor* a)
+{
+	switch (a->spr.type)
+	{
+	case kDudeZombieAxeBuried: return a->xspr.aiState == &zombieEIdle;
+	case kDudeZombieAxeLaying: return a->xspr.aiState == &zombieSIdle;
+	case kDudeGargoyleStatueFlesh:
+	case kDudeGargoyleStatueStone: return true;
+	default: return false;
+	}
+}
+
 // The Hound's Nose: the nearest foe within the cone ahead, in sight.
-// The nearest live foe in sight from a point, within a cone around a heading and a range (exclude: one not to pick).
+// The nearest live foe in sight from a point, within a cone around a heading and a range (exclude: one not to pick),
+// not a dormant one.
 // Given the foes already hunted (a foe once for each hunter), the least hunted one wins, nearest first: hunters share
 // a pack out in turn.
 static DBloodActor* HoundFoe(const DVector3& from, sectortype* sect, DAngle heading, double cone, double range, DBloodActor* exclude = nullptr,
@@ -4084,7 +4101,7 @@ static DBloodActor* HoundFoe(const DVector3& from, sectortype* sect, DAngle head
 	BloodStatIterator it(kStatDude);
 	while (auto a = it.Next())
 	{
-		if (a == exclude || a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !AllowedKillType(a) || !a->insector()) continue;
+		if (a == exclude || a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !AllowedKillType(a) || !a->insector() || Dormant(a)) continue;
 		DVector2 d = a->spr.pos.XY() - from.XY();
 		double dist = d.Length();
 		int uses = 0;
