@@ -2192,6 +2192,7 @@ OptionMenu "RogueliteMenu" protected
 	Option "Skill",							"rl_skill", "RogueliteSkills"
 	Submenu "The Armory: your starting kit",	"RogueliteArmory"
 	Submenu "The Covenant: harder runs, more ichor",	"RogueliteCovenant"
+	Option "Omens: the dead drop timed boons",	"rl_omens", "OnOff"
 	StaticText ""
 }
 

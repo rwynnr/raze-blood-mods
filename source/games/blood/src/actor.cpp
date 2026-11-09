@@ -3755,6 +3755,7 @@ int actDamageSprite(DBloodActor* source, DBloodActor* actor, DAMAGE_TYPE damageT
 	if (source->IsPlayerActor()) pSourcePlayer = getPlayer(source->spr.type - kDudePlayer1);
 	if (!gGameOptions.bFriendlyFire && IsTargetTeammate(pSourcePlayer, actor)) return 0;
 
+	rogue::OmenWound omenWound(source, actor); // blood2d roguelite: Bloodlust (an Omen) heals you from the health your hit takes
 	switch (actor->spr.statnum)
 	{
 	case kStatDude:

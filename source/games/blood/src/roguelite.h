@@ -33,15 +33,17 @@ namespace rogue
 	//   blood-bought fireball's explosion never carries it.
 	// - kModPyreMark (128): on a kStatFlare, the Pyre's flare lodged in a burning foe (never kModForged, which a load
 	//   would take for a Corpse-Candle). Forged missiles never carry 128, and kModKicked is only set on explosions.
+	// - kModOmen (8): on a kStatItem, an Omen's pickup or a cursed reliquary (its Omen in xspr.data1). Every reader of
+	//   kModForged looks at projectiles, flares, decorations, things or explosions only, and no item is ever forged.
 	enum { kModChampion = 1, kModBigPickup = 2, kModRedChampion = 4, kModForged = 8, kModOffspring = 48, kModBloodBought = 64, kModKicked = 128 };
-	enum { kModSpareYou = kModBloodBought, kModPyreMark = kModKicked };
+	enum { kModSpareYou = kModBloodBought, kModPyreMark = kModKicked, kModOmen = kModForged };
 
 	MapRecord* NextLevel(MapRecord* stockNext);                            // levelEndLevel: a run picks its own next map (null: the run is won)
 	bool OnDeathRestart();                                                 // playerProcess, Use while dead in single player: true = handled
 	void OnNewGame();                                                      // GameInterface::NewGame
 	int ScaleDamage(DBloodActor* source, DBloodActor* target, DAMAGE_TYPE damageType, int damage); // actDamageSprite: champions, the Covenant's Wrath, the Forge
 	int ScaleHealing(DBloodActor* actor, int add);                         // actHealDude: the Covenant's Famine heals less (0: no heal)
-	bool OnUse(DBloodPlayer* pPlayer);                                     // playerProcess, Use: true = taken by the Crypt (a menu opened)
+	bool OnUse(DBloodPlayer* pPlayer);                                     // playerProcess, Use: true = taken by the Crypt (a menu opened) or a cursed reliquary
 	bool Unflinching(DBloodActor* actor);                                  // RecoilDude: red champions don't flinch, but for a heavy hit of yours
 	// The Forge (roguelite.cpp): the run's forged gun fires its runes' payloads in place of its own primary fire, and its
 	// alt fire is a forged mode of its own (rl_forge_alt).
@@ -76,6 +78,14 @@ namespace rogue
 	};
 	int TakePickup(DBloodActor* item, int room);                           // PickupAmmo, PickupWeapon: the ammo a run's pickup gives (-1: stock)
 	bool PickupTaken(DBloodActor* item, const char*& msg);                 // PickUp: names the amount; true = the rest stays on the map
+	bool ClaimPickup(DBloodPlayer* pPlayer, DBloodActor* item);            // PickUp, first: true = the run's (an Omen taken, a reliquary left for Use)
+	struct OmenWound                                                       // actDamageSprite: Bloodlust (an Omen) heals you from your hits on foes
+	{
+		OmenWound(DBloodActor* source, DBloodActor* target);
+		~OmenWound();
+		DBloodActor* foe = nullptr;                                        // the live foe your hit struck (null: none, or no Bloodlust)
+		int healthBefore = 0;                                              // its health as the hit began (sixteenths)
+	};
 	void TintSprite(DBloodActor* owner, tspritetype* tspr);               // viewProcessSprites: champions are tinted
 	void Serialize(FSerializer& arc);                                      // SerializeGameState: the run's save block
 	void OnMenuOpened();                                                   // GameInterface::MenuOpened: lists the runs in the Roguelite menu

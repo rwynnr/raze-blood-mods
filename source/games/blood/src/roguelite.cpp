@@ -46,6 +46,16 @@
 // (docs/roguelite-forge.md). Shown once both are carved, kept in the Book across
 // runs; at most two sing on a gun; banes add a point of Dread.
 //
+// Omens: timed boons the dead drop (rl_omens 0: none). Every champion drops
+// one (a blue champion a common or rare one, a red one a rare or relic), a
+// plain enemy one time in 25; they lie where it fell until the map ends. Most
+// are Blood's own powerups on short timers. A gamble never drops on its own: a
+// champion sometimes leaves a cursed reliquary, which names both its halves
+// when you come near and is taken with Use. A kill of yours while a boon runs
+// adds a second to it (up to twice its time); taking one again adds its whole
+// time (up to three times). They show in the shared chip row, last through a
+// save and load, and end with the map.
+//
 // Dying ends the run: a "Run over" screen, then the main menu (no reload).
 // Finishing the last map wins it: "Run complete" at the menu, and the next
 // episode unlocks (all unlocked: the gauntlet opens). Ichor, earned per kill
@@ -62,11 +72,14 @@
 //   rl_forge [vessel mouth path wound penance]  the forged gun (numbers as in the menu); sets it, and in a run
 //                                        also forges the run's gun at once (testing)
 //   rl_forge_clear                       melt the forged gun down
+//   rl_omen list                         the Omens and the gambles, numbered, with what runs now and the drop odds
+//   rl_omen <name|number> [seconds]      grant an Omen (or a gamble) at once, e.g. "rl_omen twin", "rl_omen 9 30" (testing)
+//   rl_omen_drop / rl_reliquary <name|number>  an Omen's pickup / a gamble's cursed reliquary in front of you (testing)
 //   rl_unlock <count|all>                set how many of this game's episodes are unlocked (testing)
 //   rl_resetprogress                     lock this game's episodes again; empty the ichor bank and the wins
 //   openmenu RogueliteMenu               the Roguelite menu (it is also on the main menu)
 // CVARs: rl_skill (0-4, set by the menu), rl_elite_pal (the champions' tint, a palette lookup number:
-// 0-14 in Blood, 0 = none), rl_ammo_target (the supplies' target, percent; 0 = no supplies), and the meta progress, kept in the config: rl_progress (per game, since
+// 0-14 in Blood, 0 = none), rl_ammo_target (the supplies' target, percent; 0 = no supplies), rl_omens (0: no Omens), and the meta progress, kept in the config: rl_progress (per game, since
 // Blood and Cryptic Passage share a config: episodes unlocked, the gauntlet won, the run whose saves can
 // still be continued) and, shared by both, rl_ichor, rl_runs, rl_wins.
 //
@@ -75,6 +88,8 @@
 // with the actor), actDamageSprite and viewProcessSprites (champion damage and tint),
 // GameInterface::MenuOpened (the menu's run list), the core main loop's return to the main menu
 // (the run's result and writing the config), and the core intermission's choice of a map's intro movie.
+// The Omens: PickUp (an Omen's pickup is the run's; a reliquary isn't taken by walking over it) and
+// actDamageSprite (Bloodlust's heal from the health your hit took).
 //
 //---------------------------------------------------------------------------
 
@@ -116,6 +131,7 @@ CUSTOM_CVARD(Int, rl_skill, 2, CVAR_ARCHIVE, "roguelite: skill of new runs, 0-4 
 CVARD(Int, rl_elite_pal, 10, CVAR_ARCHIVE, "roguelite: palette lookup that tints champions (0 = none; 10 blue, 2 red, 9 orange)")
 CVARD(Int, rl_elite_red_pal, 2, CVAR_ARCHIVE, "roguelite: palette lookup that tints red champions (0 = none; 2 red)")
 CVARD(Int, rl_ammo_target, 150, CVAR_ARCHIVE, "roguelite: each map's pickups hold this percent of the ammo your guns need for its enemies (150 = 1.5x; 0 = stock amounts)")
+CVARD(Bool, rl_omens, true, CVAR_ARCHIVE, "roguelite: the dead drop Omens (timed boons) and champions cursed reliquaries (0 = none)")
 
 // Meta progress, kept across runs. Blood and Cryptic Passage share a config, so what belongs to one game's episodes
 // is kept per game in rl_progress; the ichor bank and the run counts are shared.
@@ -484,6 +500,7 @@ struct Run
 	int unspent = 0;              // kit points not spent: ichor once the first map is cleared
 	int forge[kForgeSlots] = {};  // the Forge's recipe, as it was when the run started
 	int litanies = 0;             // the Litanies that sing on it (bits)
+	int omenRolls = 0;            // Omens: the deaths rolled for a drop so far (each roll is seeded by its number)
 };
 
 Run run;
@@ -2204,11 +2221,16 @@ FString RunStats()
 		run.cleared, int(run.maps.Size()), run.kills, run.champions, BankedIchor(), bonus.GetChars(), (int)rl_ichor);
 }
 
+void EndOmens(bool stock, bool leaving = false); // the Omens, with the drops below
+
 void RunOver()
 {
 	if (!run.active || run.over) return;
 	run.over = true;
 	if (auto e = CurseEffect()) bmod::StopEffect(e); // a clean view behind the "Run over" screen
+	// The Omens' effects too. Their stock powerups run out on the dead player as Blood's own do (this comes before
+	// Blood takes the gun away: ending the akimbo now would raise it again).
+	EndOmens(false);
 	Bank();
 }
 
@@ -2449,6 +2471,18 @@ int NearFeature(DBloodPlayer* p)
 //
 //---------------------------------------------------------------------------
 
+// A dropped item moved to a spot, its bottom still on the floor.
+void LayDrop(DBloodActor* item, sectortype* sect, const DVector2& spot)
+{
+	double top, bottom;
+	GetActorExtents(item, &top, &bottom);
+	double lift = item->spr.pos.Z - bottom; // as dropped, its bottom rests on the floor
+	ChangeActorSect(item, sect);
+	SetActor(item, DVector3(spot, getflorzofslopeptr(sect, spot.X, spot.Y) + lift));
+	item->interpolated = false;
+	viewBackupSpriteLoc(item);
+}
+
 // A red champion drops body armour, a champion basic armour one time in four: the armour that stops bullets (fire and
 // spirit armour stop none), as on the hardest settings the champions' hitscan is what kills you. The roll is the
 // run's (its seed and the champion's number in the run), so a reload rolls the same. A dropped item has no xsprite
@@ -2470,13 +2504,446 @@ void DropChampionArmour(DBloodActor* victim, bool red)
 	auto pl = p ? p->GetActor() : nullptr;
 	if (!found && pl && pl->insector()) found = FindItemSpot(rng, pl->sector(), FloorAt(pl), 24, 80, taken, spot, sect);
 	if (!found || !sect) return;
+	LayDrop(item, sect, spot);
+}
+
+//---------------------------------------------------------------------------
+//
+// the Omens: timed boons the dead drop, and the gambles of the cursed
+// reliquaries champions leave (opt-in: taken with Use, never walked into).
+// The run keeps its own list of the Omens running, the truth for their time;
+// the base effects and stock powerups they run on are checked against it
+// each tic, as chaos (in the play build) can end a rival effect.
+//
+//---------------------------------------------------------------------------
+
+enum { kOmenCommon, kOmenRare, kOmenRelic, kOmenGamble };
+const char* const omenTierNames[] = { "common", "rare", "relic", "gamble" };
+
+struct OmenInfo
+{
+	const char* name;
+	int tier;
+	int seconds;
+	int powerup;          // the stock powerup it runs on (its pwUpTime), -1: none
+	const char* effect;   // the base effect it runs, or null
+	int deal;             // your hits on foes deal this many times their damage (1: as ever)
+	bool bloodlust;       // your hits heal you
+	int look;             // the stock item it's drawn as (its picture and size), in its tier's palette
+	const char* sentence; // what it does
+};
+
+// The pool: mostly Blood's own powerups on short timers. Hollow Bones is drawn as the feather fall, Bottomless as the
+// wine bottle, Dread as the tome, Bloodlust as the skull grail, Fury as the rage shroom; a reliquary is a black chest.
+const OmenInfo omenInfo[] =
+{
+	{ "Hollow Bones", kOmenCommon, 20, -1, "lowgrav", 1, false, kItemFeatherFall, "low gravity" },
+	{ "Bottomless", kOmenCommon, 10, -1, "infammo", 1, false, 133, "infinite ammo" },
+	{ "Dread", kOmenCommon, 10, -1, "slowmo", 1, false, 136, "enemies at half speed" },
+	{ "Shroud", kOmenCommon, 12, kPwUpShadowCloak, nullptr, 1, false, kItemShadowCloak, "a shadow cloak: enemies can't see you" },
+	{ "Twin Vessel", kOmenRare, 15, kPwUpTwoGuns, nullptr, 1, false, kItemTwoGuns, "guns akimbo, the forged gun too" },
+	{ "Bloodlust", kOmenRare, 15, -1, nullptr, 1, true, 134, "your hits heal you" },
+	{ "Fury", kOmenRare, 10, -1, nullptr, 2, false, 127, "you deal 2x" },
+	{ "Mirror Skin", kOmenRelic, 10, kPwUpReflectShots, nullptr, 1, false, kItemReflectShots, "reflective shots: a foe's bullets hit the foe" },
+	{ "Death's Grin", kOmenRelic, 4, kPwUpDeathMask, nullptr, 1, false, kItemDeathMask, "invulnerable" },
+	// The gambles, only ever in a cursed reliquary: both halves run together for the time. Frenzy's 3x is the run's own.
+	{ "Glass Cannon", kOmenGamble, 20, -1, "glasscannon", 1, false, 137, "deal 4x, take 2x" },
+	{ "Frenzy", kOmenGamble, 15, -1, "fast", 3, false, 137, "enemies twice as fast, you deal 3x" },
+	{ "Powder Keg", kOmenGamble, 20, -1, "bigboom", 1, false, 137, "every blast, yours and theirs, twice as big" },
+};
+constexpr int kNumOmens = int(countof(omenInfo));
+
+// The drops. A champion always drops an Omen, a plain enemy one time in 25; a champion's cursed reliquary comes besides.
+constexpr double kOmenPlain = 1. / 25;
+constexpr double kOmenBlueRare = 0.35;                            // a blue champion's is rare, else common
+constexpr double kOmenRedRelic = 0.25;                            // a red champion's is a relic, else rare
+constexpr double kOmenPlainRare = 0.25, kOmenPlainRelic = 0.05;   // a plain enemy's, else common
+constexpr double kReliquaryBlue = 1. / 10, kReliquaryRed = 1. / 3; // plain enemies never leave one
+// The look: an inert item (the wine goblet's type: a treasure no stock map places, to which stock code gives no effect,
+// should any reach its pickup) drawn as the Omen's look. Common ones keep Blood's colours, rare ones take the blue
+// champions' COLD, relics the red champions' BEAST. A reliquary takes FLAME: no stock lookup turns a whole sprite purple,
+// and FLAME turns over a third of the black chest violet and the rest red, the nearest they come. All are lit like
+// Blood's keys, so a drop shows in the dark and isn't taken for a map's own item.
+constexpr int kOmenItem = 132;
+constexpr int omenPal[] = { 0, 10, 2, 9 };
+constexpr int kOmenShade = -128;
+constexpr int kOmenKillTime = kClock;                // a kill of yours adds this to each boon running, up to 2x its time
+constexpr double kReliquaryRange = 96;               // a reliquary names itself, and Use takes it, this near (to the eye)
+constexpr double kReliquaryCone = 30;                // and this close to the way you face (degrees)
+constexpr int kLustPerSecond = 15 << 4;              // Bloodlust heals at most this a second (health is in sixteenths)
+constexpr int kLustTop = 100 << 4;                   // and never above this
+constexpr uint32_t kBoonChip = 0xfff2c230, kGambleChip = 0xffb45cff; // the chips' gold (chaos's twist gold) and purple
+
+struct RunningOmen
+{
+	int id;
+	int left;  // PlayClock units
+	int base;  // its time as it began (kills extend it to 2x this, taking it again to 3x)
+	int peak;  // the most time it has had left (the chip's fill is the share of this still left)
+	bool owns; // it started its base effect (one the curse or chaos runs already isn't its to stop)
+};
+TArray<RunningOmen> omens;  // oldest first: the chips' order
+FString reliquaryHint;      // the cursed reliquary you face, named (the drawer shows it)
+int lustSecond = -1, lustHealed, lustSoundAt = INT_MIN / 2;
+DBloodActor* omenPowerItem; // a map's powerup being picked up while an Omen runs on its timer (compared, never followed)
+int omenPowerBefore;        // that timer as the pickup began
+
+bool OmensLive() { return rl_omens && run.active && !run.over && !crypt.in; }
+const bmod::Effect* OmenEffect(int id) { return omenInfo[id].effect ? bmod::FindEffect(omenInfo[id].effect) : nullptr; }
+
+RunningOmen* RunningOf(int id)
+{
+	for (auto& r : omens) if (r.id == id) return &r;
+	return nullptr;
+}
+
+bool IsOmenItem(DBloodActor* a)
+{
+	return a && a->spr.statnum == kStatItem && (a->modFlags & kModOmen) && a->hasX() && a->xspr.data1 >= 0 && a->xspr.data1 < kNumOmens;
+}
+
+// Your own deed: the player, or a missile, blast or thing of yours.
+bool ByYou(DBloodActor* a)
+{
+	for (int i = 0; i < 2 && a && !a->IsDudeActor(); i++) a = a->GetOwner();
+	auto p = getPlayer(myconnectindex);
+	return a && p && a == p->GetActor();
+}
+
+// Fury's and Frenzy's factor on your hits on foes (together, they multiply).
+int OmenDeal()
+{
+	int deal = 1;
+	if (OmensLive()) for (auto& r : omens) deal *= omenInfo[r.id].deal;
+	return deal;
+}
+
+bool BloodlustOn()
+{
+	if (OmensLive()) for (auto& r : omens) if (omenInfo[r.id].bloodlust) return true;
+	return false;
+}
+
+// Time for a stock powerup an Omen runs on, added to its pwUpTime (time it held already is the map's own powerup's, and
+// stays). From 0, Blood's own start comes first, once (the akimbo raise, the mirror's echo, the mask's armour):
+// powerupActivate sets only a timer at 0, and repeats the mask's armour each time. True: it did (and chimed).
+bool AddPowerTime(DBloodPlayer* p, int n, int add)
+{
+	if (n < 0 || add <= 0) return false;
+	bool fresh = p->pwUpTime[n] <= 0;
+	if (fresh)
+	{
+		powerupActivate(p, n);
+		p->pwUpTime[n] = 0;
+	}
+	p->pwUpTime[n] = std::min(p->pwUpTime[n] + add, gPowerUpInfo[n].maxTime);
+	return fresh;
+}
+
+// The time an Omen still holds taken off its stock powerup, the map's own left; at 0 it ends as Blood ends it. Leaving
+// the map, it doesn't: Blood's player start clears every powerup on the next map without ending one, and the weapon's
+// state is carried over from this moment (the akimbo's end would raise the gun again).
+void TakePowerTime(DBloodPlayer* p, int n, int left, bool leaving)
+{
+	if (n < 0 || p->pwUpTime[n] <= 0) return;
+	p->pwUpTime[n] = std::max(p->pwUpTime[n] - std::max(left, 0), 0);
+	if (p->pwUpTime[n] == 0 && !leaving) powerupDeactivate(p, n);
+}
+
+// An Omen ends: its base effect stops, if it started it; and with stock (rl_omens going off, the map ending: leaving)
+// the time it still holds on a stock powerup goes too. Running out needs no more: that time ran out with it.
+void EndOmen(unsigned i, bool stock, bool leaving = false)
+{
+	auto r = omens[i];
+	omens.Delete(i);
+	if (r.owns)
+		if (auto e = OmenEffect(r.id)) bmod::StopEffect(e);
+	auto p = getPlayer(myconnectindex);
+	if (stock && p) TakePowerTime(p, omenInfo[r.id].powerup, r.left, leaving);
+}
+
+void EndOmens(bool stock, bool leaving)
+{
+	while (omens.Size()) EndOmen(omens.Size() - 1, stock, leaving);
+	reliquaryHint = "";
+}
+
+// A map starts: nothing runs (the base stopped the effects as the last one went, and Blood's player start clears the
+// powerups).
+void ResetOmens()
+{
+	omens.Clear();
+	reliquaryHint = "";
+	lustSecond = -1;
+	lustSoundAt = INT_MIN / 2;
+	omenPowerItem = nullptr;
+}
+
+// An Omen begins, or one running gets more time: clocks of it, up to 3x its time. False: it can't take hold now (its
+// base effect can't run: Dread and Frenzy need enemies left), and its pickup stays. A base effect the curse or chaos
+// runs already does: the Omen rides it, and leaves it running as it ends.
+bool GrantOmen(int id, int clocks, bool* chimed = nullptr)
+{
+	auto p = getPlayer(myconnectindex);
+	if (!p || !p->GetActor() || id < 0 || id >= kNumOmens || clocks <= 0) return false;
+	auto& o = omenInfo[id];
+	auto r = RunningOf(id);
+	if (!r)
+	{
+		auto e = OmenEffect(id);
+		if (o.effect && (!e || (!bmod::IsActive(e) && !bmod::CanStart(e)))) return false;
+		bool owns = e && !bmod::IsActive(e) && bmod::StartEffect(e); // ends a rival first: Dread's slow ends a fast curse
+		omens.Push({ id, 0, clocks, 0, owns });
+		r = &omens.Last();
+	}
+	r->base = std::max(r->base, clocks);
+	int left = std::max(std::min(r->left + clocks, 3 * r->base), r->left);
+	bool fresh = AddPowerTime(p, o.powerup, left - r->left);
+	r->left = left;
+	r->peak = std::max(r->peak, left);
+	if (chimed) *chimed = fresh;
+	return true;
+}
+
+// A kill of yours: a second more on each boon running, up to twice its time. A gamble's time stays as it said.
+void ExtendOmens()
+{
+	auto p = getPlayer(myconnectindex);
+	if (!p || !OmensLive()) return;
+	for (auto& r : omens)
+	{
+		if (omenInfo[r.id].tier == kOmenGamble || r.left >= 2 * r.base) continue;
+		int left = std::min(r.left + kOmenKillTime, 2 * r.base);
+		AddPowerTime(p, omenInfo[r.id].powerup, left - r.left);
+		r.left = left;
+		r.peak = std::max(r.peak, left);
+	}
+}
+
+// Bloodlust: a quarter of the health your hit took from a live foe (taken, so none past its death), at most 15 health a
+// second and never above 100, and less under the Covenant's Famine. Its cap is its own, apart from the cleavers'. The
+// heal sound plays at most every half second, and only when health rose.
+void BloodlustHeal(int lost)
+{
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !pl->hasX() || pl->xspr.health <= 0 || lost <= 0) return;
+	int health = int(pl->xspr.health);
+	if (health >= kLustTop) return;
+	int add = lost / 4;
+	if (run.cov[kFamine] > 0) add = int(add * std::max(0., 1. - 0.25 * run.cov[kFamine]));
+	int second = PlayClock / kClock;
+	if (second != lustSecond) lustSecond = second, lustHealed = 0;
+	add = std::min({ add, kLustPerSecond - lustHealed, kLustTop - health });
+	if (add <= 0) return;
+	lustHealed += add;
+	pl->xspr.health = unsigned(health + add);
+	if (PlayClock - lustSoundAt >= kClock / 2 || PlayClock < lustSoundAt)
+	{
+		lustSoundAt = PlayClock;
+		sfxPlay3DSound(pl->spr.pos, 780, pl->sector());
+	}
+}
+
+// An Omen's pickup or a cursed reliquary lying on the floor at p: an inert item drawn as its look, in its tier's
+// palette, lit; with an xsprite, so its mark and its Omen (data1) are saved with it.
+DBloodActor* SpawnOmenItem(sectortype* s, const DVector2& p, int id)
+{
+	auto& o = omenInfo[id];
+	auto& d = gItemData[o.look - kItemBase];
+	if (!s || !d.textureID().isValid()) return nullptr;
+	double fz = getflorzofslopeptr(s, p.X, p.Y);
+	auto a = actSpawnSprite(s, DVector3(p, fz), kStatItem, true);
+	if (!a) return nullptr;
+	a->spr.cstat &= ~CSTAT_SPRITE_BLOCK_ALL;
+	a->spr.type = a->spr.inittype = kOmenItem;
+	a->spr.setspritetexture(d.textureID());
+	a->spr.shade = kOmenShade;
+	a->spr.pal = omenPal[o.tier];
+	a->spr.scale = DVector2(d.xrepeat * REPEAT_SCALE, d.yrepeat * REPEAT_SCALE);
+	a->modFlags |= kModOmen;
+	a->xspr.data1 = int16_t(id);
 	double top, bottom;
-	GetActorExtents(item, &top, &bottom);
-	double lift = item->spr.pos.Z - bottom; // as dropped, its bottom rests on the floor
-	ChangeActorSect(item, sect);
-	SetActor(item, DVector3(spot, getflorzofslopeptr(sect, spot.X, spot.Y) + lift));
-	item->interpolated = false;
-	viewBackupSpriteLoc(item);
+	GetActorExtents(a, &top, &bottom);
+	a->spr.pos.Z -= bottom - fz;
+	a->basePoint = a->spr.pos;
+	a->interpolated = false;
+	viewBackupSpriteLoc(a);
+	return a;
+}
+
+// A drop lies beside where the enemy fell, in sight of the spot (not on its armour or its stock drop); with no room
+// there, on the spot itself if a pickup can lie there; else as a champion's armour goes (near it, or else near you).
+void PlaceOmenItem(DBloodActor* item, std::mt19937& rng)
+{
+	if (!item->insector()) return;
+	TArray<DVector2> taken;
+	DVector2 spot;
+	sectortype* sect = nullptr;
+	bool found = FindItemSpot(rng, item->sector(), FloorAt(item), 24, 64, taken, spot, sect);
+	if (!found && SpotSectorOk(item->sector())) return;
+	if (!found) found = FindItemSpot(rng, item->sector(), FloorAt(item), 16, 96, taken, spot, sect);
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!found && pl && pl->insector()) found = FindItemSpot(rng, pl->sector(), FloorAt(pl), 24, 80, taken, spot, sect);
+	if (!found || !sect) return;
+	LayDrop(item, sect, spot);
+	item->basePoint = item->spr.pos;
+}
+
+int PickOmen(std::mt19937& rng, int tier)
+{
+	int ids[kNumOmens], n = 0;
+	for (int i = 0; i < kNumOmens; i++) if (omenInfo[i].tier == tier) ids[n++] = i;
+	return n ? ids[RandInt(rng, 0, n - 1)] : -1;
+}
+
+// As an enemy dies in a run (outside the Crypt): a champion's Omen (a blue one's common 65% or rare, a red one's rare
+// 75% or a relic), a plain enemy's one time in 25 (common 70%, rare 25%, relic 5%); and besides, a red champion's
+// cursed reliquary one time in 3, a blue one's one time in 10, a random gamble in it. The rolls are the run's (its seed
+// and the deaths rolled so far, which a save keeps), so a reload rolls the same.
+void DropOmens(DBloodActor* victim, bool champion, bool red)
+{
+	if (!rl_omens || !victim || !victim->insector()) return;
+	std::mt19937 rng(run.seed ^ (0x9E3779B9u * uint32_t(run.omenRolls + 1)) ^ 0x6A09E667u);
+	run.omenRolls++;
+	int tier = -1;
+	double r = Rand01(rng);
+	if (red) tier = r < kOmenRedRelic ? kOmenRelic : kOmenRare;
+	else if (champion) tier = r < kOmenBlueRare ? kOmenRare : kOmenCommon;
+	else if (r < kOmenPlain)
+	{
+		double t = Rand01(rng);
+		tier = t < kOmenPlainRelic ? kOmenRelic : t < kOmenPlainRelic + kOmenPlainRare ? kOmenRare : kOmenCommon;
+	}
+	int omen = tier >= 0 ? PickOmen(rng, tier) : -1;
+	double reliquary = red ? kReliquaryRed : champion ? kReliquaryBlue : 0;
+	int gamble = reliquary > 0 && Rand01(rng) < reliquary ? PickOmen(rng, kOmenGamble) : -1;
+	for (int id : { omen, gamble })
+	{
+		if (id < 0) continue;
+		auto s = victim->sector();
+		auto pos = victim->spr.pos;
+		updatesector(pos, &s);
+		if (!s) s = victim->sector(); // blasted outside every sector (as actSpawnFloor has it)
+		if (auto item = SpawnOmenItem(s, pos.XY(), id)) PlaceOmenItem(item, rng);
+	}
+}
+
+// The cursed reliquary you face: within kReliquaryRange of your eye and kReliquaryCone of your view, in sight; the
+// nearest.
+DBloodActor* NearReliquary(DBloodPlayer* p)
+{
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !pl->insector()) return nullptr;
+	DVector3 eye(pl->spr.pos.XY(), p->zView);
+	DBloodActor* best = nullptr;
+	double bestDist = kReliquaryRange;
+	BloodStatIterator it(kStatItem);
+	while (auto a = it.Next())
+	{
+		if (!IsOmenItem(a) || omenInfo[a->xspr.data1].tier != kOmenGamble || (a->spr.flags & 32) || !a->insector()) continue;
+		double top, bottom;
+		GetActorExtents(a, &top, &bottom);
+		DVector3 mid(a->spr.pos.XY(), (top + bottom) / 2);
+		double dist = (mid - eye).Length();
+		DVector2 d = mid.XY() - eye.XY();
+		if (dist >= bestDist || (d.Length() > 16 && absangle(d.Angle(), pl->spr.Angles.Yaw).Degrees() > kReliquaryCone)) continue;
+		if (!cansee(eye, pl->sector(), mid, a->sector())) continue;
+		best = a;
+		bestDist = dist;
+	}
+	return best;
+}
+
+// Use (a fresh press: Blood's Use is a one-shot input) facing a cursed reliquary: its gamble begins, or one running
+// gets its time again. True: the press was the reliquary's.
+bool TakeReliquary(DBloodPlayer* p)
+{
+	if (!OmensLive() || !p || p != getPlayer(myconnectindex)) return false;
+	auto a = NearReliquary(p);
+	if (!a) return false;
+	int id = a->xspr.data1;
+	auto& o = omenInfo[id];
+	if (!GrantOmen(id, o.seconds * kClock))
+	{
+		viewSetMessage(FStringf("%s can't take hold here now", o.name).GetChars());
+		return true;
+	}
+	sfxPlay3DSound(p->GetActor(), 463, -1, 0); // the voodoo doll's laugh
+	p->pickupEffect = 30;
+	viewSetMessage(FStringf("Cursed reliquary: %s, %d s: %s", o.name, bmod::SecondsLeft(RunningOf(id)->left), o.sentence).GetChars(),
+		nullptr, MESSAGE_PRIORITY_PICKUP);
+	actPostSprite(a, kStatFree);
+	reliquaryHint = "";
+	return true;
+}
+
+// Each tic: the Omens' time runs down, and one whose base effect or stock powerup was ended by another (chaos starting a
+// rival, a powerup cleared) is dropped; one riding an effect another ran takes it over as that one stops. Then the
+// reliquary you face is named. Not live (rl_omens off, the run over, the Crypt): everything ends.
+void OmenTick()
+{
+	if (!OmensLive())
+	{
+		if (omens.Size()) EndOmens(true);
+		reliquaryHint = "";
+		return;
+	}
+	auto p = getPlayer(myconnectindex);
+	if (!p || !p->GetActor()) return;
+	for (int i = int(omens.Size()) - 1; i >= 0; i--)
+	{
+		auto& r = omens[i];
+		auto& o = omenInfo[r.id];
+		r.left -= kTicsPerFrame;
+		bool lost = o.powerup >= 0 && p->pwUpTime[o.powerup] <= 0;
+		auto e = OmenEffect(r.id);
+		if (e && !bmod::IsActive(e))
+		{
+			if (r.owns || !bmod::CanStart(e) || !bmod::StartEffect(e)) lost = true;
+			else r.owns = true;
+		}
+		if (lost || r.left <= 0) EndOmen(i, false);
+	}
+	auto rel = NearReliquary(p);
+	if (!rel) reliquaryHint = "";
+	else
+	{
+		auto& o = omenInfo[rel->xspr.data1];
+		reliquaryHint.Format("Cursed reliquary: %s: %s, %d s. Use to take.", o.name, o.sentence, o.seconds);
+	}
+}
+
+// A save loaded: effects aren't saved (the base stops them all as a level goes), so each Omen's starts again, unless
+// the curse (restarted just before) runs it already. The stock powerups' time is the save's own.
+void OmensLoaded()
+{
+	reliquaryHint = "";
+	lustSecond = -1;
+	lustSoundAt = INT_MIN / 2;
+	omenPowerItem = nullptr;
+	if (!OmensLive())
+	{
+		EndOmens(true);
+		return;
+	}
+	for (auto& r : omens)
+	{
+		auto e = OmenEffect(r.id);
+		r.owns = e && !bmod::IsActive(e) && bmod::StartEffect(e);
+	}
+}
+
+// A map's powerup taken while an Omen runs on its timer: Blood's pickup sets only a timer at 0, so it would have given
+// nothing. Its own time goes on top (and stays as the Omen ends).
+void StackPowerPickup(DBloodActor* item)
+{
+	omenPowerItem = nullptr;
+	auto p = getPlayer(myconnectindex);
+	int n = item->spr.type - kItemBase;
+	if (!p || n < 0 || n >= kMaxPowerUps || p->pwUpTime[n] > omenPowerBefore) return;
+	p->pwUpTime[n] = std::min(omenPowerBefore + gPowerUpInfo[n].bonusTime, gPowerUpInfo[n].maxTime);
 }
 
 //---------------------------------------------------------------------------
@@ -2492,6 +2959,7 @@ void OnEvent(const bmod::EventInfo& ev)
 	case bmod::Event::LevelStart:
 		ResetLitanies();
 		StaggerReset();
+		ResetOmens();
 		bmod::modeActorSpeed = RedSpeed; // only actors a run marked are faster
 		bmod::modeWaveSpawned = WaveSpawned;
 		if (IsCryptLevel()) SetupCrypt();
@@ -2508,6 +2976,10 @@ void OnEvent(const bmod::EventInfo& ev)
 		if (IsCryptLevel()) SetupCrypt();
 		else crypt.in = false;
 		if (run.active && !run.over) StartCurse(); // effects aren't saved: the curse comes back on
+		OmensLoaded(); // and the Omens' (after the curse, so one the curse runs is the curse's)
+		break;
+	case bmod::Event::LevelEnd:
+		EndOmens(true, true); // the Omens end with the map (a map's own powerup keeps its time)
 		break;
 	case bmod::Event::Kill:
 		if (run.active && !run.over && AllowedKillType(ev.actor))
@@ -2517,6 +2989,8 @@ void OnEvent(const bmod::EventInfo& ev)
 			if (champion) run.champions++;
 			run.ichor += red ? kIchorRed : champion ? kIchorChampion : kIchorKill;
 			if (champion && !crypt.in) DropChampionArmour(ev.actor, red);
+			if (!crypt.in) DropOmens(ev.actor, champion, red);
+			if (ByYou(ev.other)) ExtendOmens();
 		}
 		break;
 	case bmod::Event::PlayerDeath:
@@ -2540,6 +3014,7 @@ void OnTick()
 		return;
 	}
 	bmod::modeEnemyTimeScale = run.active && !run.over ? 1. + 0.15 * run.cov[kHaste] : 1.; // the Covenant's Haste lasts the run
+	OmenTick(); // before the curse's retry, which then finds a rival an Omen just let go
 	if (crypt.in)
 	{
 		CryptTick();
@@ -2653,6 +3128,28 @@ void DrawLitanyTitle()
 		DTA_Alpha, alpha, TAG_DONE);
 }
 
+// The Omens' chips in the shared row, oldest first (gold a boon, purple a gamble, blinking their last 3 s; the map's
+// curse is on the run line already, so it gets none), and the cursed reliquary you face, named where the Crypt's
+// prompts go: even under the "No HUD" curse, as it's how you choose whether to take one.
+void DrawOmens()
+{
+	for (auto& r : omens)
+	{
+		auto& o = omenInfo[r.id];
+		bmod::Chip c;
+		c.text.Format("%s %ds", o.name, bmod::SecondsLeft(r.left));
+		c.color = PalEntry(o.tier == kOmenGamble ? kGambleChip : kBoonChip);
+		c.frac = double(r.left) / std::max({ r.base, r.peak, 1 });
+		c.alpha = r.left <= 3 * kClock && (PlayClock / 15) % 2 ? 0.3 : 1.;
+		bmod::AddChip(c);
+	}
+	if (reliquaryHint.IsEmpty()) return;
+	double W = twod->GetWidth(), ssc = 1.5 * twod->GetHeight() / 480.;
+	double w = SmallFont->StringWidth(reliquaryHint.GetChars());
+	if (w * ssc > W * 0.9) ssc = W * 0.9 / w; // one line, whatever the screen
+	DrawCentered(SmallFont, CR_PURPLE, twod->GetHeight() * 0.62, reliquaryHint.GetChars(), ssc);
+}
+
 void DrawRunOver(DBloodPlayer* pPlayer, double sc)
 {
 	auto actor = pPlayer ? pPlayer->GetActor() : nullptr;
@@ -2759,6 +3256,7 @@ void OnDraw(DBloodPlayer* pPlayer)
 	}
 	DrawCurseTitle(); // even under the "No HUD" curse, which must announce itself too
 	DrawLitanyTitle();
+	DrawOmens(); // the chip row isn't the HUD: chaos's chips show under "No HUD" too
 	if (bmod::mods.hideHud) return; // the "No HUD" effect hides the run line
 	DrawRunLine(sc);
 }
@@ -3126,6 +3624,7 @@ void OnNewGame()
 
 bool OnUse(DBloodPlayer* pPlayer)
 {
+	if (TakeReliquary(pPlayer)) return true; // a cursed reliquary you face (the Omens)
 	int id = NearFeature(pPlayer);
 	if (!id) return false;
 	M_StartControlPanel(false);
@@ -3181,8 +3680,43 @@ int TakePickup(DBloodActor* item, int room)
 	return take;
 }
 
+// An Omen's pickup is the run's: walked into, it begins (or adds its time), with Blood's powerup chime, the pickup flash
+// and a message. A cursed reliquary isn't taken by walking over it (Use takes it: TakeReliquary); nor is either with
+// the Omens off (rl_omens 0, the run over), when they lie inert. A map's powerup the stock pickup is about to take while
+// an Omen runs on its timer is noted, for PickupTaken.
+bool ClaimPickup(DBloodPlayer* pPlayer, DBloodActor* item)
+{
+	omenPowerItem = nullptr;
+	if (!pPlayer || !item) return false;
+	if (!IsOmenItem(item))
+	{
+		int n = item->spr.type - kItemBase;
+		if (n >= 0 && n < kMaxPowerUps && pPlayer == getPlayer(myconnectindex) && OmensLive())
+			for (auto& r : omens)
+				if (omenInfo[r.id].powerup == n)
+				{
+					omenPowerItem = item;
+					omenPowerBefore = pPlayer->pwUpTime[n];
+				}
+		return false;
+	}
+	if (pPlayer != getPlayer(myconnectindex) || !OmensLive()) return true;
+	int id = item->xspr.data1;
+	auto& o = omenInfo[id];
+	if (o.tier == kOmenGamble) return true;
+	bool chimed = false;
+	if (!GrantOmen(id, o.seconds * kClock, &chimed)) return true; // it can't take hold now: it stays
+	if (!chimed) sfxPlay3DSound(pPlayer->GetActor(), 776, -1, 0); // Blood's powerup chime (powerupActivate plays it)
+	pPlayer->pickupEffect = 30;
+	viewSetMessage(FStringf("Omen: %s, %d s: %s", o.name, bmod::SecondsLeft(RunningOf(id)->left), o.sentence).GetChars(),
+		nullptr, MESSAGE_PRIORITY_PICKUP);
+	actPostSprite(item, kStatFree);
+	return true;
+}
+
 bool PickupTaken(DBloodActor* item, const char*& msg)
 {
+	if (item && item == omenPowerItem) StackPowerPickup(item);
 	if (!item || item != lastBig || !(item->modFlags & kModBigPickup) || !item->hasX()) return false;
 	lastBig = nullptr;
 	int n;
@@ -3281,6 +3815,10 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, DAMAGE_TYPE damageType
 		forgeScent = s; // Blood Feud's quarry
 		forgeScentAt = PlayClock;
 	}
+	// Fury and Frenzy (Omens): your hits on foes, times their factor, on top of the Forge's bite and the base's Glass
+	// Cannon (applied before this), as those stack already. A red champion's flinch counts the hit as dealt.
+	if (s && s != target && s->IsPlayerActor() && target->IsDudeActor() && !target->IsPlayerActor())
+		if (int deal = OmenDeal(); deal != 1) damage *= deal;
 	// Your hit on a red champion, as dealt (before its own armour: its type's and the skill's), for its flinch.
 	if (s && s != target && s->IsPlayerActor() && (target->modFlags & kModRedChampion) && target->spr.statnum == kStatDude)
 		StaggerHit(target, damage);
@@ -3294,6 +3832,21 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, DAMAGE_TYPE damageType
 	if (run.active && !run.over && target->IsPlayerActor() && run.cov[kWrath] > 0)
 		damage = int(damage * (1. + (hitscan ? 0.1 : 0.2) * run.cov[kWrath]) + 0.5); // the Covenant's Wrath
 	return damage;
+}
+
+// Bloodlust: a hit of yours on a live foe, its health as the hit began; the heal comes once the wound is dealt.
+OmenWound::OmenWound(DBloodActor* source, DBloodActor* target)
+{
+	if (!omens.Size() || !source || !target || target->IsPlayerActor() || !AllowedKillType(target) || !target->hasX()
+		|| target->xspr.health <= 0 || !BloodlustOn() || !ByYou(source))
+		return;
+	foe = target;
+	healthBefore = int(target->xspr.health);
+}
+
+OmenWound::~OmenWound()
+{
+	if (foe && foe->hasX()) BloodlustHeal(healthBefore - std::min(healthBefore, int(foe->xspr.health)));
 }
 
 // Red champions don't flinch (nor stagger under tesla), but for a heavy hit of yours: one that deals a red 32 health or
@@ -4727,12 +5280,24 @@ void Serialize(FSerializer& arc)
 				("nextwave", run.nextWave)
 				("partime", run.parTime)
 				("nextovertime", run.nextOvertime)
-				("unspent", run.unspent);
+				("unspent", run.unspent)
+				("omenrolls", run.omenRolls);
 			arc.Array("cov", run.cov, kNumConditions);
 			arc.Array("kit", run.kit, kNumKit);
 			arc.Array("offers", run.offers, 3);
 			arc.Array("forge", run.forge, kForgeSlots);
 			arc("litanies", run.litanies);
+			// The Omens running, four numbers each: the Omen, its time left, its base time, the most it has had. Their
+			// stock powerups' time is the player's own (saved with it); their base effects start again on the load.
+			TArray<int> running;
+			for (auto& r : omens)
+			{
+				running.Push(r.id);
+				running.Push(r.left);
+				running.Push(r.base);
+				running.Push(r.peak);
+			}
+			arc("omens", running);
 			arc.EndObject();
 		}
 		return;
@@ -4741,7 +5306,10 @@ void Serialize(FSerializer& arc)
 	// Reading: the save's run, if it has one that can still go on.
 	startingRun = false;
 	refusedLoad = false;
+	omens.Clear();
+	reliquaryHint = "";
 	Run loaded;
+	TArray<int> running;
 	bool has = false;
 	if (arc.BeginObject("roguelite"))
 	{
@@ -4763,12 +5331,14 @@ void Serialize(FSerializer& arc)
 			("nextwave", loaded.nextWave)
 			("partime", loaded.parTime)
 			("nextovertime", loaded.nextOvertime)
-			("unspent", loaded.unspent);
+			("unspent", loaded.unspent)
+			("omenrolls", loaded.omenRolls);
 		arc.Array("cov", loaded.cov, kNumConditions);
 		arc.Array("kit", loaded.kit, kNumKit);
 		arc.Array("offers", loaded.offers, 3);
 		arc.Array("forge", loaded.forge, kForgeSlots);
 		arc("litanies", loaded.litanies);
+		arc("omens", running);
 		arc.EndObject();
 		has = true;
 	}
@@ -4783,6 +5353,9 @@ void Serialize(FSerializer& arc)
 	run = std::move(loaded);
 	run.active = true;
 	run.curseClock = INT_MIN / 2;
+	for (unsigned i = 0; i + 3 < running.Size(); i += 4) // the save's Omens (OmensLoaded starts their effects)
+		if (running[i] >= 0 && running[i] < kNumOmens && running[i + 1] > 0 && running[i + 2] > 0 && !RunningOf(running[i]))
+			omens.Push({ running[i], running[i + 1], running[i + 2], std::max(running[i + 3], running[i + 1]), false });
 	bmod::modeEnemyTimeScale = run.over ? 1. : 1. + 0.15 * run.cov[kHaste];
 }
 
@@ -5104,6 +5677,119 @@ CCMD(rl_kit)
 	for (auto& c : conditions)
 		if (*c.cvar > 0) cov.AppendFormat("%s%s %d", cov.IsEmpty() ? "" : ", ", c.name, int(*c.cvar));
 	Printf("Covenant: %s (Dread %d)\n", cov.IsEmpty() ? "none" : cov.GetChars(), ChosenDread());
+}
+
+// The Omens, for testing every one without a run of luck. An Omen is named by its number in "rl_omen list", by its name
+// without spaces or capitals ("twinvessel", "deathsgrin"), or by the start of that ("twin").
+static int FindOmen(const char* arg)
+{
+	auto squash = [](const char* s)
+	{
+		FString out;
+		for (; *s; s++) if (isalnum((unsigned char)*s)) out += char(tolower((unsigned char)*s));
+		return out;
+	};
+	char* end;
+	long n = strtol(arg, &end, 10);
+	if (*arg && !*end) return n >= 1 && n <= kNumOmens ? int(n) - 1 : -1;
+	FString want = squash(arg);
+	if (want.IsEmpty()) return -1;
+	for (int i = 0; i < kNumOmens; i++) if (squash(omenInfo[i].name).Compare(want) == 0) return i;
+	for (int i = 0; i < kNumOmens; i++) if (squash(omenInfo[i].name).IndexOf(want) == 0) return i;
+	return -1;
+}
+
+static bool OmenReady(const char* cmd)
+{
+	auto p = getPlayer(myconnectindex);
+	if (OmensLive() && gamestate == GS_LEVEL && p && p->GetActor() && p->GetActor()->insector()) return true;
+	Printf("%s: no run in progress (or rl_omens is 0, or this is the Crypt)\n", cmd);
+	return false;
+}
+
+// One lying in front of you (or beside you, with no room ahead; at your feet, with none at all).
+static void SpawnOmenAhead(const char* cmd, int id)
+{
+	auto p = getPlayer(myconnectindex);
+	auto pl = p->GetActor();
+	std::mt19937 rng(uint32_t(PlayClock) ^ 0x5BD1E995u);
+	DVector2 ahead = pl->spr.pos.XY() + pl->spr.Angles.Yaw.ToVector() * 64;
+	auto s = pl->sector();
+	updatesector(ahead, &s);
+	DVector3 floor = FloorAt(pl);
+	TArray<DVector2> taken;
+	DVector2 spot = pl->spr.pos.XY();
+	sectortype* sect = pl->sector();
+	if (s && cansee(DVector3(pl->spr.pos.XY(), p->zView), pl->sector(), DVector3(ahead, getflorzofslopeptr(s, ahead.X, ahead.Y) - 16), s)
+		&& SpotOk(s, ahead, floor.Z, taken, true))
+	{
+		spot = ahead;
+		sect = s;
+	}
+	else FindItemSpot(rng, pl->sector(), floor, 24, 80, taken, spot, sect);
+	if (SpawnOmenItem(sect, spot, id)) Printf(PRINT_NOTIFY, "%s: %s\n", cmd, omenInfo[id].name);
+	else Printf("%s: no room for it\n", cmd);
+}
+
+CCMD(rl_omen)
+{
+	if (argv.argc() < 2)
+	{
+		Printf("usage: rl_omen list | rl_omen <name|number> [seconds]   (rl_omen_drop, rl_reliquary <name|number>: one in front of you)\n");
+		return;
+	}
+	if (!stricmp(argv[1], "list"))
+	{
+		for (int i = 0; i < kNumOmens; i++)
+		{
+			auto& o = omenInfo[i];
+			auto r = RunningOf(i);
+			Printf("%2d  %-13s %-7s %2d s  %s%s\n", i + 1, o.name, omenTierNames[o.tier], o.seconds, o.sentence,
+				r ? FStringf("  (running: %d s left)", bmod::SecondsLeft(r->left)).GetChars() : "");
+		}
+		Printf("Drops: every champion (blue: common %d%%, rare %d%%; red: rare %d%%, relic %d%%), a plain enemy 1 in %d (common %d%%,"
+			" rare %d%%, relic %d%%). Cursed reliquaries (the gambles, taken with Use): red champions 1 in %d, blue 1 in %d. rl_omens %d\n",
+			int(100 * (1 - kOmenBlueRare) + 0.5), int(100 * kOmenBlueRare + 0.5), int(100 * (1 - kOmenRedRelic) + 0.5), int(100 * kOmenRedRelic + 0.5),
+			int(1 / kOmenPlain + 0.5), int(100 * (1 - kOmenPlainRare - kOmenPlainRelic) + 0.5), int(100 * kOmenPlainRare + 0.5),
+			int(100 * kOmenPlainRelic + 0.5), int(1 / kReliquaryRed + 0.5), int(1 / kReliquaryBlue + 0.5), (int)rl_omens);
+		return;
+	}
+	int id = FindOmen(argv[1]);
+	if (id < 0)
+	{
+		Printf("rl_omen: no Omen '%s' (rl_omen list)\n", argv[1]);
+		return;
+	}
+	if (!OmenReady("rl_omen")) return;
+	int seconds = argv.argc() > 2 ? std::clamp(atoi(argv[2]), 1, 600) : omenInfo[id].seconds;
+	if (!GrantOmen(id, seconds * kClock))
+	{
+		Printf("rl_omen: %s can't take hold now\n", omenInfo[id].name);
+		return;
+	}
+	Printf(PRINT_NOTIFY, "Omen: %s, %d s: %s\n", omenInfo[id].name, bmod::SecondsLeft(RunningOf(id)->left), omenInfo[id].sentence);
+}
+
+CCMD(rl_omen_drop)
+{
+	int id = argv.argc() > 1 ? FindOmen(argv[1]) : -1;
+	if (id < 0 || omenInfo[id].tier == kOmenGamble)
+	{
+		Printf("usage: rl_omen_drop <name|number>   (an Omen; a gamble comes in a cursed reliquary: rl_reliquary)\n");
+		return;
+	}
+	if (OmenReady("rl_omen_drop")) SpawnOmenAhead("rl_omen_drop", id);
+}
+
+CCMD(rl_reliquary)
+{
+	int id = argv.argc() > 1 ? FindOmen(argv[1]) : -1;
+	if (id < 0 || omenInfo[id].tier != kOmenGamble)
+	{
+		Printf("usage: rl_reliquary <name|number>   (a gamble: Glass Cannon, Frenzy, Powder Keg; rl_omen list)\n");
+		return;
+	}
+	if (OmenReady("rl_reliquary")) SpawnOmenAhead("rl_reliquary", id);
 }
 
 CCMD(rl_clearmap)
