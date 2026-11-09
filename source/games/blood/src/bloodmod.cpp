@@ -7,13 +7,18 @@
 //---------------------------------------------------------------------------
 
 #include "ns.h"
+#include <algorithm>
 #include <cmath>
 #include "build.h"
 #include "blood.h"
 #include "c_cvars.h"
 #include "c_dispatch.h"
+#include "gamecvars.h"
 #include "printf.h"
 #include "i_time.h"
+#include "texturemanager.h"
+#include "v_draw.h"
+#include "v_font.h"
 #include "hwrenderer/postprocessing/hw_postprocessshader.h"
 
 CVARD(Bool, mod_eventlog, false, 0, "print each mod-base game event to the console")
@@ -1052,9 +1057,116 @@ void OnTick()
 	for (auto fn : tickers()) fn();
 }
 
+//---------------------------------------------------------------------------
+//
+// the chip row: the chips the drawers queued this frame, in one row just above
+// the status bar, in the order queued. Each has a dark background, a fill
+// showing the share of time left and a border in its colour (or a dashed
+// border, no fill and grey text). With the status bar hidden (hud_size, No HUD)
+// the row sits at the bottom edge; a row too wide for the screen wraps upward.
+//
+//---------------------------------------------------------------------------
+
+static TArray<Chip> chipQueue;
+
+void AddChip(const Chip& c) { chipQueue.Push(c); }
+
+int SecondsLeft(int clocks) { return (std::max(clocks, 0) + 120 - 1) / 120; }
+
+// Screen y of the top of the status bar or HUD, found the way the level stats find it (statusbar.zs,
+// PrintLevelStats, with the heights Blood's sbar.zs reports); the bottom edge when nothing is drawn there.
+static double ChipsFloor()
+{
+	double h = twod->GetHeight();
+	if (mods.hideHud || hud_size == Hud_Nothing) return h;
+	double space = 28; // the fullscreen HUDs
+	if (hud_size <= Hud_StbarOverlay)
+	{
+		auto id = TexMan.CheckForTexture("Statusbar", ETextureType::Any);
+		auto tex = id.isValid() ? TexMan.GetGameTexture(id) : nullptr;
+		if (tex) space = tex->GetDisplayHeight();
+	}
+	return h * (200. - space * (double)hud_scalefactor) / 200.;
+}
+
+static void DrawChip(const Chip& c, double x, double y, double w, double h, double tsc, double padX, double padY, double sc)
+{
+	int ix = int(x), iy = int(y), iw = int(w), ih = int(h);
+	int bt = std::max(1, int(sc * 0.75 + 0.5)); // border thickness
+	float ba = float(0.9 * c.alpha);
+	Dim(twod, 0xff000000, float(0.55 * c.alpha), ix, iy, iw, ih);
+	if (!c.dashed)
+	{
+		int fw = int(iw * std::clamp(c.frac, 0., 1.));
+		if (fw > 0) Dim(twod, c.color, float(0.3 * c.alpha), ix, iy, fw, ih);
+		Dim(twod, c.color, ba, ix, iy, iw, bt);
+		Dim(twod, c.color, ba, ix, iy + ih - bt, iw, bt);
+		Dim(twod, c.color, ba, ix, iy, bt, ih);
+		Dim(twod, c.color, ba, ix + iw - bt, iy, bt, ih);
+	}
+	else
+	{
+		int dash = std::max(3, int(4 * sc)), space = std::max(2, int(3 * sc));
+		for (int dx = 0; dx < iw; dx += dash + space)
+		{
+			int len = std::min(dash, iw - dx);
+			Dim(twod, c.color, ba, ix + dx, iy, len, bt);
+			Dim(twod, c.color, ba, ix + dx, iy + ih - bt, len, bt);
+		}
+		for (int dy = 0; dy < ih; dy += dash + space)
+		{
+			int len = std::min(dash, ih - dy);
+			Dim(twod, c.color, ba, ix, iy + dy, bt, len);
+			Dim(twod, c.color, ba, ix + iw - bt, iy + dy, bt, len);
+		}
+	}
+	DrawText(twod, SmallFont, c.dashed ? CR_GRAY : CR_WHITE, x + padX, y + padY, c.text.GetChars(),
+		DTA_ScaleX, tsc, DTA_ScaleY, tsc, DTA_Alpha, c.alpha, TAG_DONE);
+}
+
+static void DrawChips()
+{
+	if (chipQueue.Size() == 0) return;
+	double W = twod->GetWidth();
+	double sc = twod->GetHeight() / 480.;
+	double tsc = 1.2 * sc, padX = 7 * sc, padY = 3 * sc, gap = 6 * sc;
+	double chipH = SmallFont->GetHeight() * tsc + 2 * padY;
+	double maxW = W * 0.9;
+	// Fill each line left to right; a chip that would pass 90% of the width starts the next line.
+	TArray<double> chipW;     // per chip
+	TArray<unsigned> lineAt;  // per line: its first chip
+	TArray<double> lineW;     // per line: its width
+	for (unsigned i = 0; i < chipQueue.Size(); i++)
+	{
+		double w = SmallFont->StringWidth(chipQueue[i].text.GetChars()) * tsc + 2 * padX;
+		chipW.Push(w);
+		if (lineW.Size() == 0 || lineW.Last() + gap + w > maxW)
+		{
+			lineAt.Push(i);
+			lineW.Push(-gap);
+		}
+		lineW.Last() += gap + w;
+	}
+	double bottom = ChipsFloor() - 5 * sc;
+	for (unsigned l = 0; l < lineW.Size(); l++)
+	{
+		double ly = bottom - (l + 1) * chipH - l * gap * 0.5; // the first line sits lowest; more wrap upward
+		double x = (W - lineW[l]) * 0.5;
+		unsigned end = l + 1 < lineAt.Size() ? lineAt[l + 1] : chipQueue.Size();
+		for (unsigned i = lineAt[l]; i < end; i++)
+		{
+			DrawChip(chipQueue[i], x, ly, chipW[i], chipH, tsc, padX, padY, sc);
+			x += chipW[i] + gap;
+		}
+	}
+}
+
 void OnDrawOverlay(DBloodPlayer* pPlayer)
 {
 	for (auto fn : drawers()) fn(pPlayer);
+	// After every drawer, so all modes' chips share one row.
+	DrawChips();
+	chipQueue.Clear();
 }
 
 } // namespace bmod
