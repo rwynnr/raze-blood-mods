@@ -50,8 +50,9 @@
 // one (a blue champion a common or rare one, a red one a rare or relic), a
 // plain enemy one time in 25; they lie where it fell until the map ends. Most
 // are Blood's own powerups on short timers. A gamble never drops on its own: a
-// champion sometimes leaves a cursed reliquary, which names both its halves
-// when you come near and is taken with Use. A kill of yours while a boon runs
+// champion sometimes leaves a cursed reliquary (it falls with a bell, and
+// Blood's atom motes circle it), which names both its halves when you come
+// near or walk into it, and is taken with Use. A kill of yours while a boon runs
 // adds a second to it (up to twice its time); taking one again adds its whole
 // time (up to three times). They show in the shared chip row, last through a
 // save and load, and end with the map.
@@ -199,6 +200,10 @@ CVARD(Bool, rl_forge_alt, true, CVAR_ARCHIVE, "roguelite Forge: the forged gun's
 CVARD(String, rl_litanies, "", CVAR_ARCHIVE, "roguelite Forge: the Litanies found (ids), kept across runs")
 
 BEGIN_BLD_NS
+
+// animatesprite.cpp's view effects, for a cursed reliquary's (OmenItemSprite).
+tspritetype* viewInsertTSprite(tspriteArray& tsprites, sectortype* pSector, int nStatnum, tspritetype const* const parentTSprite);
+extern DAngle random_angles[16][3]; // filled by viewInit
 
 namespace rogue
 {
@@ -1695,9 +1700,10 @@ bool SpotSectorOk(sectortype* s, double minHeight = 40)
 
 // A spot for a pickup: inside a good sector, at about the anchor's floor height, clear of walls and ledges, and not
 // on another pickup, a thing or an enemy. Loose (a secret's cache): a niche 24 high will do, nearer walls and items.
-bool SpotOk(sectortype* s, const DVector2& p, double anchorZ, const TArray<DVector2>& taken, bool loose = false)
+// minClear: at least this clear of walls and solid sprites, loose or not (a big pickup: a cursed reliquary).
+bool SpotOk(sectortype* s, const DVector2& p, double anchorZ, const TArray<DVector2>& taken, bool loose = false, double minClear = 0)
 {
-	const double clear = loose ? 8 : kSpotClear, spacing = loose ? 12 : kSpotSpacing;
+	const double clear = std::max(loose ? 8 : kSpotClear, minClear), spacing = loose ? 12 : kSpotSpacing;
 	if (!SpotSectorOk(s, loose ? 24 : 40) || !inside(p.X, p.Y, s)) return false;
 	double fz = getflorzofslopeptr(s, p.X, p.Y);
 	if (std::abs(fz - anchorZ) > kSpotStepZ) return false;
@@ -1720,9 +1726,9 @@ bool SpotOk(sectortype* s, const DVector2& p, double anchorZ, const TArray<DVect
 }
 
 // A spot minD-maxD from an anchor (on its floor), in sight of it, so the pickup isn't through a wall; with only, in
-// that sector (a secret's cache stays in the secret).
+// that sector (a secret's cache stays in the secret). minClear: as SpotOk's.
 bool FindItemSpot(std::mt19937& rng, sectortype* aSect, const DVector3& anchor, double minD, double maxD,
-	const TArray<DVector2>& taken, DVector2& out, sectortype*& outSect, sectortype* only = nullptr, int tries = 16)
+	const TArray<DVector2>& taken, DVector2& out, sectortype*& outSect, sectortype* only = nullptr, int tries = 16, double minClear = 0)
 {
 	DVector3 eye(anchor.XY(), anchor.Z - 16);
 	for (int k = 0; k < tries; k++)
@@ -1732,7 +1738,7 @@ bool FindItemSpot(std::mt19937& rng, sectortype* aSect, const DVector3& anchor, 
 		updatesector(p, &s);
 		if (!s || (only && s != only)) continue;
 		if (!cansee(eye, aSect, DVector3(p, getflorzofslopeptr(s, p.X, p.Y) - 16), s)) continue;
-		if (!SpotOk(s, p, anchor.Z, taken, only != nullptr)) continue;
+		if (!SpotOk(s, p, anchor.Z, taken, only != nullptr, minClear)) continue;
 		out = p;
 		outSect = s;
 		return true;
@@ -2570,13 +2576,26 @@ constexpr double kReliquaryBlue = 1. / 10, kReliquaryRed = 1. / 3; // plain enem
 // should any reach its pickup) drawn as the Omen's look. Common ones keep Blood's colours, rare ones take the blue
 // champions' COLD, relics the red champions' BEAST. A reliquary takes FLAME: no stock lookup turns a whole sprite purple,
 // and FLAME turns over a third of the black chest violet and the rest red, the nearest they come. All are lit like
-// Blood's keys, so a drop shows in the dark and isn't taken for a map's own item.
+// Blood's keys, so a drop shows in the dark and isn't taken for a map's own item. Each keeps its palette on a floor with
+// its own (OmenItemSprite), as stock items take the floor's.
+// A reliquary, a choice rather than a pickup walked into, is made hard to miss: it falls with a bell and a message, it's
+// drawn half as big again, and Blood's own atom motes circle it (OmenItemSprite). It names itself from further off than
+// Use takes it (Use stays tight: a press at a bare wall, hunting a secret, never takes a gamble), and when walked into.
 constexpr int kOmenItem = 132;
 constexpr int omenPal[] = { 0, 10, 2, 9 };
 constexpr int kOmenShade = -128;
 constexpr int kOmenKillTime = kClock;                // a kill of yours adds this to each boon running, up to 2x its time
-constexpr double kReliquaryRange = 96;               // a reliquary names itself, and Use takes it, this near (to the eye)
+constexpr double kReliquaryRange = 96;               // Use takes a reliquary this near (to the eye)
 constexpr double kReliquaryCone = 25;                // and this close to where you look, up and down too (degrees)
+constexpr double kReliquaryNameRange = 160;          // it names itself this near (along the floor)
+constexpr double kReliquaryNameCone = 30;            // and this close to where you face (left and right only: degrees)
+constexpr int kReliquaryTouchHint = kClock / 2;      // walked into, it names itself until this long after
+constexpr double kReliquaryLook = 1.5;               // it's drawn this much bigger than the stock chest (repeat 60)
+constexpr double kReliquaryClear = 24;               // and so lies this far from walls and solid sprites (kSpotClear: 16)
+constexpr double kReliquaryHaloZ = 32;               // its motes circle a point this high above its floor
+// It falls with BELL: no stock code rings 270, and no stock map's ambient or sector sound uses it. (Eleven of the maps'
+// sound generators do, on E1M4, E1M8, E4M9, E6M1 and two BloodBath maps: each off until the map's wiring turns it on.)
+constexpr int kReliquaryBell = 270;
 constexpr int kLustPerSecond = 15 << 4;              // Bloodlust heals at most this a second (health is in sixteenths)
 constexpr int kLustTop = 100 << 4;                   // and never above this
 // The chips' gold (chaos's twist gold), purple, and the map curse's red (chaos's nasty red).
@@ -2592,6 +2611,8 @@ struct RunningOmen
 };
 TArray<RunningOmen> omens;  // oldest first: the chips' order
 FString reliquaryHint;      // the cursed reliquary you face, named (the drawer shows it)
+DBloodActor* reliquaryTouched; // the reliquary you last walked into (compared, never followed)
+int reliquaryTouchedAt = INT_MIN / 2;
 int lustSecond = -1, lustHealed, lustSoundAt = INT_MIN / 2;
 DBloodActor* omenPowerItem; // a map's powerup being picked up while an Omen runs on its timer (compared, never followed)
 int omenPowerBefore;        // that timer as the pickup began
@@ -2682,6 +2703,7 @@ void ResetOmens()
 {
 	omens.Clear();
 	reliquaryHint = "";
+	reliquaryTouched = nullptr;
 	lustSecond = -1;
 	lustSoundAt = INT_MIN / 2;
 	omenPowerItem = nullptr;
@@ -2773,12 +2795,13 @@ void BloodlustHeal(int lost)
 }
 
 // An Omen's pickup or a cursed reliquary lying on the floor at p: an inert item drawn as its look, in its tier's
-// palette, lit; with an xsprite, so its mark and its Omen (data1) are saved with it.
+// palette, lit (a reliquary half as big again); with an xsprite, so its mark and its Omen (data1) are saved with it.
 DBloodActor* SpawnOmenItem(sectortype* s, const DVector2& p, int id)
 {
 	auto& o = omenInfo[id];
 	auto& d = gItemData[o.look - kItemBase];
 	if (!s || !d.textureID().isValid()) return nullptr;
+	double look = o.tier == kOmenGamble ? kReliquaryLook : 1;
 	double fz = getflorzofslopeptr(s, p.X, p.Y);
 	auto a = actSpawnSprite(s, DVector3(p, fz), kStatItem, true);
 	if (!a) return nullptr;
@@ -2787,7 +2810,7 @@ DBloodActor* SpawnOmenItem(sectortype* s, const DVector2& p, int id)
 	a->spr.setspritetexture(d.textureID());
 	a->spr.shade = kOmenShade;
 	a->spr.pal = omenPal[o.tier];
-	a->spr.scale = DVector2(d.xrepeat * REPEAT_SCALE, d.yrepeat * REPEAT_SCALE);
+	a->spr.scale = DVector2(d.xrepeat * look * REPEAT_SCALE, d.yrepeat * look * REPEAT_SCALE);
 	a->modFlags |= kModOmen;
 	a->xspr.data1 = int16_t(id);
 	double top, bottom;
@@ -2801,18 +2824,20 @@ DBloodActor* SpawnOmenItem(sectortype* s, const DVector2& p, int id)
 
 // A drop lies beside where the enemy fell, in sight of the spot (not on its armour or its stock drop); with no room
 // there, on the spot itself if a pickup can lie there; else as a champion's armour goes (near it, or else near you).
+// A reliquary, drawn big, keeps further from walls.
 void PlaceOmenItem(DBloodActor* item, std::mt19937& rng)
 {
 	if (!item->insector()) return;
 	TArray<DVector2> taken;
 	DVector2 spot;
 	sectortype* sect = nullptr;
-	bool found = FindItemSpot(rng, item->sector(), FloorAt(item), 24, 64, taken, spot, sect);
+	double clear = omenInfo[item->xspr.data1].tier == kOmenGamble ? kReliquaryClear : 0;
+	bool found = FindItemSpot(rng, item->sector(), FloorAt(item), 24, 64, taken, spot, sect, nullptr, 16, clear);
 	if (!found && SpotSectorOk(item->sector())) return;
-	if (!found) found = FindItemSpot(rng, item->sector(), FloorAt(item), 16, 96, taken, spot, sect);
+	if (!found) found = FindItemSpot(rng, item->sector(), FloorAt(item), 16, 96, taken, spot, sect, nullptr, 16, clear);
 	auto p = getPlayer(myconnectindex);
 	auto pl = p ? p->GetActor() : nullptr;
-	if (!found && pl && pl->insector()) found = FindItemSpot(rng, pl->sector(), FloorAt(pl), 24, 80, taken, spot, sect);
+	if (!found && pl && pl->insector()) found = FindItemSpot(rng, pl->sector(), FloorAt(pl), 24, 80, taken, spot, sect, nullptr, 16, clear);
 	if (!found || !sect) return;
 	LayDrop(item, sect, spot);
 	item->basePoint = item->spr.pos;
@@ -2828,7 +2853,8 @@ int PickOmen(std::mt19937& rng, int tier)
 // As an enemy dies in a run (outside the Crypt): a champion's Omen (a blue one's common 65% or rare, a red one's rare
 // 75% or a relic), a plain enemy's one time in 25 (common 70%, rare 25%, relic 5%); and besides, a red champion's
 // cursed reliquary one time in 3, a blue one's one time in 10, a random gamble in it. The rolls are the run's (its seed
-// and the deaths rolled so far, which a save keeps), so a reload rolls the same.
+// and the deaths rolled so far, which a save keeps), so a reload rolls the same. A reliquary falls with a bell at the
+// chest and a message (an Omen falls silent: walking into it takes it).
 void DropOmens(DBloodActor* victim, bool champion, bool red)
 {
 	if (!rl_omens || !victim || !victim->insector()) return;
@@ -2853,33 +2879,48 @@ void DropOmens(DBloodActor* victim, bool champion, bool red)
 		auto pos = victim->spr.pos;
 		updatesector(pos, &s);
 		if (!s) s = victim->sector(); // blasted outside every sector (as actSpawnFloor has it)
-		if (auto item = SpawnOmenItem(s, pos.XY(), id)) PlaceOmenItem(item, rng);
+		auto item = SpawnOmenItem(s, pos.XY(), id);
+		if (!item) continue;
+		PlaceOmenItem(item, rng);
+		if (id != gamble) continue;
+		sfxPlay3DSound(item->spr.pos, kReliquaryBell, item->sector()); // unattached: it rings on if the chest is taken at once
+		viewSetMessage("A cursed reliquary falls", TEXTCOLOR_PURPLE); // the gambles' colour (the hint, the chip)
 	}
 }
 
-// The cursed reliquary you face: within kReliquaryRange of your eye and kReliquaryCone of your view (where Use's own scan
-// aims, its pitch too: one at your feet you look down at), in sight; the nearest that can take hold now (CanGrant).
-// *blocked: the nearest you face that can't, so the hint can say why.
-DBloodActor* NearReliquary(DBloodPlayer* p, DBloodActor** blocked = nullptr)
+bool IsReliquary(DBloodActor* a)
+{
+	return IsOmenItem(a) && omenInfo[a->xspr.data1].tier == kOmenGamble && !(a->spr.flags & 32) && a->insector();
+}
+
+// The cursed reliquary you face, in sight; the nearest that can take hold now (CanGrant). *blocked: the nearest you face
+// that can't, so the hint can say why. Facing one to take it (Use): within kReliquaryRange of your eye and
+// kReliquaryCone of your view (where Use's own scan aims, its pitch too: one at your feet you look down at). Facing one
+// to name it (naming): within kReliquaryNameRange along the floor and kReliquaryNameCone of where you face, your pitch
+// aside, as one lying ahead is below your view until you're nearly on it.
+DBloodActor* NearReliquary(DBloodPlayer* p, DBloodActor** blocked = nullptr, bool naming = false)
 {
 	if (blocked) *blocked = nullptr;
 	auto pl = p ? p->GetActor() : nullptr;
 	if (!pl || !pl->insector()) return nullptr;
 	DVector3 eye(pl->spr.pos.XY(), p->zView);
 	DVector3 view = DVector3(pl->spr.Angles.Yaw.ToVector(), p->slope).Unit(); // as ActionScan aims
-	double cone = DAngle::fromDeg(kReliquaryCone).Cos();
+	DVector2 facing = pl->spr.Angles.Yaw.ToVector();
+	double range = naming ? kReliquaryNameRange : kReliquaryRange;
+	double cone = DAngle::fromDeg(naming ? kReliquaryNameCone : kReliquaryCone).Cos();
 	DBloodActor* best = nullptr;
-	double bestDist = kReliquaryRange, blockedDist = kReliquaryRange;
+	double bestDist = range, blockedDist = range;
 	BloodStatIterator it(kStatItem);
 	while (auto a = it.Next())
 	{
-		if (!IsOmenItem(a) || omenInfo[a->xspr.data1].tier != kOmenGamble || (a->spr.flags & 32) || !a->insector()) continue;
+		if (!IsReliquary(a)) continue;
 		double top, bottom;
 		GetActorExtents(a, &top, &bottom);
 		DVector3 mid(a->spr.pos.XY(), (top + bottom) / 2);
 		DVector3 d = mid - eye;
-		double dist = d.Length();
-		if (dist >= kReliquaryRange || (d | view) < dist * cone) continue;
+		double dist = naming ? d.XY().Length() : d.Length();
+		double ahead = naming ? (d.XY() | facing) : (d | view);
+		if (dist >= range || ahead < dist * cone) continue;
 		bool takes = CanGrant(a->xspr.data1);
 		double& nearest = takes ? bestDist : blockedDist;
 		if ((!takes && !blocked) || dist >= nearest || !cansee(eye, pl->sector(), mid, a->sector())) continue;
@@ -2925,8 +2966,8 @@ bool TakeReliquary(DBloodPlayer* p)
 
 // Each tic: the Omens' time runs down, and one whose base effect or stock powerup was ended by another (chaos starting a
 // rival, a powerup cleared) is dropped; one riding an effect another ran takes it over as that one stops on its own (not
-// when a rival replaced it: restarting would end the newcomer). Then the reliquary you face is named, or why it can't
-// take hold now. Not live (rl_omens off, the run over, the Crypt): everything ends.
+// when a rival replaced it: restarting would end the newcomer). Then a reliquary near you is named, with how to take it
+// or why it can't take hold now. Not live (rl_omens off, the run over, the Crypt): everything ends.
 void OmenTick()
 {
 	if (!OmensLive())
@@ -2951,14 +2992,29 @@ void OmenTick()
 		}
 		if (lost || r.left <= 0) EndOmen(i, false);
 	}
+	// The hint: the reliquary Use would act on; else one you walked into just now; else one you face further off.
 	DBloodActor* blocked;
 	auto rel = NearReliquary(p, &blocked);
 	if (!rel) rel = blocked;
+	bool inReach = rel != nullptr;
+	if (!rel && PlayClock - reliquaryTouchedAt >= 0 && PlayClock - reliquaryTouchedAt < kReliquaryTouchHint)
+	{
+		BloodStatIterator it(kStatItem);
+		while (auto a = it.Next())
+			if (a == reliquaryTouched && IsReliquary(a)) rel = a;
+	}
+	if (!rel)
+	{
+		rel = NearReliquary(p, &blocked, true);
+		if (!rel) rel = blocked;
+	}
 	if (!rel) reliquaryHint = "";
 	else
 	{
-		auto& o = omenInfo[rel->xspr.data1];
-		FString tail = rel == blocked ? FStringf("It can't take hold %s.", HoldBar(rel->xspr.data1).GetChars()) : FString("Use to take.");
+		int id = rel->xspr.data1;
+		auto& o = omenInfo[id];
+		FString tail = !CanGrant(id) ? FStringf("It can't take hold %s.", HoldBar(id).GetChars())
+			: FString(inReach ? "Use to take." : "Look down at it and Use to take.");
 		reliquaryHint.Format("Cursed reliquary: %s: %s, %d s. %s", o.name, o.sentence, o.seconds, tail.GetChars());
 	}
 }
@@ -2968,6 +3024,7 @@ void OmenTick()
 void OmensLoaded()
 {
 	reliquaryHint = "";
+	reliquaryTouched = nullptr;
 	lustSecond = -1;
 	lustSoundAt = INT_MIN / 2;
 	omenPowerItem = nullptr;
@@ -3743,9 +3800,9 @@ int TakePickup(DBloodActor* item, int room)
 }
 
 // An Omen's pickup is the run's: walked into, it begins (or adds its time), with Blood's powerup chime, the pickup flash
-// and a message. A cursed reliquary isn't taken by walking over it (Use takes it: TakeReliquary); nor is either with
-// the Omens off (rl_omens 0, the run over), when they lie inert. A map's powerup the stock pickup is about to take while
-// an Omen runs on its timer is noted, for PickupTaken.
+// and a message. A cursed reliquary isn't taken by walking over it (Use takes it: TakeReliquary), only named (OmenTick);
+// nor is either with the Omens off (rl_omens 0, the run over), when they lie inert. A map's powerup the stock pickup is
+// about to take while an Omen runs on its timer is noted, for PickupTaken.
 bool ClaimPickup(DBloodPlayer* pPlayer, DBloodActor* item)
 {
 	omenPowerItem = nullptr;
@@ -3765,7 +3822,12 @@ bool ClaimPickup(DBloodPlayer* pPlayer, DBloodActor* item)
 	if (pPlayer != getPlayer(myconnectindex) || !OmensLive()) return true;
 	int id = item->xspr.data1;
 	auto& o = omenInfo[id];
-	if (o.tier == kOmenGamble) return true;
+	if (o.tier == kOmenGamble)
+	{
+		reliquaryTouched = item; // OmenTick names it, and how to take it
+		reliquaryTouchedAt = PlayClock;
+		return true;
+	}
 	bool chimed = false;
 	if (!GrantOmen(id, o.seconds * kClock, &chimed)) return true; // it can't take hold now (CanGrant): it stays
 	if (!chimed) sfxPlay3DSound(pPlayer->GetActor(), 776, -1, 0); // Blood's powerup chime (powerupActivate plays it)
@@ -5317,6 +5379,42 @@ void TintSprite(DBloodActor* owner, tspritetype* tspr)
 	tspr->shade = int8_t(std::max(tspr->shade - 12, -128)); // and a little brighter
 }
 
+// An item drawn, after a coloured floor has put its palette on it (viewApplyDefaultPal): an Omen keeps its tier's, as the
+// tier is what it tells. And a cursed reliquary is circled by Blood's own "atom" view effect (kViewEffectAtom, which no
+// stock code draws), its maths as animatesprite.cpp has it: 16 fullbright motes (tile 1720) on randomly tilted rings, a
+// shell of radius 32 turning once a second. Here it's centred kReliquaryHaloZ above the chest's floor, so no mote dips
+// under it and its top is at your eye even with the chest below the screen, and the motes take the chest's FLAME (they
+// stay bright in it, and their own blue is the rare Omens' COLD). Drawn each frame, so nothing of it is saved.
+void OmenItemSprite(tspriteArray& tsprites, tspritetype* tspr)
+{
+	auto a = tspr ? static_cast<DBloodActor*>(tspr->ownerActor) : nullptr;
+	if (!IsOmenItem(a) || !OmensLive()) return;
+	int tier = omenInfo[a->xspr.data1].tier;
+	tspr->pal = omenPal[tier];
+	if (tier != kOmenGamble) return;
+	double top, bottom;
+	GetActorExtents(a, &top, &bottom);
+	DVector3 centre(tspr->pos.XY(), bottom - kReliquaryHaloZ);
+	for (int i = 0; i < 16; i++)
+	{
+		auto m = viewInsertTSprite(tsprites, tspr->sectp, 32767, tspr);
+		if (!m) break;
+		auto ang = mapangle((PlayClock * 2048) / 120).Normalized360() + random_angles[i][2];
+		auto vect = DVector3(32 * ang.ToVector(), 0);
+		DVector2 pt(vect.Y, vect.Z);
+		pt = pt.Rotated(random_angles[i][0]);
+		vect.Y = pt.X;
+		pt.X = vect.X;
+		pt = pt.Rotated(random_angles[i][1]);
+		vect.X = pt.X;
+		vect.Z = pt.Y;
+		m->pos = centre + vect;
+		m->setspritetexture(aTexIds[kTexATOMEFFECT]);
+		m->shade = -128;
+		m->pal = omenPal[kOmenGamble];
+	}
+}
+
 void Serialize(FSerializer& arc)
 {
 	if (arc.isWriting())
@@ -5782,13 +5880,14 @@ static void SpawnOmenAhead(const char* cmd, int id)
 	TArray<DVector2> taken;
 	DVector2 spot = pl->spr.pos.XY();
 	sectortype* sect = pl->sector();
+	double clear = omenInfo[id].tier == kOmenGamble ? kReliquaryClear : 0; // a reliquary is drawn big (as PlaceOmenItem)
 	if (s && cansee(DVector3(pl->spr.pos.XY(), p->zView), pl->sector(), DVector3(ahead, getflorzofslopeptr(s, ahead.X, ahead.Y) - 16), s)
-		&& SpotOk(s, ahead, floor.Z, taken, true))
+		&& SpotOk(s, ahead, floor.Z, taken, true, clear))
 	{
 		spot = ahead;
 		sect = s;
 	}
-	else FindItemSpot(rng, pl->sector(), floor, 24, 80, taken, spot, sect);
+	else FindItemSpot(rng, pl->sector(), floor, 24, 80, taken, spot, sect, nullptr, 16, clear);
 	if (SpawnOmenItem(sect, spot, id)) Printf(PRINT_NOTIFY, "%s: %s\n", cmd, omenInfo[id].name);
 	else Printf("%s: no room for it\n", cmd);
 }

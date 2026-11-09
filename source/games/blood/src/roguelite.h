@@ -12,6 +12,7 @@
 class FSerializer;
 struct MapRecord;
 struct tspritetype;
+class tspriteArray;
 struct walltype;
 
 BEGIN_BLD_NS
@@ -88,6 +89,7 @@ namespace rogue
 		int healthBefore = 0;                                              // its health as the hit began (sixteenths)
 	};
 	void TintSprite(DBloodActor* owner, tspritetype* tspr);               // viewProcessSprites: champions are tinted
+	void OmenItemSprite(tspriteArray& tsprites, tspritetype* tspr);        // viewProcessSprites, an item: an Omen keeps its tier's palette, a cursed reliquary's halo
 	void Serialize(FSerializer& arc);                                      // SerializeGameState: the run's save block
 	void OnMenuOpened();                                                   // GameInterface::MenuOpened: lists the runs in the Roguelite menu
 }

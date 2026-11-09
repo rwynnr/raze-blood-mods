@@ -781,6 +781,7 @@ void viewProcessSprites(tspriteArray& tsprites, const DVector3& cPos, DAngle cA,
 					pTSprite->shade = -128;
 
 				viewApplyDefaultPal(pTSprite, pSector);
+				rogue::OmenItemSprite(tsprites, pTSprite); // blood2d roguelite: an Omen keeps its tier's palette on a coloured floor; a cursed reliquary's halo
 				break;
 			}
 		}
