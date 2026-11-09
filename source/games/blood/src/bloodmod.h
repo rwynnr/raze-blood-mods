@@ -47,12 +47,12 @@ namespace bmod
 	struct Chip
 	{
 		FString text;        // e.g. "Low gravity 12s"
-		PalEntry color;      // the border and the fill
+		PalEntry color = 0xffc0c0c0; // the border and the fill (a light grey unless set)
 		double frac = 1;     // the fill: share of the time left, 0..1
 		double alpha = 1;    // fades the whole chip (background, fill, border, text)
-		bool dashed = false; // a dashed border, no fill and grey text (chaos's "next 9s" countdown)
+		bool dashed = false; // a dashed border, no fill and grey text (chaos's "next 9s" countdown); ends the row
 	};
-	void AddChip(const Chip& c); // call from a drawer
+	void AddChip(const Chip& c); // call from a drawer: a chip queued anywhere else is ignored
 	int SecondsLeft(int clocks); // PlayClock units left as the whole seconds a chip shows, rounded up
 
 	// Hooks called from stock code.

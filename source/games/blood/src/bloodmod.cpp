@@ -1068,8 +1068,9 @@ void OnTick()
 //---------------------------------------------------------------------------
 
 static TArray<Chip> chipQueue;
+static bool drawingOverlay; // the drawers are running: the only time a chip may be queued (a ticker would queue one a tic)
 
-void AddChip(const Chip& c) { chipQueue.Push(c); }
+void AddChip(const Chip& c) { if (drawingOverlay) chipQueue.Push(c); }
 
 int SecondsLeft(int clocks) { return (std::max(clocks, 0) + 120 - 1) / 120; }
 
@@ -1127,6 +1128,8 @@ static void DrawChip(const Chip& c, double x, double y, double w, double h, doub
 static void DrawChips()
 {
 	if (chipQueue.Size() == 0) return;
+	// Dashed chips (countdowns to what comes next) end the row, whichever mode queued them first.
+	std::stable_sort(chipQueue.begin(), chipQueue.end(), [](const Chip& a, const Chip& b) { return !a.dashed && b.dashed; });
 	double W = twod->GetWidth();
 	double sc = twod->GetHeight() / 480.;
 	double tsc = 1.2 * sc, padX = 7 * sc, padY = 3 * sc, gap = 6 * sc;
@@ -1163,7 +1166,9 @@ static void DrawChips()
 
 void OnDrawOverlay(DBloodPlayer* pPlayer)
 {
+	drawingOverlay = true;
 	for (auto fn : drawers()) fn(pPlayer);
+	drawingOverlay = false;
 	// After every drawer, so all modes' chips share one row.
 	DrawChips();
 	chipQueue.Clear();
