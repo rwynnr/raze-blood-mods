@@ -3747,7 +3747,9 @@ int actDamageSprite(DBloodActor* source, DBloodActor* actor, DAMAGE_TYPE damageT
 
 	if (source == nullptr) source = actor;
 	damage = bmod::ScaleDamage(source, actor, damage);
+	int unscaled = damage;
 	damage = rogue::ScaleDamage(source, actor, damageType, damage); // blood2d roguelite: champions hit harder
+	if (unscaled > 0 && damage <= 0) return 0; // blood2d roguelite: a hit the run made harmless (your own Larder or Leap blast) isn't one: no pain sound
 
 	DBloodPlayer* pSourcePlayer = nullptr;
 	if (source->IsPlayerActor()) pSourcePlayer = getPlayer(source->spr.type - kDudePlayer1);

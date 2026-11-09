@@ -25,7 +25,8 @@ namespace rogue
 	// champion (the rarer tier; also a champion); a missile from the run's forged gun, with bits 16-32 its offspring code
 	// (0 the gun's own shot, 1 a Litany's offspring or the starburst's ring, and a starburst carrier once it has thrown
 	// its ring, 2 offspring flying back to you, 3 the gun's own shot, split) and 64
-	// for one bought with blood (the Blood Price); 128 on a forged blast that has thrown you (Brimstone Leap).
+	// for one bought with blood (the Blood Price, and the Fetch's cleaver flying back from one); 128 on a forged blast
+	// that has thrown you (Brimstone Leap).
 	// Two bits mean something else on another kind of actor, where the meanings can't meet:
 	// - kModSpareYou (64): on a forged blast (the TNT thing ForgeBlast spawns, then the explosion it becomes), one that
 	//   doesn't hurt you (the Larder of Knives'). A forged missile's 64 is cleared when it strikes (ForgeImpact), so a
@@ -60,6 +61,7 @@ namespace rogue
 		walltype* wall = nullptr;                                          // the wall it struck (codes 0 and 4)
 		double flight = 0;                                                 // its heading in degrees, before the stock code stops it
 		bool liveHit = false, sky = false, larder = false, fetch = false;
+		bool bloodBought = false;                                          // paid for in blood (its mark is cleared before the Fetch reads it)
 		bool biting = false;                                               // a cleaver: its stock heal is the Forge's (ScaleHealing)
 		int healthBefore = 0;                                              // your health before it struck (sixteenths)
 		DBloodActor* foe = nullptr;                                        // the live foe it struck (liveHit)
