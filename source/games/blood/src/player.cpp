@@ -1346,6 +1346,7 @@ bool PickupWeapon(DBloodPlayer* pPlayer, DBloodActor* weaponactor)
 
 void PickUp(DBloodPlayer* pPlayer, DBloodActor* actor)
 {
+	if (rogue::ClaimPickup(pPlayer, actor)) return; // blood2d roguelite: an Omen's pickup (the run's), a cursed reliquary (taken with Use)
 	const char* msg = nullptr;
 	int nType = actor->spr.type;
 	bool pickedUp = 0;
@@ -1652,6 +1653,7 @@ void ProcessInput(DBloodPlayer* pPlayer)
 		HitInfo result;
 
 		int hit = ActionScan(pPlayer, &result);
+		if (hit < 0) rogue::OnUseNothing(pPlayer); // blood2d roguelite: nothing to push, so Use takes a cursed reliquary you face
 		switch (hit)
 		{
 		case 6:

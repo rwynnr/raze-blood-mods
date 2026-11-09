@@ -16,9 +16,12 @@
 //   random types from a threat budget that grows with depth (the stock map's
 //   total on the first map, 1.5x on the last); key carriers keep their kind;
 // - a chance growing from 6% to 18% makes each a champion (2.5x health,
-//   1.25x size and damage, tinted blue), and a rarer one, from 4% to 12%, a
-//   red champion: 5x health, 1.5x damage, 1.4x size, moving and animating
-//   1.35x as fast, and it doesn't flinch;
+//   1.25x size and damage, 1.1x for its bullets and shells, tinted blue), and
+//   a rarer one, from 4% to 12%, a red champion: 5x health, 1.5x damage (1.2x
+//   for its bullets and shells), 1.4x size, moving and animating 1.35x as fast
+//   but attacking at stock speed, and it flinches only from a heavy hit of the
+//   player's (32 health in a tic, once every 3 s). As they die, red champions
+//   drop body armour, and champions basic armour one time in four;
 // - health, armor, ammo, explosive, weapon and powerup pickups reroll within
 //   their category (keys, the diving suit, jump boots and other quest-like
 //   items stay, as do items wired into the map's script); ammo leans to the
@@ -36,10 +39,22 @@
 // The Forge (docs/roguelite-forge.md): one gun of the kit, forged with runes in
 // the Armory, fires the runes' payload in place of its own primary fire: the
 // stock fire function still runs (hands, sounds, ammo, timing), its shots are
-// swallowed and their aims recorded, and the payload goes out along them.
+// swallowed and their aims recorded, and the payload goes out along them. Its
+// alt fire is a forged mode of its own the same way (both barrels, the sweep,
+// the starburst), unless rl_forge_alt is 0, which leaves the stock alt fire.
 // Litanies: two parts of a forged gun that together wake an effect neither has
 // (docs/roguelite-forge.md). Shown once both are carved, kept in the Book across
 // runs; at most two sing on a gun; banes add a point of Dread.
+//
+// Omens: timed boons the dead drop (rl_omens 0: none). Every champion drops
+// one (a blue champion a common or rare one, a red one a rare or relic), a
+// plain enemy one time in 25; they lie where it fell until the map ends. Most
+// are Blood's own powerups on short timers. A gamble never drops on its own: a
+// champion sometimes leaves a cursed reliquary, which names both its halves
+// when you come near and is taken with Use. A kill of yours while a boon runs
+// adds a second to it (up to twice its time); taking one again adds its whole
+// time (up to three times). They show in the shared chip row, last through a
+// save and load, and end with the map.
 //
 // Dying ends the run: a "Run over" screen, then the main menu (no reload).
 // Finishing the last map wins it: "Run complete" at the menu, and the next
@@ -57,11 +72,14 @@
 //   rl_forge [vessel mouth path wound penance]  the forged gun (numbers as in the menu); sets it, and in a run
 //                                        also forges the run's gun at once (testing)
 //   rl_forge_clear                       melt the forged gun down
+//   rl_omen list                         the Omens and the gambles, numbered, with what runs now and the drop odds
+//   rl_omen <name|number> [seconds]      grant an Omen (or a gamble) at once, e.g. "rl_omen twin", "rl_omen 9 30" (testing)
+//   rl_omen_drop / rl_reliquary <name|number>  an Omen's pickup / a gamble's cursed reliquary in front of you (testing)
 //   rl_unlock <count|all>                set how many of this game's episodes are unlocked (testing)
 //   rl_resetprogress                     lock this game's episodes again; empty the ichor bank and the wins
 //   openmenu RogueliteMenu               the Roguelite menu (it is also on the main menu)
 // CVARs: rl_skill (0-4, set by the menu), rl_elite_pal (the champions' tint, a palette lookup number:
-// 0-14 in Blood, 0 = none), rl_ammo_target (the supplies' target, percent; 0 = no supplies), and the meta progress, kept in the config: rl_progress (per game, since
+// 0-14 in Blood, 0 = none), rl_ammo_target (the supplies' target, percent; 0 = no supplies), rl_omens (0: no Omens), and the meta progress, kept in the config: rl_progress (per game, since
 // Blood and Cryptic Passage share a config: episodes unlocked, the gauntlet won, the run whose saves can
 // still be continued) and, shared by both, rl_ichor, rl_runs, rl_wins.
 //
@@ -70,6 +88,8 @@
 // with the actor), actDamageSprite and viewProcessSprites (champion damage and tint),
 // GameInterface::MenuOpened (the menu's run list), the core main loop's return to the main menu
 // (the run's result and writing the config), and the core intermission's choice of a map's intro movie.
+// The Omens: PickUp (an Omen's pickup is the run's; a reliquary isn't taken by walking over it) and
+// actDamageSprite (Bloodlust's heal from the health your hit took).
 //
 //---------------------------------------------------------------------------
 
@@ -111,6 +131,7 @@ CUSTOM_CVARD(Int, rl_skill, 2, CVAR_ARCHIVE, "roguelite: skill of new runs, 0-4 
 CVARD(Int, rl_elite_pal, 10, CVAR_ARCHIVE, "roguelite: palette lookup that tints champions (0 = none; 10 blue, 2 red, 9 orange)")
 CVARD(Int, rl_elite_red_pal, 2, CVAR_ARCHIVE, "roguelite: palette lookup that tints red champions (0 = none; 2 red)")
 CVARD(Int, rl_ammo_target, 150, CVAR_ARCHIVE, "roguelite: each map's pickups hold this percent of the ammo your guns need for its enemies (150 = 1.5x; 0 = stock amounts)")
+CVARD(Bool, rl_omens, true, CVAR_ARCHIVE, "roguelite: the dead drop Omens (timed boons) and champions cursed reliquaries (0 = none)")
 
 // Meta progress, kept across runs. Blood and Cryptic Passage share a config, so what belongs to one game's episodes
 // is kept per game in rl_progress; the ichor bank and the run counts are shared.
@@ -174,6 +195,7 @@ RL_FORGE(rl_forge_wound, 2)
 RL_FORGE(rl_forge_penance, 1)
 CVARD(Int, rl_forge_added, 0, CVAR_ARCHIVE, "roguelite Forge: the Vessel the Forge itself put in the kit (taken out again with it)")
 CVARD(String, rl_forge_sing, "", CVAR_ARCHIVE, "roguelite Forge: Litanies chosen to sing (ids), and '-id' for ones silenced")
+CVARD(Bool, rl_forge_alt, true, CVAR_ARCHIVE, "roguelite Forge: the forged gun's alt fire is a forged mode of its own (0 = its stock alt fire)")
 CVARD(String, rl_litanies, "", CVAR_ARCHIVE, "roguelite Forge: the Litanies found (ids), kept across runs")
 
 BEGIN_BLD_NS
@@ -186,6 +208,9 @@ static void ResetLitanies();
 static void LitaniesLoaded();
 static void ForgeTick();
 static bool Sings(int k);
+// The red champions' flinches (Unflinching), defined with the champion hooks.
+static void StaggerTick();
+static void StaggerReset();
 
 namespace
 {
@@ -198,9 +223,16 @@ constexpr int kIchorKill = 1, kIchorChampion = 5, kIchorRed = 15, kIchorMap = 10
 // champion that is as rare as the current ones but holds a lot more HP, speed, etc."): the old 4-12% and 2x went to
 // 6-18% and 2.5x, and red champions took the old rate.
 constexpr double kChampionFirst = 0.06, kChampionLast = 0.18; // champion chance on a run's first and last map
-constexpr double kChampionHealth = 2.5, kChampionSize = 1.25; // and 1.25x damage (ScaleDamage)
+constexpr double kChampionHealth = 2.5, kChampionSize = 1.25; // and 1.25x damage, 1.1x for a foe's hitscan (ScaleDamage)
 constexpr double kRedFirst = 0.04, kRedLast = 0.12;           // red champions: the rarer tier
-constexpr double kRedHealth = 5.0, kRedSize = 1.4, kRedSpeed = 1.35; // and 1.5x damage; they don't flinch
+constexpr double kRedHealth = 5.0, kRedSize = 1.4, kRedSpeed = 1.35; // and 1.5x damage, 1.2x hitscan; few flinches
+// A playtest on Extra Crispy with a full Covenant: "the red champions can just vaporize you without good armor. The
+// hitscan is a bit intense." A red tommy cultist killed you in 0.4 s without armour (1.5x a round, 16 rounds a
+// second, never flinching). Now a foe's hitscan takes less of the tiers' bonus and of Wrath's, reds attack at stock
+// speed (RedSpeed), your heavy hits make them flinch now and then (Unflinching), and champions drop armour.
+constexpr double kChampionArmourChance = 0.25;                // a champion's basic armour as it dies (a red's body armour: always)
+constexpr int kStaggerHit = 32 << 4;                          // a hit of yours this big (a tic's, before its armour) makes a red flinch
+constexpr int kStaggerEvery = 3 * kClock;                     // at most this often
 constexpr double kCurseChance = 0.25;                         // per map, from the second on, with the Covenant's Curses
 constexpr int kCurseTitle = 5 * kClock;                       // how long a curse is announced
 constexpr int kSkipIchor = 10;                                // the reward choice's "nothing" pays this
@@ -268,7 +300,7 @@ struct Condition
 
 const Condition conditions[kNumConditions] =
 {
-	{ &rl_cov_wrath, "Wrath", 1 },         // enemies deal +20% damage per rank
+	{ &rl_cov_wrath, "Wrath", 1 },         // enemies deal +20% damage per rank (+10% with their bullets and shells)
 	{ &rl_cov_flesh, "Flesh", 1 },         // +15% enemy health per rank
 	{ &rl_cov_haste, "Haste", 2 },         // enemies 15% faster per rank
 	{ &rl_cov_horde, "Horde", 2 },         // +20% enemies per rank, arriving in waves
@@ -296,26 +328,22 @@ enum { kPathHound = 1, kPathChoir };
 enum { kWoundPyre = 1, kWoundGrave };
 enum { kPenanceBloodPrice = 1 };
 
-// A Vessel's worth per round of its own ammo against a plain 50-health foe (ammoProfiles' damage, capped at the foe's
-// health, times the hit rate), so a Mouth can be weighed against it: a heavier payload drinks more rounds a pull, a
-// lighter one fires more projectiles a round.
 struct ForgeVesselInfo
 {
 	const char* name;
 	int weapon, ammo;
 	FIntCVarRef* kit;  // its kit line: forging a gun puts it in the kit
 	int kitCost;
-	double worth;      // per round
 	int stockMissile;  // its own round, if a missile (the flare), else 0
 	bool slow;         // at least 0.3 s between pulls: may take a heavy Mouth
 	const char* round; // its own round, in a sentence
 };
 const ForgeVesselInfo forgeVessels[] =
 {
-	{ "", 0, 0, nullptr, 0, 1, 0, false, "" },
-	{ "Flare Gun", kWeapFlareGun, 1, &rl_kit_flare, 10, 40, kMissileFlareRegular, true, "a flare" },
-	{ "Sawed-off", kWeapShotgun, 2, &rl_kit_shotgun, 20, 30, 0, true, "its pellets" },
-	{ "Tommy Gun", kWeapTommyGun, 3, &rl_kit_tommy, 30, 7.2, 0, false, "a bullet" },
+	{ "", 0, 0, nullptr, 0, 0, false, "" },
+	{ "Flare Gun", kWeapFlareGun, 1, &rl_kit_flare, 10, kMissileFlareRegular, true, "a flare" },
+	{ "Sawed-off", kWeapShotgun, 2, &rl_kit_shotgun, 20, 0, true, "its pellets" },
+	{ "Tommy Gun", kWeapTommyGun, 3, &rl_kit_tommy, 30, 0, false, "a bullet" },
 };
 
 struct ForgeRuneInfo
@@ -333,7 +361,17 @@ const ForgeRuneInfo forgeMouths[] =
 };
 const char* forgeMouthPlural[] = { "", "napalm fireballs", "cleavers" };
 const int forgeMouthMissile[] = { 0, kMissileFireballNapalm, kMissileButcherKnife };
-const double forgeMouthWorth[] = { 1, 52.5, 8.7 }; // napalm: 50 x 0.7 hit x 1.5 foes; cleaver: 14.5 spirit x 0.6
+// What a Mouth fires for a round of its Vessel's ammo, and the rounds that round drinks, set by hand so each recipe is
+// a clear step up from its stock gun (a rule from the payloads' worth undercharged the fireball and starved the
+// cleaver). The sawed-off's are a barrel's. The tommy can't take Hellmouth (too heavy for its rate of fire).
+struct ForgeLoad { int perRound, drink; };
+const ForgeLoad forgeLoads[4][3] = // [Vessel][Mouth]
+{
+	{ { 0, 1 }, { 1, 1 }, { 1, 1 } }, // no Vessel: never fired
+	{ { 0, 1 }, { 1, 1 }, { 5, 1 } }, // flare gun: a fireball a flare; five cleavers a flare
+	{ { 0, 1 }, { 1, 2 }, { 3, 1 } }, // sawed-off: a fireball for two shells; three cleavers a shell
+	{ { 0, 1 }, { 1, 2 }, { 1, 2 } }, // tommy gun: no fireball (ForgeIllegal); a cleaver for two bullets
+};
 const bool forgeMouthHeavy[] = { false, true, false };
 const bool forgeMouthBurns[] = { false, true, false };
 const ForgeRuneInfo forgePaths[] =
@@ -345,18 +383,36 @@ const ForgeRuneInfo forgePaths[] =
 const ForgeRuneInfo forgeWounds[] =
 {
 	{ "", "", 0, "" },
-	{ "Pyre", "of the Pyre", 10, "Sets foes alight." },
-	{ "Gravedigger's Blast", "of the Grave", 20, "Bursts where it lands; the blast reaches you too." },
+	{ "Pyre", "of the Pyre", 10, "Lodges a flare: foes burn hard for 4 s." }, // kept short: it shares a line with the Mouth's
+	{ "Gravedigger's Blast", "of the Grave", 20, "Bursts where it lands, 4 a second at most." },
 };
 const ForgeRuneInfo forgePenances[] =
 {
 	{ "", "", 0, "" },
 	{ "Blood Price", "Blood-Priced", 15, "Dry, a pull costs 4 health." },
 };
-constexpr int kForgeMissiles = 8, kForgeVectors = 32; // most a pull fires
-constexpr int kPyreBurn = 240;                       // burn time: 30 health over about 4 s
+constexpr int kForgeMissiles = 12, kForgeVectors = 32; // most a pull fires (the flare's Choir: three fans of four cleavers)
+// The alt modes (EmitForge): both barrels, the tommy's sweep, the flare's starburst. An alt pull has its own caps (the
+// stock alt already fires 64 pellets akimbo, and 8 sub-flares), and the Mouth's payload half again over the rounds it
+// drinks, as stock's alt is (armour-piercing shells 6 to 4, tommy bullets 20 to 12). A pull its cap clips drinks only
+// for what it fires (AltOwed).
+constexpr int kForgeAltMissiles = 16, kForgeAltVectors = 64;
+constexpr double kForgeAltBonus = 1.5;
+constexpr int kStarburstFlares = 8;                  // the starburst: the stock alt's price in flares (the most a forged one drinks), and its 8 sub-flares
+constexpr int kSweepSteps = 14;                      // the tommy's alt sweep: 14 steps, its callback id the step's place
+constexpr double kStarburstCone = 60;                // degrees: a hunting starburst child looks for its foe this wide
+constexpr int kChoirPerAim = 4;                      // the Choir: a Mouth's missiles in each of its three aims, at most
+constexpr int kCerberusFlying = 8;                   // Cerberus: forged fireballs flying at once, at most
+constexpr double kCleaverSpeed = 1.5;                // forged cleavers fly half again as fast as the Butcher's
+constexpr int kCleaverBite = 8, kCleaverBiteRange = 6; // and wound 8-13 more than his (the stock 10-19: 18-32 in all)
+constexpr int kGraveBursts = 4;                      // Gravedigger's Blast: the Grave's bursts a second, at most
+// Burn time counts down a PlayClock at a time: 480 is 4 s (a stock flare's). A hit tops it back up to that, never past.
+constexpr int kPyreBurn = 480;
+constexpr int kPyreMarks = 12;                       // the Pyre's flares lodged at once, at most (one a foe)
+constexpr int kWitchfireBurn = 240;                  // Witchfire's scattered fire: 2 s (you are in it too)
 constexpr int kBloodPrice = 4;                       // health a dry pull costs
-constexpr int kForgeHealPerSecond = 10;              // most the forge heals you a second
+constexpr int kForgeHealPerSecond = 20;              // most the forge heals you a second
+constexpr double kFetchMinRange = 128;               // the Fetch: a cleaver striking closer to you than this isn't sent back
 constexpr double kHoundCone = 25, kHoundRange = 1024; // degrees, world units
 const int forgeSlotMax[kForgeSlots] = { 3, 2, 2, 2, 1 };
 
@@ -383,7 +439,7 @@ struct Litany
 const Litany litanies[kNumLitanies] =
 {
 	{ "shears", "The Shears", { kForgeMouth, kMouthCleaver }, { kForgePath, kPathChoir }, kKindBoon,
-		"Aimed at a foe, the three cleavers close on it like shears.", 0 },
+		"Aimed at a foe, the cleavers close on it from three sides like shears.", 0 },
 	{ "cerberus", "Cerberus", { kForgeMouth, kMouthHellmouth }, { kForgePath, kPathHound }, kKindBoon,
 		"Each hunting fireball grows a second head that hunts another foe.", 0 },
 	{ "bloodfeud", "Blood Feud", { kForgePath, kPathHound }, { kForgePenance, kPenanceBloodPrice }, kKindBoon,
@@ -397,13 +453,13 @@ const Litany litanies[kNumLitanies] =
 	{ "requiem", "Requiem", { kForgePath, kPathChoir }, { kForgeWound, kWoundGrave }, kKindGamble,
 		"Blasts that land together ring out as one, bigger; it can reach you.", kRivalGrave },
 	{ "larder", "The Larder of Knives", { kForgeMouth, kMouthCleaver }, { kForgeWound, kWoundGrave }, kKindGamble,
-		"Missed cleavers stick and wait; whoever comes near sets them off.", kRivalMiss | kRivalGrave },
+		"Missed cleavers stick where they land; a foe who comes near sets them off.", kRivalMiss | kRivalGrave },
 	{ "lastrites", "Last Rites", { kForgeMouth, kMouthHellmouth }, { kForgePenance, kPenanceBloodPrice }, kKindBane,
 		"Dry pulls can kill you; near death, blood-bought fireballs burst bigger.", 0 },
 	{ "witchfire", "Witchfire", { kForgeMouth, kMouthCleaver }, { kForgeWound, kWoundPyre }, kKindBane,
 		"A cleaver striking a burning foe scatters its fire on all near, you too.", 0 },
 	{ "fetch", "The Fetch", { kForgeMouth, kMouthCleaver }, { kForgePath, kPathHound }, kKindOddity,
-		"A hunting cleaver that strikes stone flies back; catch it to heal.", kRivalMiss },
+		"A hunting cleaver that strikes stone flies back; catch it to win back what it cost.", kRivalMiss },
 	{ "leap", "Brimstone Leap", { kForgeMouth, kMouthHellmouth }, { kForgeWound, kWoundGrave }, kKindOddity,
 		"Your own blasts throw you instead of wounding you; their fire still bites.", 0 },
 };
@@ -444,6 +500,7 @@ struct Run
 	int unspent = 0;              // kit points not spent: ichor once the first map is cleared
 	int forge[kForgeSlots] = {};  // the Forge's recipe, as it was when the run started
 	int litanies = 0;             // the Litanies that sing on it (bits)
+	int omenRolls = 0;            // Omens: the deaths rolled for a drop so far (each roll is seeded by its number)
 };
 
 Run run;
@@ -638,18 +695,61 @@ ForgeRates Rates(const int* f)
 	int m = f[kForgeMouth];
 	if (m)
 	{
-		double worth = forgeMouthWorth[m];
-		r.perRound = std::clamp(int(v.worth / worth + 0.5), 1, kForgeMissiles);
-		r.drink = std::max(int(worth / v.worth + 0.5), 1);
+		auto& load = forgeLoads[f[kForgeVessel]][m];
+		r.perRound = load.perRound;
+		r.drink = load.drink;
 		r.missile = true;
 	}
 	else r.missile = v.stockMissile != 0;
+	// The Choir sings each round three times over (three fireballs, or three fans of cleavers) for twice the drink.
 	if (f[kForgePath] == kPathChoir)
 	{
 		r.drink *= 2;
-		if (r.perRound) r.perRound = std::max(1, std::min(r.perRound, kForgeMissiles / 3)); // three of each still fit a pull
+		if (r.perRound) r.perRound = std::min(r.perRound, kChoirPerAim);
 	}
 	return r;
+}
+
+// An alt pull's Mouth payload, before the Choir fans it three ways: for the rounds it fires (units), times its bonus
+// (kForgeAltBonus; the sweep doubles its odd steps instead), within the alt's cap in whole fans; then the share of its
+// drink paid of that. Something paid fires at least one. EmitForge fires it and the menu counts it, so they agree.
+int AltPayload(const int* f, int units, double share, double bonus)
+{
+	auto r = Rates(f);
+	int fan = f[kForgePath] == kPathChoir ? 3 : 1;
+	units = std::max(units, 1);
+	int perRound = std::max(1, std::min(r.perRound, kForgeAltMissiles / (units * fan)));
+	int full = std::max(1, std::min(int(perRound * units * bonus + 1e-6), kForgeAltMissiles / fan));
+	// A short pull fires its share of the capped payload, rounded down: shrunk before the cap, it would fire more a
+	// round than a full pull does.
+	return std::max(1, int(full * share + 1e-6));
+}
+
+// What an alt pull drinks, for the rounds it fires (units): their drink, as for the primary, but only for the share of
+// the payload the alt's cap lets it fire (a round's drink buys perRound of the Mouth's missiles, times the bonus),
+// rounded up and at least a round, so a clipped pull is never worse for its ammo than the primary. The starburst
+// drinks this too (16 flares' worth under the Choir), and never more than the stock alt's 8 (with no Mouth, the 8).
+int AltOwed(const int* f, int units, double bonus, bool starburst)
+{
+	auto r = Rates(f);
+	units = std::max(units, 1);
+	int owed = units * r.drink;
+	if (f[kForgeMouth] && r.perRound > 0)
+	{
+		int uncapped = std::max(1, int(r.perRound * units * bonus + 1e-6));
+		int fired = AltPayload(f, units, 1, bonus);
+		if (fired < uncapped) owed = std::max(1, (owed * fired + uncapped - 1) / uncapped);
+	}
+	else if (starburst) owed = kStarburstFlares;
+	return starburst ? std::min(owed, kStarburstFlares) : owed;
+}
+
+// The starburst's ring, each carrier's (the Choir fires three): the Mouth's payload for the stock alt's 8 flares, within
+// the cap (AltOwed charges only what it fires), or with no Mouth the stock alt's 8 sub-flares, forged.
+int StarburstCount(const int* f, double share)
+{
+	if (f[kForgeMouth]) return AltPayload(f, kStarburstFlares, share, kForgeAltBonus);
+	return std::clamp(int(kStarburstFlares * share + 0.5), 1, kForgeAltMissiles);
 }
 
 FString ForgeName(const int* f)
@@ -671,24 +771,72 @@ FString ForgeSentence(const int* f)
 	auto& v = forgeVessels[f[kForgeVessel]];
 	auto r = Rates(f);
 	FString s = f[kForgeVessel] == kVesselShotgun ? "Each barrel: " : "Each pull: ";
-	if (f[kForgeMouth])
+	// The Choir's fans of several (the cleavers) are counted whole: "12 cleavers, in three fans of 4".
+	bool fans = f[kForgeMouth] && f[kForgePath] == kPathChoir && r.perRound > 1;
+	if (fans) s.AppendFormat("%d %s, in three fans of %d", 3 * r.perRound, forgeMouthPlural[f[kForgeMouth]], r.perRound);
+	else if (f[kForgeMouth])
 	{
 		if (r.perRound > 1) s.AppendFormat("%d %s", r.perRound, forgeMouthPlural[f[kForgeMouth]]);
 		else s.AppendFormat("a %s", forgeMouths[f[kForgeMouth]].says);
 	}
 	else s += v.round;
-	if (f[kForgePath]) s.AppendFormat(", %s", forgePaths[f[kForgePath]].says);
+	if (f[kForgePath] && !fans) s.AppendFormat(", %s", forgePaths[f[kForgePath]].says);
 	s += ".";
 	return s;
 }
 
+int ResolveSinging(const int* f);
+
+// Kept to about 110 characters with every part in: the menu doesn't wrap it.
 FString ForgeEffectLine(const int* f)
 {
 	FString s;
-	if (f[kForgeWound]) s += forgeWounds[f[kForgeWound]].says;
-	if (f[kForgeMouth] == kMouthCleaver)
-		s.AppendFormat("%sCleavers heal you 10 a hit, %d a second at most.", s.IsEmpty() ? "" : " ", kForgeHealPerSecond);
+	auto add = [&](const char* text) { s.AppendFormat("%s%s", s.IsEmpty() ? "" : " ", text); };
+	if (f[kForgeVessel] == kVesselFlare && !f[kForgeMouth]) add("Flares strike for 20-29, then burn.");
+	if (f[kForgeWound]) add(forgeWounds[f[kForgeWound]].says);
+	// Your forged blasts hurt you half (ScaleDamage): the Grave's, Hellmouth's, and with the forged alt the flare's
+	// starburst (its carrier struck early, its forged sub-flares). Not while Brimstone Leap sings: then they throw you
+	// instead, and its own line says so.
+	bool halfOnYou = f[kForgeWound] == kWoundGrave || f[kForgeMouth] == kMouthHellmouth || (f[kForgeVessel] == kVesselFlare && rl_forge_alt);
+	if (halfOnYou && !(ResolveSinging(f) & (1 << kLitLeap))) add("Your blasts hurt you half.");
+	if (f[kForgeMouth] == kMouthCleaver) add(FStringf("Cleavers heal half the wound, %d a second.", kForgeHealPerSecond).GetChars());
 	return s;
+}
+
+// The alt mode's sentence, as EmitForge fires it with one gun and ammo enough (AltPayload counts both, AltOwed the cost).
+FString ForgeAltLine(const int* f)
+{
+	if (!rl_forge_alt) return "Alt fire: stock.";
+	int m = f[kForgeMouth], fan = f[kForgePath] == kPathChoir ? 3 : 1;
+	switch (f[kForgeVessel])
+	{
+	case kVesselShotgun: // FireShotgun(2): 32 armour-piercing pellets for 2 shells
+		if (!m) return "Alt: both barrels, 32 armor-piercing pellets for 2 shells.";
+		return FStringf("Alt: both barrels, %d %s for %d shells.", AltPayload(f, 2, 1, kForgeAltBonus) * fan, forgeMouthPlural[m],
+			AltOwed(f, 2, kForgeAltBonus, false));
+	case kVesselTommy:
+	{
+		if (!m) return FStringf("Alt: a sweep of %d armor-piercing bullets.", kSweepSteps);
+		int n = 0, cost = 0;
+		for (int step = 1; step <= kSweepSteps; step++)
+		{
+			double bonus = (step & 1) ? 2 : 1;
+			n += AltPayload(f, 1, 1, bonus) * fan;
+			cost += AltOwed(f, 1, bonus, false);
+		}
+		return FStringf("Alt: a sweep of %d %s for %d bullets.", n, forgeMouthPlural[m], cost);
+	}
+	case kVesselFlare:
+	{
+		// The stock alt fires only with 8 flares loaded: one that drinks fewer says so ("3 of 8").
+		int owed = AltOwed(f, kStarburstFlares, kForgeAltBonus, true);
+		if (!m) return FStringf("Alt: a starburst of %d forged sub-flares for %d flares.", StarburstCount(f, 1), owed);
+		FString cost = owed < kStarburstFlares ? FStringf("%d of %d", owed, kStarburstFlares) : FStringf("%d", owed);
+		return FStringf("Alt: %s of %d %s for %s flares.", fan > 1 ? "3 starbursts" : "a starburst", StarburstCount(f, 1), forgeMouthPlural[m],
+			cost.GetChars());
+	}
+	}
+	return "";
 }
 
 FString ForgeAmmoLine(const int* f)
@@ -699,6 +847,8 @@ FString ForgeAmmoLine(const int* f)
 	static const char* ammoMany[] = { "", "flares", "shells", "bullets" };
 	int a = forgeVessels[f[kForgeVessel]].ammo;
 	FString s = FStringf("Drinks %d %s a %s.", r.drink, r.drink == 1 ? ammoOne[a] : ammoMany[a], f[kForgeVessel] == kVesselShotgun ? "barrel" : "pull");
+	s.AppendFormat(" %s", ForgeAltLine(f).GetChars());
+	// Dry, every Vessel's alt fires its primary (an alt pull is never paid in blood), so this holds for both.
 	if (f[kForgePenance]) s.AppendFormat(" %s", forgePenances[f[kForgePenance]].says);
 	return s;
 }
@@ -1116,8 +1266,18 @@ void MakeChampion(DBloodActor* a, bool grow = true, bool red = false)
 	a->xspr.scale = int((a->xspr.scale ? a->xspr.scale : 256) * size); // SEQ frames keep the size
 }
 
-// The red champions' speed, for the base's modeActorSpeed (set as each map starts and on each load).
-double RedSpeed(DBloodActor* a) { return a && (a->modFlags & kModRedChampion) ? kRedSpeed : 1.; }
+// The red champions' speed, for the base's modeActorSpeed (set as each map starts and on each load): their extra moves
+// and their animation, but not while they attack, where a red tommy cultist's 12 rounds a second became 16. An attack
+// is a state whose SEQ calls back (funcId, -1 for none) as it chases: a gun's fire, a throw, a bite, a slash (stateType
+// can't tell: the fire states are kAiStateChase too). Of the kinds a red can be, the one other state that calls back,
+// a zombie standing up, isn't a chase state. In an attack a red turns at stock speed too (its moveFunc's extra calls).
+double RedSpeed(DBloodActor* a)
+{
+	if (!a || !(a->modFlags & kModRedChampion)) return 1.;
+	auto st = a->hasX() ? a->xspr.aiState : nullptr;
+	if (st && st->funcId >= 0 && st->stateType == kAiStateChase) return 1.;
+	return kRedSpeed;
+}
 
 // A wave enemy copies a kind alive on the map, its size too: a champion's size without its tier would mislead, so
 // the copy keeps the stock look.
@@ -1771,14 +1931,19 @@ void PlaceAmmo(std::mt19937& rng, const bool* owned)
 
 struct ItemPick { int type, weight; };
 
+// The Red Potion is a 2-health bonus (no stock map places one): at weight 2 the remix made 18% of health pickups duds.
+// It stays in the list, so one a map did place still rerolls, but its weight went to the Life Essence.
 const ItemPick healthPicks[] =
 {
-	{ kItemHealthRedPotion, 2 }, { kItemHealthLifeEssense, 4 }, { kItemHealthMedPouch, 3 },
+	{ kItemHealthRedPotion, 0 }, { kItemHealthLifeEssense, 6 }, { kItemHealthMedPouch, 3 },
 	{ kItemHealthDoctorBag, 1 }, { kItemHealthLifeSeed, 1 },
 };
+// Fire and spirit armour stop no bullets (they give no armor[0]): at 2 each, over a third of rerolled armour did nothing
+// against the hitscan cultists. Their weight went to body and super armour. Still 11 in all, so the RNG a seed's
+// other rerolls draw doesn't shift.
 const ItemPick armorPicks[] =
 {
-	{ kItemArmorBasic, 4 }, { kItemArmorBody, 2 }, { kItemArmorFire, 2 }, { kItemArmorSpirit, 2 }, { kItemArmorSuper, 1 },
+	{ kItemArmorBasic, 4 }, { kItemArmorBody, 3 }, { kItemArmorFire, 1 }, { kItemArmorSpirit, 1 }, { kItemArmorSuper, 2 },
 };
 const ItemPick ammoPicks[] =
 {
@@ -1930,14 +2095,21 @@ int CurseWeight(const bmod::Effect* e)
 	return e->category == bmod::Category::Silly ? 6 : e->category == bmod::Category::Twist ? 4 : 2;
 }
 
+// An effect of e's group is running (chaos's, the curse's or an Omen's), one that starting e would end.
+bool RivalActive(const bmod::Effect* e)
+{
+	for (int i = 0; i < bmod::NumEffects(); i++)
+		if (bmod::IsActive(&bmod::GetEffect(i)) && bmod::Rivals(&bmod::GetEffect(i), e)) return true;
+	return false;
+}
+
 // Starts the curse unless it's on already, or a rival effect (from chaos mode) is on: then it comes back later.
 bool StartCurse()
 {
 	auto e = CurseEffect();
 	if (!e) return false;
 	if (bmod::IsActive(e)) return true;
-	for (int i = 0; i < bmod::NumEffects(); i++)
-		if (bmod::IsActive(&bmod::GetEffect(i)) && bmod::Rivals(&bmod::GetEffect(i), e)) return false;
+	if (RivalActive(e)) return false;
 	return bmod::StartEffect(e);
 }
 
@@ -2056,11 +2228,16 @@ FString RunStats()
 		run.cleared, int(run.maps.Size()), run.kills, run.champions, BankedIchor(), bonus.GetChars(), (int)rl_ichor);
 }
 
+void EndOmens(bool stock, bool leaving = false); // the Omens, with the drops below
+
 void RunOver()
 {
 	if (!run.active || run.over) return;
 	run.over = true;
 	if (auto e = CurseEffect()) bmod::StopEffect(e); // a clean view behind the "Run over" screen
+	// The Omens' effects too. Their stock powerups run out on the dead player as Blood's own do (this comes before
+	// Blood takes the gun away: ending the akimbo now would raise it again).
+	EndOmens(false);
 	Bank();
 }
 
@@ -2297,6 +2474,528 @@ int NearFeature(DBloodPlayer* p)
 
 //---------------------------------------------------------------------------
 //
+// a champion's armour, dropped as it dies
+//
+//---------------------------------------------------------------------------
+
+// A dropped item moved to a spot, its bottom still on the floor.
+void LayDrop(DBloodActor* item, sectortype* sect, const DVector2& spot)
+{
+	double top, bottom;
+	GetActorExtents(item, &top, &bottom);
+	double lift = item->spr.pos.Z - bottom; // as dropped, its bottom rests on the floor
+	ChangeActorSect(item, sect);
+	SetActor(item, DVector3(spot, getflorzofslopeptr(sect, spot.X, spot.Y) + lift));
+	item->interpolated = false;
+	viewBackupSpriteLoc(item);
+}
+
+// A red champion drops body armour, a champion basic armour one time in four: the armour that stops bullets (fire and
+// spirit armour stop none), as on the hardest settings the champions' hitscan is what kills you. The roll is the
+// run's (its seed and the champion's number in the run), so a reload rolls the same. A dropped item has no xsprite
+// or mark, so the ammo ledger (counted as the map starts), the remix (the same) and the big pickups (marked, with an
+// xsprite) never take it for theirs. It lies where the champion fell if a pickup can lie there; else on a spot in
+// sight of that one, or else near you (a flyer shot over lava or a pit, a foe in a door or on a lift); if none
+// will do, where it fell, as a stock drop would (in water, say, where you can swim to it).
+void DropChampionArmour(DBloodActor* victim, bool red)
+{
+	std::mt19937 rng(run.seed ^ (0x9E3779B9u * uint32_t(run.champions)) ^ 0x2545F491u);
+	if (!red && Rand01(rng) >= kChampionArmourChance) return;
+	auto item = actDropObject(victim, red ? kItemArmorBody : kItemArmorBasic);
+	if (!item || !item->insector() || SpotSectorOk(item->sector())) return;
+	TArray<DVector2> taken;
+	DVector2 spot;
+	sectortype* sect = nullptr;
+	bool found = FindItemSpot(rng, item->sector(), FloorAt(item), 16, 96, taken, spot, sect);
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!found && pl && pl->insector()) found = FindItemSpot(rng, pl->sector(), FloorAt(pl), 24, 80, taken, spot, sect);
+	if (!found || !sect) return;
+	LayDrop(item, sect, spot);
+}
+
+//---------------------------------------------------------------------------
+//
+// the Omens: timed boons the dead drop, and the gambles of the cursed
+// reliquaries champions leave (opt-in: taken with Use, never walked into).
+// The run keeps its own list of the Omens running, the truth for their time;
+// the base effects and stock powerups they run on are checked against it
+// each tic, as chaos (in the play build) can end a rival effect.
+//
+//---------------------------------------------------------------------------
+
+enum { kOmenCommon, kOmenRare, kOmenRelic, kOmenGamble };
+const char* const omenTierNames[] = { "common", "rare", "relic", "gamble" };
+
+struct OmenInfo
+{
+	const char* name;
+	int tier;
+	int seconds;
+	int powerup;          // the stock powerup it runs on (its pwUpTime), -1: none
+	const char* effect;   // the base effect it runs, or null
+	int deal;             // your hits on foes deal this many times their damage (1: as ever)
+	bool bloodlust;       // your hits heal you
+	int look;             // the stock item it's drawn as (its picture and size), in its tier's palette
+	const char* sentence; // what it does
+};
+
+// The pool: mostly Blood's own powerups on short timers. Hollow Bones is drawn as the feather fall, Bottomless as the
+// wine bottle, Dread as the tome, Bloodlust as the skull grail, Fury as the rage shroom; a reliquary is a black chest.
+const OmenInfo omenInfo[] =
+{
+	{ "Hollow Bones", kOmenCommon, 20, -1, "lowgrav", 1, false, kItemFeatherFall, "low gravity" },
+	{ "Bottomless", kOmenCommon, 10, -1, "infammo", 1, false, 133, "infinite ammo" },
+	{ "Dread", kOmenCommon, 10, -1, "slowmo", 1, false, 136, "enemies at half speed" },
+	{ "Shroud", kOmenCommon, 12, kPwUpShadowCloak, nullptr, 1, false, kItemShadowCloak, "a shadow cloak: enemies can't see you" },
+	{ "Twin Vessel", kOmenRare, 15, kPwUpTwoGuns, nullptr, 1, false, kItemTwoGuns, "guns akimbo, the forged gun too" },
+	{ "Bloodlust", kOmenRare, 15, -1, nullptr, 1, true, 134, "your hits heal you" },
+	{ "Fury", kOmenRare, 10, -1, nullptr, 2, false, 127, "you deal 2x" },
+	{ "Mirror Skin", kOmenRelic, 10, kPwUpReflectShots, nullptr, 1, false, kItemReflectShots, "reflective shots: a foe's bullets hit the foe" },
+	{ "Death's Grin", kOmenRelic, 4, kPwUpDeathMask, nullptr, 1, false, kItemDeathMask, "invulnerable" },
+	// The gambles, only ever in a cursed reliquary: both halves run together for the time. Frenzy's 3x is the run's own.
+	{ "Glass Cannon", kOmenGamble, 20, -1, "glasscannon", 1, false, 137, "deal 4x, take 2x" },
+	{ "Frenzy", kOmenGamble, 15, -1, "fast", 3, false, 137, "enemies twice as fast, you deal 3x" },
+	{ "Powder Keg", kOmenGamble, 20, -1, "bigboom", 1, false, 137, "every blast, yours and theirs, twice as big" },
+};
+constexpr int kNumOmens = int(countof(omenInfo));
+
+// The drops. A champion always drops an Omen, a plain enemy one time in 25; a champion's cursed reliquary comes besides.
+constexpr double kOmenPlain = 1. / 25;
+constexpr double kOmenBlueRare = 0.35;                            // a blue champion's is rare, else common
+constexpr double kOmenRedRelic = 0.25;                            // a red champion's is a relic, else rare
+constexpr double kOmenPlainRare = 0.25, kOmenPlainRelic = 0.05;   // a plain enemy's, else common
+constexpr double kReliquaryBlue = 1. / 10, kReliquaryRed = 1. / 3; // plain enemies never leave one
+// The look: an inert item (the wine goblet's type: a treasure no stock map places, to which stock code gives no effect,
+// should any reach its pickup) drawn as the Omen's look. Common ones keep Blood's colours, rare ones take the blue
+// champions' COLD, relics the red champions' BEAST. A reliquary takes FLAME: no stock lookup turns a whole sprite purple,
+// and FLAME turns over a third of the black chest violet and the rest red, the nearest they come. All are lit like
+// Blood's keys, so a drop shows in the dark and isn't taken for a map's own item.
+constexpr int kOmenItem = 132;
+constexpr int omenPal[] = { 0, 10, 2, 9 };
+constexpr int kOmenShade = -128;
+constexpr int kOmenKillTime = kClock;                // a kill of yours adds this to each boon running, up to 2x its time
+constexpr double kReliquaryRange = 96;               // a reliquary names itself, and Use takes it, this near (to the eye)
+constexpr double kReliquaryCone = 25;                // and this close to where you look, up and down too (degrees)
+constexpr int kLustPerSecond = 15 << 4;              // Bloodlust heals at most this a second (health is in sixteenths)
+constexpr int kLustTop = 100 << 4;                   // and never above this
+// The chips' gold (chaos's twist gold), purple, and the map curse's red (chaos's nasty red).
+constexpr uint32_t kBoonChip = 0xfff2c230, kGambleChip = 0xffb45cff, kCurseChip = 0xffff4a3a;
+
+struct RunningOmen
+{
+	int id;
+	int left;  // PlayClock units
+	int base;  // its time as it began (kills extend it to 2x this, taking it again to 3x)
+	int peak;  // the most time it has had left (the chip's fill is the share of this still left)
+	bool owns; // it started its base effect (one the curse or chaos runs already isn't its to stop)
+};
+TArray<RunningOmen> omens;  // oldest first: the chips' order
+FString reliquaryHint;      // the cursed reliquary you face, named (the drawer shows it)
+int lustSecond = -1, lustHealed, lustSoundAt = INT_MIN / 2;
+DBloodActor* omenPowerItem; // a map's powerup being picked up while an Omen runs on its timer (compared, never followed)
+int omenPowerBefore;        // that timer as the pickup began
+
+bool OmensLive() { return rl_omens && run.active && !run.over && !crypt.in; }
+const bmod::Effect* OmenEffect(int id) { return omenInfo[id].effect ? bmod::FindEffect(omenInfo[id].effect) : nullptr; }
+
+RunningOmen* RunningOf(int id)
+{
+	for (auto& r : omens) if (r.id == id) return &r;
+	return nullptr;
+}
+
+bool IsOmenItem(DBloodActor* a)
+{
+	return a && a->spr.statnum == kStatItem && (a->modFlags & kModOmen) && a->hasX() && a->xspr.data1 >= 0 && a->xspr.data1 < kNumOmens;
+}
+
+// Your own deed: the player, or a missile, blast or thing of yours.
+bool ByYou(DBloodActor* a)
+{
+	for (int i = 0; i < 2 && a && !a->IsDudeActor(); i++) a = a->GetOwner();
+	auto p = getPlayer(myconnectindex);
+	return a && p && a == p->GetActor();
+}
+
+// Fury's and Frenzy's factor on your hits on foes (together, they multiply).
+int OmenDeal()
+{
+	int deal = 1;
+	if (OmensLive()) for (auto& r : omens) deal *= omenInfo[r.id].deal;
+	return deal;
+}
+
+bool BloodlustOn()
+{
+	if (OmensLive()) for (auto& r : omens) if (omenInfo[r.id].bloodlust) return true;
+	return false;
+}
+
+// Time for a stock powerup an Omen runs on, added to its pwUpTime (time it held already is the map's own powerup's, and
+// stays). From 0, Blood's own start comes first, once (the akimbo raise, the mirror's echo, the mask's armour):
+// powerupActivate sets only a timer at 0, and repeats the mask's armour each time. True: it did (and chimed).
+bool AddPowerTime(DBloodPlayer* p, int n, int add)
+{
+	if (n < 0 || add <= 0) return false;
+	bool fresh = p->pwUpTime[n] <= 0;
+	if (fresh)
+	{
+		powerupActivate(p, n);
+		p->pwUpTime[n] = 0;
+	}
+	p->pwUpTime[n] = std::min(p->pwUpTime[n] + add, gPowerUpInfo[n].maxTime);
+	return fresh;
+}
+
+// The time an Omen still holds taken off its stock powerup, the map's own left; at 0 it ends as Blood ends it. Leaving
+// the map, it doesn't: Blood's player start clears every powerup on the next map without ending one, and the weapon's
+// state is carried over from this moment (the akimbo's end would raise the gun again).
+void TakePowerTime(DBloodPlayer* p, int n, int left, bool leaving)
+{
+	if (n < 0 || p->pwUpTime[n] <= 0) return;
+	p->pwUpTime[n] = std::max(p->pwUpTime[n] - std::max(left, 0), 0);
+	if (p->pwUpTime[n] == 0 && !leaving) powerupDeactivate(p, n);
+}
+
+// An Omen ends: its base effect stops, if it started it; and with stock (rl_omens going off, the map ending: leaving)
+// the time it still holds on a stock powerup goes too. Running out needs no more: that time ran out with it.
+void EndOmen(unsigned i, bool stock, bool leaving = false)
+{
+	auto r = omens[i];
+	omens.Delete(i);
+	if (r.owns)
+		if (auto e = OmenEffect(r.id)) bmod::StopEffect(e);
+	auto p = getPlayer(myconnectindex);
+	if (stock && p) TakePowerTime(p, omenInfo[r.id].powerup, r.left, leaving);
+}
+
+void EndOmens(bool stock, bool leaving)
+{
+	while (omens.Size()) EndOmen(omens.Size() - 1, stock, leaving);
+	reliquaryHint = "";
+}
+
+// A map starts: nothing runs (the base stopped the effects as the last one went, and Blood's player start clears the
+// powerups).
+void ResetOmens()
+{
+	omens.Clear();
+	reliquaryHint = "";
+	lustSecond = -1;
+	lustSoundAt = INT_MIN / 2;
+	omenPowerItem = nullptr;
+}
+
+// An Omen can begin now (one running can always take more time): not when its base effect can't run (Dread and Frenzy
+// need enemies left), nor when starting it would end another Omen's (Dread's slow and Frenzy's speed are rivals: the one
+// running stays, and the newcomer waits on the floor). *rival: that Omen, else -1.
+bool CanGrant(int id, int* rival = nullptr)
+{
+	if (rival) *rival = -1;
+	if (id < 0 || id >= kNumOmens) return false;
+	if (RunningOf(id)) return true;
+	auto e = OmenEffect(id);
+	if (omenInfo[id].effect && (!e || (!bmod::IsActive(e) && !bmod::CanStart(e)))) return false;
+	for (auto& r : omens)
+		if (bmod::Rivals(OmenEffect(r.id), e))
+		{
+			if (rival) *rival = r.id;
+			return false;
+		}
+	return true;
+}
+
+// An Omen begins, or one running gets more time: clocks of it, up to 3x its time. False: it can't take hold now
+// (CanGrant), and its pickup stays. A base effect the curse or chaos runs already does: the Omen rides it, and leaves it
+// running as it ends.
+bool GrantOmen(int id, int clocks, bool* chimed = nullptr)
+{
+	auto p = getPlayer(myconnectindex);
+	if (!p || !p->GetActor() || id < 0 || id >= kNumOmens || clocks <= 0) return false;
+	auto& o = omenInfo[id];
+	auto r = RunningOf(id);
+	if (!r)
+	{
+		if (!CanGrant(id)) return false;
+		auto e = OmenEffect(id);
+		bool owns = e && !bmod::IsActive(e) && bmod::StartEffect(e); // ends a rival first: Dread's slow ends a fast curse
+		omens.Push({ id, 0, clocks, 0, owns });
+		r = &omens.Last();
+	}
+	r->base = std::max(r->base, clocks);
+	int left = std::max(std::min(r->left + clocks, 3 * r->base), r->left);
+	bool fresh = AddPowerTime(p, o.powerup, left - r->left);
+	r->left = left;
+	r->peak = std::max(r->peak, left);
+	if (chimed) *chimed = fresh;
+	return true;
+}
+
+// A kill of yours: a second more on each boon running, up to twice its time. A gamble's time stays as it said.
+void ExtendOmens()
+{
+	auto p = getPlayer(myconnectindex);
+	if (!p || !OmensLive()) return;
+	for (auto& r : omens)
+	{
+		if (omenInfo[r.id].tier == kOmenGamble || r.left >= 2 * r.base) continue;
+		int left = std::min(r.left + kOmenKillTime, 2 * r.base);
+		AddPowerTime(p, omenInfo[r.id].powerup, left - r.left);
+		r.left = left;
+		r.peak = std::max(r.peak, left);
+	}
+}
+
+// Bloodlust: a quarter of the health your hit took from a live foe (taken, so none past its death), at most 15 health a
+// second and never above 100, and less under the Covenant's Famine. Its cap is its own, apart from the cleavers'. The
+// heal sound plays at most every half second, and only when health rose.
+void BloodlustHeal(int lost)
+{
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !pl->hasX() || pl->xspr.health <= 0 || lost <= 0) return;
+	int health = int(pl->xspr.health);
+	if (health >= kLustTop) return;
+	int add = lost / 4;
+	if (run.cov[kFamine] > 0) add = int(add * std::max(0., 1. - 0.25 * run.cov[kFamine]));
+	int second = PlayClock / kClock;
+	if (second != lustSecond) lustSecond = second, lustHealed = 0;
+	add = std::min({ add, kLustPerSecond - lustHealed, kLustTop - health });
+	if (add <= 0) return;
+	lustHealed += add;
+	pl->xspr.health = unsigned(health + add);
+	if (PlayClock - lustSoundAt >= kClock / 2 || PlayClock < lustSoundAt)
+	{
+		lustSoundAt = PlayClock;
+		sfxPlay3DSound(pl->spr.pos, 780, pl->sector());
+	}
+}
+
+// An Omen's pickup or a cursed reliquary lying on the floor at p: an inert item drawn as its look, in its tier's
+// palette, lit; with an xsprite, so its mark and its Omen (data1) are saved with it.
+DBloodActor* SpawnOmenItem(sectortype* s, const DVector2& p, int id)
+{
+	auto& o = omenInfo[id];
+	auto& d = gItemData[o.look - kItemBase];
+	if (!s || !d.textureID().isValid()) return nullptr;
+	double fz = getflorzofslopeptr(s, p.X, p.Y);
+	auto a = actSpawnSprite(s, DVector3(p, fz), kStatItem, true);
+	if (!a) return nullptr;
+	a->spr.cstat &= ~CSTAT_SPRITE_BLOCK_ALL;
+	a->spr.type = a->spr.inittype = kOmenItem;
+	a->spr.setspritetexture(d.textureID());
+	a->spr.shade = kOmenShade;
+	a->spr.pal = omenPal[o.tier];
+	a->spr.scale = DVector2(d.xrepeat * REPEAT_SCALE, d.yrepeat * REPEAT_SCALE);
+	a->modFlags |= kModOmen;
+	a->xspr.data1 = int16_t(id);
+	double top, bottom;
+	GetActorExtents(a, &top, &bottom);
+	a->spr.pos.Z -= bottom - fz;
+	a->basePoint = a->spr.pos;
+	a->interpolated = false;
+	viewBackupSpriteLoc(a);
+	return a;
+}
+
+// A drop lies beside where the enemy fell, in sight of the spot (not on its armour or its stock drop); with no room
+// there, on the spot itself if a pickup can lie there; else as a champion's armour goes (near it, or else near you).
+void PlaceOmenItem(DBloodActor* item, std::mt19937& rng)
+{
+	if (!item->insector()) return;
+	TArray<DVector2> taken;
+	DVector2 spot;
+	sectortype* sect = nullptr;
+	bool found = FindItemSpot(rng, item->sector(), FloorAt(item), 24, 64, taken, spot, sect);
+	if (!found && SpotSectorOk(item->sector())) return;
+	if (!found) found = FindItemSpot(rng, item->sector(), FloorAt(item), 16, 96, taken, spot, sect);
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!found && pl && pl->insector()) found = FindItemSpot(rng, pl->sector(), FloorAt(pl), 24, 80, taken, spot, sect);
+	if (!found || !sect) return;
+	LayDrop(item, sect, spot);
+	item->basePoint = item->spr.pos;
+}
+
+int PickOmen(std::mt19937& rng, int tier)
+{
+	int ids[kNumOmens], n = 0;
+	for (int i = 0; i < kNumOmens; i++) if (omenInfo[i].tier == tier) ids[n++] = i;
+	return n ? ids[RandInt(rng, 0, n - 1)] : -1;
+}
+
+// As an enemy dies in a run (outside the Crypt): a champion's Omen (a blue one's common 65% or rare, a red one's rare
+// 75% or a relic), a plain enemy's one time in 25 (common 70%, rare 25%, relic 5%); and besides, a red champion's
+// cursed reliquary one time in 3, a blue one's one time in 10, a random gamble in it. The rolls are the run's (its seed
+// and the deaths rolled so far, which a save keeps), so a reload rolls the same.
+void DropOmens(DBloodActor* victim, bool champion, bool red)
+{
+	if (!rl_omens || !victim || !victim->insector()) return;
+	std::mt19937 rng(run.seed ^ (0x9E3779B9u * uint32_t(run.omenRolls + 1)) ^ 0x6A09E667u);
+	run.omenRolls++;
+	int tier = -1;
+	double r = Rand01(rng);
+	if (red) tier = r < kOmenRedRelic ? kOmenRelic : kOmenRare;
+	else if (champion) tier = r < kOmenBlueRare ? kOmenRare : kOmenCommon;
+	else if (r < kOmenPlain)
+	{
+		double t = Rand01(rng);
+		tier = t < kOmenPlainRelic ? kOmenRelic : t < kOmenPlainRelic + kOmenPlainRare ? kOmenRare : kOmenCommon;
+	}
+	int omen = tier >= 0 ? PickOmen(rng, tier) : -1;
+	double reliquary = red ? kReliquaryRed : champion ? kReliquaryBlue : 0;
+	int gamble = reliquary > 0 && Rand01(rng) < reliquary ? PickOmen(rng, kOmenGamble) : -1;
+	for (int id : { omen, gamble })
+	{
+		if (id < 0) continue;
+		auto s = victim->sector();
+		auto pos = victim->spr.pos;
+		updatesector(pos, &s);
+		if (!s) s = victim->sector(); // blasted outside every sector (as actSpawnFloor has it)
+		if (auto item = SpawnOmenItem(s, pos.XY(), id)) PlaceOmenItem(item, rng);
+	}
+}
+
+// The cursed reliquary you face: within kReliquaryRange of your eye and kReliquaryCone of your view (where Use's own scan
+// aims, its pitch too: one at your feet you look down at), in sight; the nearest that can take hold now (CanGrant).
+// *blocked: the nearest you face that can't, so the hint can say why.
+DBloodActor* NearReliquary(DBloodPlayer* p, DBloodActor** blocked = nullptr)
+{
+	if (blocked) *blocked = nullptr;
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !pl->insector()) return nullptr;
+	DVector3 eye(pl->spr.pos.XY(), p->zView);
+	DVector3 view = DVector3(pl->spr.Angles.Yaw.ToVector(), p->slope).Unit(); // as ActionScan aims
+	double cone = DAngle::fromDeg(kReliquaryCone).Cos();
+	DBloodActor* best = nullptr;
+	double bestDist = kReliquaryRange, blockedDist = kReliquaryRange;
+	BloodStatIterator it(kStatItem);
+	while (auto a = it.Next())
+	{
+		if (!IsOmenItem(a) || omenInfo[a->xspr.data1].tier != kOmenGamble || (a->spr.flags & 32) || !a->insector()) continue;
+		double top, bottom;
+		GetActorExtents(a, &top, &bottom);
+		DVector3 mid(a->spr.pos.XY(), (top + bottom) / 2);
+		DVector3 d = mid - eye;
+		double dist = d.Length();
+		if (dist >= kReliquaryRange || (d | view) < dist * cone) continue;
+		bool takes = CanGrant(a->xspr.data1);
+		double& nearest = takes ? bestDist : blockedDist;
+		if ((!takes && !blocked) || dist >= nearest || !cansee(eye, pl->sector(), mid, a->sector())) continue;
+		nearest = dist;
+		(takes ? best : *blocked) = a;
+	}
+	return best;
+}
+
+// Why a gamble can't take hold now (CanGrant false): "while Dread runs", or "here now" (no enemies left for Frenzy).
+FString HoldBar(int id)
+{
+	int rival;
+	CanGrant(id, &rival);
+	return rival >= 0 ? FStringf("while %s runs", omenInfo[rival].name) : FString("here now");
+}
+
+// Use with nothing else to do (ActionScan found nothing to push: a door, switch or the like comes first; a fresh press,
+// as Blood's Use is a one-shot input) facing a cursed reliquary: its gamble begins, or one running gets its time again.
+// One that can't take hold now says why and stays. True: the press took one.
+bool TakeReliquary(DBloodPlayer* p)
+{
+	if (!OmensLive() || !p || p != getPlayer(myconnectindex)) return false;
+	DBloodActor* blocked;
+	auto a = NearReliquary(p, &blocked);
+	if (!a)
+	{
+		if (blocked)
+			viewSetMessage(FStringf("%s can't take hold %s", omenInfo[blocked->xspr.data1].name, HoldBar(blocked->xspr.data1).GetChars()).GetChars());
+		return false;
+	}
+	int id = a->xspr.data1;
+	auto& o = omenInfo[id];
+	if (!GrantOmen(id, o.seconds * kClock)) return false; // CanGrant said it could: it can't fail
+	sfxPlay3DSound(p->GetActor(), 463, -1, 0); // the voodoo doll's laugh
+	p->pickupEffect = 30;
+	viewSetMessage(FStringf("Cursed reliquary: %s, %d s: %s", o.name, bmod::SecondsLeft(RunningOf(id)->left), o.sentence).GetChars(),
+		nullptr, MESSAGE_PRIORITY_PICKUP);
+	actPostSprite(a, kStatFree);
+	reliquaryHint = "";
+	return true;
+}
+
+// Each tic: the Omens' time runs down, and one whose base effect or stock powerup was ended by another (chaos starting a
+// rival, a powerup cleared) is dropped; one riding an effect another ran takes it over as that one stops on its own (not
+// when a rival replaced it: restarting would end the newcomer). Then the reliquary you face is named, or why it can't
+// take hold now. Not live (rl_omens off, the run over, the Crypt): everything ends.
+void OmenTick()
+{
+	if (!OmensLive())
+	{
+		if (omens.Size()) EndOmens(true);
+		reliquaryHint = "";
+		return;
+	}
+	auto p = getPlayer(myconnectindex);
+	if (!p || !p->GetActor()) return;
+	for (int i = int(omens.Size()) - 1; i >= 0; i--)
+	{
+		auto& r = omens[i];
+		auto& o = omenInfo[r.id];
+		r.left -= kTicsPerFrame;
+		bool lost = o.powerup >= 0 && p->pwUpTime[o.powerup] <= 0;
+		auto e = OmenEffect(r.id);
+		if (e && !bmod::IsActive(e))
+		{
+			if (r.owns || RivalActive(e) || !bmod::CanStart(e) || !bmod::StartEffect(e)) lost = true;
+			else r.owns = true;
+		}
+		if (lost || r.left <= 0) EndOmen(i, false);
+	}
+	DBloodActor* blocked;
+	auto rel = NearReliquary(p, &blocked);
+	if (!rel) rel = blocked;
+	if (!rel) reliquaryHint = "";
+	else
+	{
+		auto& o = omenInfo[rel->xspr.data1];
+		FString tail = rel == blocked ? FStringf("It can't take hold %s.", HoldBar(rel->xspr.data1).GetChars()) : FString("Use to take.");
+		reliquaryHint.Format("Cursed reliquary: %s: %s, %d s. %s", o.name, o.sentence, o.seconds, tail.GetChars());
+	}
+}
+
+// A save loaded: effects aren't saved (the base stops them all as a level goes), so each Omen's starts again, unless
+// the curse (restarted just before) runs it already. The stock powerups' time is the save's own.
+void OmensLoaded()
+{
+	reliquaryHint = "";
+	lustSecond = -1;
+	lustSoundAt = INT_MIN / 2;
+	omenPowerItem = nullptr;
+	if (!OmensLive())
+	{
+		EndOmens(true);
+		return;
+	}
+	for (auto& r : omens)
+	{
+		auto e = OmenEffect(r.id);
+		r.owns = e && !bmod::IsActive(e) && bmod::StartEffect(e);
+	}
+}
+
+// A map's powerup taken while an Omen runs on its timer: Blood's pickup sets only a timer at 0, so it would have given
+// nothing. Its own time goes on top (and stays as the Omen ends).
+void StackPowerPickup(DBloodActor* item)
+{
+	omenPowerItem = nullptr;
+	auto p = getPlayer(myconnectindex);
+	int n = item->spr.type - kItemBase;
+	if (!p || n < 0 || n >= kMaxPowerUps || p->pwUpTime[n] > omenPowerBefore) return;
+	p->pwUpTime[n] = std::min(omenPowerBefore + gPowerUpInfo[n].bonusTime, gPowerUpInfo[n].maxTime);
+}
+
+//---------------------------------------------------------------------------
+//
 // events and the ticker
 //
 //---------------------------------------------------------------------------
@@ -2307,6 +3006,8 @@ void OnEvent(const bmod::EventInfo& ev)
 	{
 	case bmod::Event::LevelStart:
 		ResetLitanies();
+		StaggerReset();
+		ResetOmens();
 		bmod::modeActorSpeed = RedSpeed; // only actors a run marked are faster
 		bmod::modeWaveSpawned = WaveSpawned;
 		if (IsCryptLevel()) SetupCrypt();
@@ -2315,6 +3016,7 @@ void OnEvent(const bmod::EventInfo& ev)
 		break;
 	case bmod::Event::SaveLoaded:
 		LitaniesLoaded();
+		StaggerReset(); // the flinches aren't saved: a loaded red can flinch at once
 		bmod::modeActorSpeed = RedSpeed;
 		bmod::modeWaveSpawned = WaveSpawned;
 		nextCurseTry = 0;
@@ -2322,6 +3024,10 @@ void OnEvent(const bmod::EventInfo& ev)
 		if (IsCryptLevel()) SetupCrypt();
 		else crypt.in = false;
 		if (run.active && !run.over) StartCurse(); // effects aren't saved: the curse comes back on
+		OmensLoaded(); // and the Omens' (after the curse, so one the curse runs is the curse's)
+		break;
+	case bmod::Event::LevelEnd:
+		EndOmens(true, true); // the Omens end with the map (a map's own powerup keeps its time)
 		break;
 	case bmod::Event::Kill:
 		if (run.active && !run.over && AllowedKillType(ev.actor))
@@ -2330,6 +3036,9 @@ void OnEvent(const bmod::EventInfo& ev)
 			run.kills++;
 			if (champion) run.champions++;
 			run.ichor += red ? kIchorRed : champion ? kIchorChampion : kIchorKill;
+			if (champion && !crypt.in) DropChampionArmour(ev.actor, red);
+			if (!crypt.in) DropOmens(ev.actor, champion, red);
+			if (ByYou(ev.other)) ExtendOmens();
 		}
 		break;
 	case bmod::Event::PlayerDeath:
@@ -2344,6 +3053,7 @@ void OpenRewardChoice(); // the menu section below
 
 void OnTick()
 {
+	StaggerTick(); // first: this ticker runs right after the tic's AI pass, before the Forge's (whose hits count next)
 	if (refusedLoad)
 	{
 		refusedLoad = false;
@@ -2352,6 +3062,7 @@ void OnTick()
 		return;
 	}
 	bmod::modeEnemyTimeScale = run.active && !run.over ? 1. + 0.15 * run.cov[kHaste] : 1.; // the Covenant's Haste lasts the run
+	OmenTick(); // before the curse's retry, which then finds a rival an Omen just let go
 	if (crypt.in)
 	{
 		CryptTick();
@@ -2465,6 +3176,37 @@ void DrawLitanyTitle()
 		DTA_Alpha, alpha, TAG_DONE);
 }
 
+// The Omens' chips in the shared row, oldest first (gold a boon, purple a gamble, blinking their last 3 s). The map's
+// curse is on the run line, but "No HUD" (chaos's, or the curse itself) hides that: then, with the Omens on (rl_omens),
+// it's a red chip first, with no countdown (while it runs: one a chaos rival holds off isn't). And the cursed reliquary
+// you face, named where the Crypt's prompts go: even under "No HUD", as it's how you choose whether to take one.
+void DrawOmens()
+{
+	auto curse = CurseEffect();
+	if (bmod::mods.hideHud && OmensLive() && curse && bmod::IsActive(curse))
+	{
+		bmod::Chip c;
+		c.text.Format("Curse: %s", bmod::EffectTitle(curse));
+		c.color = PalEntry(kCurseChip);
+		bmod::AddChip(c);
+	}
+	for (auto& r : omens)
+	{
+		auto& o = omenInfo[r.id];
+		bmod::Chip c;
+		c.text.Format("%s %ds", o.name, bmod::SecondsLeft(r.left));
+		c.color = PalEntry(o.tier == kOmenGamble ? kGambleChip : kBoonChip);
+		c.frac = double(r.left) / std::max({ r.base, r.peak, 1 });
+		c.alpha = r.left <= 3 * kClock && (PlayClock / 15) % 2 ? 0.3 : 1.;
+		bmod::AddChip(c);
+	}
+	if (reliquaryHint.IsEmpty()) return;
+	double W = twod->GetWidth(), ssc = 1.5 * twod->GetHeight() / 480.;
+	double w = SmallFont->StringWidth(reliquaryHint.GetChars());
+	if (w * ssc > W * 0.9) ssc = W * 0.9 / w; // one line, whatever the screen
+	DrawCentered(SmallFont, CR_PURPLE, twod->GetHeight() * 0.62, reliquaryHint.GetChars(), ssc);
+}
+
 void DrawRunOver(DBloodPlayer* pPlayer, double sc)
 {
 	auto actor = pPlayer ? pPlayer->GetActor() : nullptr;
@@ -2571,6 +3313,7 @@ void OnDraw(DBloodPlayer* pPlayer)
 	}
 	DrawCurseTitle(); // even under the "No HUD" curse, which must announce itself too
 	DrawLitanyTitle();
+	DrawOmens(); // the chip row isn't the HUD: chaos's chips show under "No HUD" too
 	if (bmod::mods.hideHud) return; // the "No HUD" effect hides the run line
 	DrawRunLine(sc);
 }
@@ -2936,6 +3679,12 @@ void OnNewGame()
 	}
 }
 
+// Use with nothing in reach to push: a cursed reliquary you face is taken (the Omens). A door or switch comes first.
+bool OnUseNothing(DBloodPlayer* pPlayer)
+{
+	return TakeReliquary(pPlayer);
+}
+
 bool OnUse(DBloodPlayer* pPlayer)
 {
 	int id = NearFeature(pPlayer);
@@ -2952,6 +3701,13 @@ static bool forgeEmitting;             // the Forge's own shots pass
 static TArray<DBloodActor*> forgeHits; // what the Forge's hitscans hit this pull (for the Pyre)
 static int forgeImpacts;               // inside a forged missile's impact: its healing is capped
 static int forgeHealSecond = -1, forgeHealed;
+// A forged cleaver's impact: the stock code wounds the foe, then heals you; the heal is half what the wound took.
+static bool forgeBiting;               // inside a forged cleaver's impact
+static DBloodActor* forgeBite;         // the live foe it struck (null: none, so no heal)
+static int forgeBiteHealth;            // that foe's health before the wound (sixteenths)
+static bool forgeBiteDeeper;           // its stock wound is still to come, and bites deeper (ScaleDamage)
+static DBloodActor* forgeSparingNow;   // the Larder's blast being worked out: it doesn't hurt you (kModSpareYou)
+static DBloodActor* forgeBlastNow;     // any forged blast being worked out: yours hurts you half
 static DBloodActor* forgeScent;          // Blood Feud: the last foe that drew your blood (compared, never followed)
 static int forgeScentAt = INT_MIN / 2;
 static DBloodActor* forgeExplosionNow;   // Brimstone Leap: the forged blast being worked out (kModKicked once it threw you)
@@ -2986,8 +3742,43 @@ int TakePickup(DBloodActor* item, int room)
 	return take;
 }
 
+// An Omen's pickup is the run's: walked into, it begins (or adds its time), with Blood's powerup chime, the pickup flash
+// and a message. A cursed reliquary isn't taken by walking over it (Use takes it: TakeReliquary); nor is either with
+// the Omens off (rl_omens 0, the run over), when they lie inert. A map's powerup the stock pickup is about to take while
+// an Omen runs on its timer is noted, for PickupTaken.
+bool ClaimPickup(DBloodPlayer* pPlayer, DBloodActor* item)
+{
+	omenPowerItem = nullptr;
+	if (!pPlayer || !item) return false;
+	if (!IsOmenItem(item))
+	{
+		int n = item->spr.type - kItemBase;
+		if (n >= 0 && n < kMaxPowerUps && pPlayer == getPlayer(myconnectindex) && OmensLive())
+			for (auto& r : omens)
+				if (omenInfo[r.id].powerup == n)
+				{
+					omenPowerItem = item;
+					omenPowerBefore = pPlayer->pwUpTime[n];
+				}
+		return false;
+	}
+	if (pPlayer != getPlayer(myconnectindex) || !OmensLive()) return true;
+	int id = item->xspr.data1;
+	auto& o = omenInfo[id];
+	if (o.tier == kOmenGamble) return true;
+	bool chimed = false;
+	if (!GrantOmen(id, o.seconds * kClock, &chimed)) return true; // it can't take hold now (CanGrant): it stays
+	if (!chimed) sfxPlay3DSound(pPlayer->GetActor(), 776, -1, 0); // Blood's powerup chime (powerupActivate plays it)
+	pPlayer->pickupEffect = 30;
+	viewSetMessage(FStringf("Omen: %s, %d s: %s", o.name, bmod::SecondsLeft(RunningOf(id)->left), o.sentence).GetChars(),
+		nullptr, MESSAGE_PRIORITY_PICKUP);
+	actPostSprite(item, kStatFree);
+	return true;
+}
+
 bool PickupTaken(DBloodActor* item, const char*& msg)
 {
+	if (item && item == omenPowerItem) StackPowerPickup(item);
 	if (!item || item != lastBig || !(item->modFlags & kModBigPickup) || !item->hasX()) return false;
 	lastBig = nullptr;
 	int n;
@@ -3004,11 +3795,63 @@ bool PickupTaken(DBloodActor* item, const char*& msg)
 	return item->xspr.data1 > 0;
 }
 
-int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
+//---------------------------------------------------------------------------
+//
+// the champion hooks: their damage, their flinches
+//
+//---------------------------------------------------------------------------
+
+// A foe's hitscan shot as it's worked out: SwallowVector sees every vector fired, and actFireVector deals the wound
+// within the same call. Bites, slashes and missiles wound as bullets too (kDamageBullet), so the damage type alone
+// can't tell a cultist's bullet from an axe. Compared, never followed.
+static DBloodActor* foeHitscan;
+static int foeHitscanAt = INT_MIN / 2;
+
+// The red champions you hit: what you dealt each since the AI last looked (StaggerTick clears it right after the AI's
+// pass, as aiProcessDudes clears cumulDamage), and when it last flinched. Compared, never followed: a red that dies or
+// is freed stays only until its 3 seconds are up, and the list is emptied as each map starts and on each load.
+struct Stagger { DBloodActor* red; int hit; int flinchAt; };
+static TArray<Stagger> staggers;
+
+static void StaggerHit(DBloodActor* red, int damage)
+{
+	for (auto& t : staggers)
+		if (t.red == red)
+		{
+			t.hit += damage;
+			return;
+		}
+	staggers.Push({ red, damage, INT_MIN / 2 });
+}
+
+// Right after the tic's AI pass (the run's ticker): the hits are counted afresh, and a red whose flinch is 3 seconds
+// old (or that was never made to flinch) is let go. A tic with no AI pass (enemies slowed) keeps counting, as
+// cumulDamage does.
+static void StaggerTick()
+{
+	if (staggers.Size() == 0 || bmod::EnemyPasses() <= 0) return;
+	for (int i = int(staggers.Size()) - 1; i >= 0; i--)
+	{
+		staggers[i].hit = 0;
+		if (PlayClock - staggers[i].flinchAt >= kStaggerEvery || staggers[i].flinchAt > PlayClock) staggers.Delete(i);
+	}
+}
+
+static void StaggerReset() { staggers.Clear(); foeHitscan = nullptr; }
+
+int ScaleDamage(DBloodActor* source, DBloodActor* target, DAMAGE_TYPE damageType, int damage)
 {
 	if (!source || !target || damage <= 0) return damage;
 	if (forgeEmitting && source->IsPlayerActor() && target != source && target->IsDudeActor() && !target->IsPlayerActor())
 		if (forgeHits.Find(target) == forgeHits.Size()) forgeHits.Push(target); // a forged hitscan's hit
+	// A forged cleaver bites deeper than the Butcher's: its stock wound (the first the impact deals the foe) grows, so
+	// the heal that follows it (ScaleHealing) counts the whole of it. Dealt apart, after, it could land on a foe the
+	// stock wound had just killed.
+	if (forgeBiteDeeper && target == forgeBite && source->IsPlayerActor())
+	{
+		forgeBiteDeeper = false;
+		damage += (kCleaverBite + int(Random(kCleaverBiteRange))) << 4;
+	}
 	// Brimstone Leap: your own forged blast throws you, the first tic it reaches you, and doesn't wound you.
 	if (forgeExplosionNow && target->IsPlayerActor() && target == getPlayer(myconnectindex)->GetActor())
 	{
@@ -3022,6 +3865,11 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
 		}
 		return 0;
 	}
+	// The Larder of Knives: its blasts are set for foes and spare you.
+	if (forgeSparingNow && target->IsPlayerActor() && target == getPlayer(myconnectindex)->GetActor()) return 0;
+	// Any other forged blast of yours (the Grave's, a fireball's) hurts you half: the Forge's blasts land close.
+	if (forgeBlastNow && target->IsPlayerActor() && target == getPlayer(myconnectindex)->GetActor() && forgeBlastNow->GetOwner() == target)
+		damage -= damage / 2;
 	auto s = source;
 	for (int i = 0; i < 2 && s && !s->IsDudeActor(); i++) s = s->GetOwner(); // a missile's or explosion's owner
 	if (s && s != target && s->IsDudeActor() && !s->IsPlayerActor() && target->IsPlayerActor())
@@ -3029,15 +3877,57 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
 		forgeScent = s; // Blood Feud's quarry
 		forgeScentAt = PlayClock;
 	}
+	// Fury and Frenzy (Omens): your hits on foes, times their factor, on top of the Forge's bite and the base's Glass
+	// Cannon (applied before this), as those stack already. A red champion's flinch counts the hit as dealt.
+	if (s && s != target && s->IsPlayerActor() && target->IsDudeActor() && !target->IsPlayerActor())
+		if (int deal = OmenDeal(); deal != 1) damage *= deal;
+	// Your hit on a red champion, as dealt (before its own armour: its type's and the skill's), for its flinch.
+	if (s && s != target && s->IsPlayerActor() && (target->modFlags & kModRedChampion) && target->spr.statnum == kStatDude)
+		StaggerHit(target, damage);
 	if (!s || s == target || !s->IsDudeActor() || s->IsPlayerActor()) return damage;
-	if (s->modFlags & kModRedChampion) damage += damage / 2;  // red champions hit 1.5x
-	else if (s->modFlags & kModChampion) damage += damage / 4; // champions 1.25x
+	// A foe's hitscan, its bullets and shells (the tommy and shotgun cultists'), takes less of the tiers' bonus and of
+	// Wrath's: on Extra Crispy, with Wrath's 5 ranks, a red tommy cultist's rounds at 1.5x and 2x killed in 0.2 s.
+	// Its bites, slashes, missiles and blasts keep the whole bonus.
+	bool hitscan = damageType == kDamageBullet && source == foeHitscan && foeHitscanAt == PlayClock;
+	if (s->modFlags & kModRedChampion) damage += hitscan ? damage / 5 : damage / 2;   // red champions hit 1.5x (1.2x shooting)
+	else if (s->modFlags & kModChampion) damage += hitscan ? damage / 10 : damage / 4; // champions 1.25x (1.1x shooting)
 	if (run.active && !run.over && target->IsPlayerActor() && run.cov[kWrath] > 0)
-		damage = int(damage * (1. + 0.2 * run.cov[kWrath]) + 0.5); // the Covenant's Wrath
+		damage = int(damage * (1. + (hitscan ? 0.1 : 0.2) * run.cov[kWrath]) + 0.5); // the Covenant's Wrath
 	return damage;
 }
 
-bool Unflinching(DBloodActor* actor) { return actor && (actor->modFlags & kModRedChampion); }
+// Bloodlust: a hit of yours on a live foe, its health as the hit began; the heal comes once the wound is dealt.
+OmenWound::OmenWound(DBloodActor* source, DBloodActor* target)
+{
+	if (!omens.Size() || !source || !target || target->IsPlayerActor() || !AllowedKillType(target) || !target->hasX()
+		|| target->xspr.health <= 0 || !BloodlustOn() || !ByYou(source))
+		return;
+	foe = target;
+	healthBefore = int(target->xspr.health);
+}
+
+OmenWound::~OmenWound()
+{
+	if (foe && foe->hasX()) BloodlustHeal(healthBefore - std::min(healthBefore, int(foe->xspr.health)));
+}
+
+// Red champions don't flinch (nor stagger under tesla), but for a heavy hit of yours: one that deals a red 32 health or
+// more, as dealt, before its armour (the tic's hits together, as Blood adds them up for a flinch, so a sawed-off
+// blast's pellets count as one hit), at most once every 3 seconds each. It breaks a red tommy cultist's endless burst.
+// RecoilDude still asks only when the tic's wound (after armour) is one that would make the stock enemy flinch.
+bool Unflinching(DBloodActor* actor)
+{
+	if (!actor || !(actor->modFlags & kModRedChampion)) return false;
+	for (auto& t : staggers)
+		if (t.red == actor)
+		{
+			if (t.hit < kStaggerHit || PlayClock - t.flinchAt < kStaggerEvery) return true;
+			t.hit = 0;
+			t.flinchAt = PlayClock;
+			return false;
+		}
+	return true;
+}
 
 //---------------------------------------------------------------------------
 //
@@ -3055,11 +3945,29 @@ static bool ForgeOn(DBloodPlayer* p)
 	return v && run.active && !run.over && !crypt.in && p && p == getPlayer(myconnectindex) && p->GetActor() && p->curWeapon == forgeVessels[v].weapon;
 }
 
-static bool PrimaryCallback(DBloodPlayer* p, int vessel, int nCallback)
+// How a firing callback of the forged gun fires: as its forged primary, as its forged alt mode (both barrels, the
+// tommy's sweep, the flare's starburst), or stock (its other callbacks, and alt fire with rl_forge_alt off).
+enum { kFireStock, kFirePrimary, kFireAlt };
+static int FireMode(DBloodPlayer* p, int vessel, int nCallback)
 {
-	if (vessel == kVesselShotgun) // alt fire shares FireShotgun: both barrels (and the akimbo pair) stay stock
-		return nCallback == nClientFireShotgun && p->weaponQav != qavGetCorrectID(kQAVSHOTF3) && p->weaponQav != qavGetCorrectID(kQAV2SHOTFIR);
-	return (vessel == kVesselFlare && nCallback == nClientFireFlare) || (vessel == kVesselTommy && nCallback == nClientFireTommy);
+	bool alt = false;
+	switch (vessel)
+	{
+	case kVesselFlare:
+		if (nCallback == nClientFireFlare) return kFirePrimary;
+		alt = nCallback == nClientAltFireFlare;
+		break;
+	case kVesselShotgun: // alt fire shares FireShotgun: both barrels (and the akimbo pair) are told apart by their QAV
+		if (nCallback != nClientFireShotgun) return kFireStock;
+		alt = p->weaponQav == qavGetCorrectID(kQAVSHOTF3) || p->weaponQav == qavGetCorrectID(kQAV2SHOTFIR);
+		if (!alt) return kFirePrimary;
+		break;
+	case kVesselTommy:
+		if (nCallback == nClientFireTommy) return kFirePrimary;
+		alt = nCallback == nClientAltFireSpread2;
+		break;
+	}
+	return alt && rl_forge_alt ? kFireAlt : kFireStock;
 }
 
 static bool FiringCallback(int vessel, int nCallback)
@@ -3103,22 +4011,29 @@ static bool PayInBlood(DBloodPlayer* p)
 
 // The Hound's Nose: the nearest foe within the cone ahead, in sight.
 // The nearest live foe in sight from a point, within a cone around a heading and a range (exclude: one not to pick).
-static DBloodActor* HoundFoe(const DVector3& from, sectortype* sect, DAngle heading, double cone, double range, DBloodActor* exclude = nullptr)
+// Given the foes already hunted (a foe once for each hunter), the least hunted one wins, nearest first: hunters share
+// a pack out in turn.
+static DBloodActor* HoundFoe(const DVector3& from, sectortype* sect, DAngle heading, double cone, double range, DBloodActor* exclude = nullptr,
+	const TArray<DBloodActor*>* hunted = nullptr)
 {
 	DBloodActor* best = nullptr;
 	double bestDist = range;
+	int bestUses = INT_MAX;
 	BloodStatIterator it(kStatDude);
 	while (auto a = it.Next())
 	{
 		if (a == exclude || a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !AllowedKillType(a) || !a->insector()) continue;
 		DVector2 d = a->spr.pos.XY() - from.XY();
 		double dist = d.Length();
-		if (dist >= bestDist || absangle(d.Angle(), heading).Degrees() > cone) continue;
+		int uses = 0;
+		if (hunted) for (auto h : *hunted) if (h == a) uses++;
+		if (dist >= range || uses > bestUses || (uses == bestUses && dist >= bestDist) || absangle(d.Angle(), heading).Degrees() > cone) continue;
 		double top, bottom;
 		GetActorExtents(a, &top, &bottom);
 		if (!cansee(from, sect, DVector3(a->spr.pos.XY(), (top + bottom) / 2), a->sector())) continue;
 		best = a;
 		bestDist = dist;
+		bestUses = uses;
 	}
 	return best;
 }
@@ -3139,6 +4054,24 @@ static DVector3 MiddleOf(DBloodActor* a)
 static int Offspring(DBloodActor* a) { return (a->modFlags & kModOffspring) >> 4; }
 static void SetOffspring(DBloodActor* a, int code) { a->modFlags = uint8_t((a->modFlags & ~kModOffspring) | ((code & 3) << 4)); }
 
+// A forged missile's speed: a cleaver flies kCleaverSpeed times the Butcher's (it was too slow to land on a moving
+// foe), the rest as stock. EmitForge, ForgeSpawnMissile, the Fetch and the stock homing (MissileSpeedScale) all use it.
+static double ForgeSpeed(int type)
+{
+	double speed = missileInfo[type - kMissileBase].fVelocity();
+	return type == kMissileButcherKnife ? speed * kCleaverSpeed : speed;
+}
+
+// A missile set to hunt a foe (already flying at it): the stock homing sets the full speed sideways and keeps vel.Z,
+// so it starts on the slope to the foe's middle.
+static void AimAt(DBloodActor* m, DBloodActor* foe)
+{
+	m->SetTarget(foe);
+	DVector3 d = MiddleOf(foe) - m->spr.pos;
+	double flat = d.XY().Length();
+	if (flat > 1) m->vel.Z = ForgeSpeed(m->spr.type) * d.Z / flat;
+}
+
 // A missile a Litany spawns away from the gun (a second head, a cleaver flying back): the player's, forged, with its
 // offspring code, set up as actFireMissile does but without its trace from the shooter's eye.
 static DBloodActor* ForgeSpawnMissile(const DVector3& pos, sectortype* sect, const DVector3& dir, int type, int offspring)
@@ -3158,9 +4091,9 @@ static DBloodActor* ForgeSpawnMissile(const DVector3& pos, sectortype* sect, con
 	m->spr.scale = DVector2(mi.xrepeat * REPEAT_SCALE, mi.yrepeat * REPEAT_SCALE);
 	m->spr.setspritetexture(mi.textureID());
 	m->spr.Angles.Yaw = dir.XY().Angle() + mapangle(mi.angleOfs);
-	m->vel = dir.Unit() * mi.fVelocity();
+	m->vel = dir.Unit() * ForgeSpeed(type);
 	m->SetOwner(pl);
-	m->spr.cstat |= CSTAT_SPRITE_BLOCK;
+	m->spr.cstat &= ~CSTAT_SPRITE_BLOCK; // unlike actFireMissile's: the Forge's missiles don't strike each other
 	m->SetTarget(nullptr);
 	m->modFlags |= kModForged;
 	SetOffspring(m, offspring);
@@ -3169,15 +4102,59 @@ static DBloodActor* ForgeSpawnMissile(const DVector3& pos, sectortype* sect, con
 	return m;
 }
 
-// A blast of the player's: small (a TNT stick, 75), standard (a bundle, 150) or large (225), forged.
-static void ForgeBlast(const DVector3& pos, sectortype* sect, int kind)
+// The forged starburst's ring (the flare's alt): count children leave a point in the ring FlareBurst throws around
+// the carrier's flight (vel), a step round it each and every other one at half the spread: the Mouth's missiles, or
+// with no Mouth forged sub-flares, so the Wound comes with each. They are offspring (1), so a Litany that only takes
+// the gun's own shots (Cerberus, the Hymn, the Fetch) leaves them be. Under the Hound's Nose each child hunts a foe
+// of its own from there, the least hunted one in its cone, nearest first.
+static void ReleaseStarburst(const DVector3& pos, sectortype* sect, const DVector3& vel, int count)
+{
+	if (!sect || count <= 0 || vel.XY().LengthSquared() <= 0) return;
+	int mouth = run.forge[kForgeMouth];
+	int type = mouth ? forgeMouthMissile[mouth] : kMissileFlareAlt;
+	bool hound = run.forge[kForgePath] == kPathHound;
+	auto heading = vel.XY().Angle().ToVector();
+	double radius = FixedToFloat(0x55555); // FlareBurst's
+	TArray<DBloodActor*> hunted;
+	for (int i = 0; i < count; i++)
+	{
+		auto ring = DAngle::fromDeg(360. * i / count).ToVector().Rotated90CW() * radius;
+		if (i & 1) ring *= 0.5;
+		DVector3 v = vel + DVector3(DVector2(0, ring.X).Rotated(heading.X, heading.Y), ring.Y);
+		DBloodActor* foe = hound ? HoundFoe(pos, sect, v.XY().Angle(), kStarburstCone, kHoundRange, nullptr, &hunted) : nullptr;
+		DVector3 dir = foe ? MiddleOf(foe) - pos : v;
+		auto m = ForgeSpawnMissile(pos, sect, dir.Unit(), type, 1);
+		if (!m) continue;
+		if (type == kMissileFlareAlt)
+		{
+			// A stock sub-flare, as FlareBurst spawns it: it doesn't burst again, trails no sparks and doesn't hiss.
+			evKillActor(m, kCallbackFXFlareBurst);
+			evKillActor(m, kCallbackFXFlareSpark);
+			sfxKill3DSound(m, -1, -1);
+			m->spr.setspritetexture(aTexIds[kTexFLAREBURST]);
+			m->spr.shade = -128;
+			m->spr.scale = DVector2(0.5, 0.5);
+			m->clipdist = 0.5;
+			if (!foe) m->vel = v;
+		}
+		if (foe)
+		{
+			AimAt(m, foe);
+			hunted.Push(foe);
+		}
+	}
+}
+
+// A blast of the player's: small (a TNT stick, 75), standard (a bundle, 150) or large (225), forged. One that spares
+// you is marked kModSpareYou; the explosion the thing becomes is the same actor, so it keeps the mark (ForgeExplosion).
+static void ForgeBlast(const DVector3& pos, sectortype* sect, int kind, bool spareYou = false)
 {
 	auto p = getPlayer(myconnectindex);
 	if (!p || !p->GetActor() || !sect) return;
 	auto t = actSpawnThing(sect, pos, kind == 0 ? kThingArmedTNTStick : kThingArmedTNTBundle);
 	if (!t) return;
 	t->SetOwner(p->GetActor());
-	t->modFlags |= kModForged;
+	t->modFlags |= kModForged | (spareYou ? kModSpareYou : 0);
 	actExplodeSprite(t);
 	if (kind >= 2 && t->spr.type == kExplosionStandard) // retyped to the large explosion: actCheckExplosion reads its type
 	{
@@ -3191,8 +4168,8 @@ static void ForgeBlast(const DVector3& pos, sectortype* sect, int kind)
 	}
 }
 
-// Healing from a Litany, under the Forge's cap (and Famine).
-static void ForgeHeal(int n)
+// Healing from a Litany, under the Forge's cap (and Famine). No Litany heals now (the Fetch gives a round back).
+[[maybe_unused]] static void ForgeHeal(int n)
 {
 	auto p = getPlayer(myconnectindex);
 	if (!p || !p->GetActor() || p->GetActor()->xspr.health <= 0) return;
@@ -3234,6 +4211,64 @@ static int LitFor(DBloodActor* a)
 	return INT_MAX / 2;
 }
 
+// The Pyre's flare: lodged in the foe on the side the shot came from, as actImpactMissile lodges a stock flare in
+// flesh (actCheckFlares carries it with its bearer and gibs it when the bearer dies). One a foe, kPyreMarks at most.
+// It throws fewer sparks than a stock flare, lodged or flying (the lite spark, every 12 PlayClock, not 4: up to twelve
+// marks at once), and ForgeTick puts it out with the fire.
+static void PyreMark(DBloodActor* source, DBloodActor* t)
+{
+	int marks = 0;
+	BloodStatIterator it(kStatFlare);
+	while (auto f = it.Next())
+	{
+		if (!(f->modFlags & kModPyreMark) || (f->spr.flags & 32)) continue; // 32: already on its way out
+		if (f->GetTarget() == t) return;
+		marks++;
+	}
+	if (marks >= kPyreMarks || !t->insector()) return;
+	double top, bottom;
+	GetActorExtents(t, &top, &bottom);
+	DAngle side = (source->spr.pos.XY() - t->spr.pos.XY()).Angle();
+	DVector3 pos(t->spr.pos.XY() + side.ToVector() * t->clipdist * 0.5, bottom - (bottom - top) * 0.6); // chest high
+	auto f = actSpawnSprite(t->sector(), pos, kStatFlare, true);
+	if (!f) return;
+	auto& mi = missileInfo[kMissileFlareRegular - kMissileBase];
+	// A stock lodged flare's type. The view gives a kStatFlare no halo or glow (only a flying one), as with a stock lodged
+	// flare: what shows the burn is the foe's flames (BurnTo) and the bright flesh-hit tile.
+	f->spr.type = kMissileFlareRegular;
+	f->spr.cstat2 |= CSTAT2_SPRITE_MAPPED;
+	f->spr.cstat &= ~CSTAT_SPRITE_BLOCK_ALL;
+	f->spr.shade = mi.shade;
+	f->spr.pal = 0;
+	f->spr.scale = DVector2(mi.xrepeat * REPEAT_SCALE, mi.yrepeat * REPEAT_SCALE);
+	f->spr.setspritetexture(aTexIds[kTexFLESHHIT]);
+	f->clipdist = mi.fClipDist();
+	f->SetOwner(source);
+	f->SetTarget(t);
+	f->xspr.TargetPos.Z = pos.Z - t->spr.pos.Z;
+	f->xspr.goalAng = side - t->spr.Angles.Yaw;
+	f->xspr.state = 1;
+	f->modFlags = uint8_t(kModPyreMark); // not kModForged: a load would take a forged flare in flesh for a Corpse-Candle
+	evPostActor(f, 0, kCallbackFXFlareSparkLite);
+}
+
+// The Pyre's touch: a foe that can burn is lit, or its burn topped back up to the Pyre's 4 s (never past: adding would
+// climb to the 2400 cap), with flames (BurnTo) and a flare lodged in it (PyreMark). Foes that can't burn, and the
+// burning kinds a burn has already turned them into, are left alone, so nothing shows a fire that isn't there.
+static void PyreLight(DBloodActor* source, DBloodActor* t)
+{
+	if (!source || !t || !t->IsDudeActor() || t->IsPlayerActor() || !t->hasX() || t->xspr.health <= 0 || IsBurningDude(t)) return;
+	if (!getDudeInfo(t->spr.type)->damageVal[kDamageBurn]) return;
+	bool was = t->xspr.burnTime > 0;
+	BurnTo(source, t, kPyreBurn);
+	if (!was)
+	{
+		NoteLit(t); // Witchfire: when it was lit
+		sfxPlay3DSound(t, 353, -1, 0); // a sizzle (the flare's own hiss, 422, loops)
+	}
+	PyreMark(source, t);
+}
+
 // Hymn of Ash: a pull's refunds, and which missile belongs to which pull.
 struct HymnPull { int id, refundsLeft, ammo, at; };
 struct HymnShot { DBloodActor* missile; int pull; };
@@ -3251,18 +4286,93 @@ static bool forgeBloodBoughtNow;    // the pull being fired was paid in blood (L
 // Corpse-Candle's lit flares, Requiem's waiting blasts, the Fetch's cleavers to send back.
 struct Candle { DBloodActor* flare; int blowAt; DVector3 pos; sectortype* sect; };
 struct Toll { DVector3 pos; sectortype* sect; int at; };
-struct Fetching { DVector3 pos; sectortype* sect; };
+struct Fetching { DVector3 pos; sectortype* sect; bool alt, blood; }; // blood: the cleaver was bought with blood
 static TArray<Candle> candles;
 static TArray<Toll> tolls;
 static TArray<Fetching> fetching;
+static int fetchCredit;              // the Fetch: cleavers caught, in thirds of a drink, toward the next round given back
+// The Fetch: cleavers an alt pull fired, and the twins they send back (compared, never followed). The alt's bonus makes
+// each cost a third less, so a catch gives back a third less: else the bonus would come back as ammo. A cleaver leaves
+// the list when it strikes or is caught, and ForgeTick drops any no longer flying (a timer took it), so the list holds
+// only cleavers in the air: an address the GC hands to a later missile is never taken for an alt one's.
+static TArray<DBloodActor*> fetchAlt;
+static bool FetchAlt(DBloodActor* m) { return fetchAlt.Find(m) < fetchAlt.Size(); }
+static void NoteFetchAlt(DBloodActor* m)
+{
+	if (fetchAlt.Size() >= 256) fetchAlt.Delete(0);
+	fetchAlt.Push(m);
+}
+static void DropFetchAlt(DBloodActor* m)
+{
+	for (int i = int(fetchAlt.Size()) - 1; i >= 0; i--) if (fetchAlt[i] == m) fetchAlt.Delete(i);
+}
+static void PruneFetchAlt()
+{
+	if (!fetchAlt.Size()) return;
+	TArray<DBloodActor*> flying;
+	BloodStatIterator it(kStatProjectile);
+	while (auto m = it.Next()) if ((m->modFlags & kModForged) && m->spr.type == kMissileButcherKnife) flying.Push(m);
+	for (int i = int(fetchAlt.Size()) - 1; i >= 0; i--) if (flying.Find(fetchAlt[i]) >= flying.Size()) fetchAlt.Delete(i);
+}
+
+// The forged starburst: each carrier's ring, kept from the pull that fired it until it bursts (a record lost to a save
+// is worked out again from the recipe); rings thrown by a carrier that struck early, to go out on the Forge's tic; and
+// the ring of the starburst being fired (a carrier fired point blank strikes before its record is kept).
+struct BurstRecord { DBloodActor* carrier; int count; };
+struct Starburst { DVector3 pos; sectortype* sect; DVector3 vel; int count; };
+static TArray<BurstRecord> forgeBursts;
+static TArray<Starburst> starbursts;
+static int forgeBurstNow;
+static int BurstCount(DBloodActor* carrier)
+{
+	for (int i = int(forgeBursts.Size()) - 1; i >= 0; i--)
+		if (forgeBursts[i].carrier == carrier)
+		{
+			int n = forgeBursts[i].count;
+			forgeBursts.Delete(i);
+			return n;
+		}
+	if (forgeEmitting && forgeBurstNow > 0) return forgeBurstNow;
+	return StarburstCount(run.forge, 1);
+}
+// The tommy's sweep under the Hound's Nose: the foes this sweep has hunted, so it rakes across a pack.
+static TArray<DBloodActor*> sweepHunted;
+static int sweepAt = INT_MIN / 2;
 static int witchfireNext = INT_MIN / 2;
 static int lastTollAt = INT_MIN / 2;
+
+// Gravedigger's Blast: when its last kGraveBursts bursts went off (PlayClock, oldest next), so that no more than that
+// go off in any second: the tommy's cleavers would otherwise set off fifteen. A hit over the budget doesn't burst.
+static int graveBursts[kGraveBursts] = { INT_MIN / 2, INT_MIN / 2, INT_MIN / 2, INT_MIN / 2 };
+static int graveNext;
+static bool GraveBurst()
+{
+	int& oldest = graveBursts[graveNext];
+	int since = PlayClock - oldest;
+	if (since >= 0 && since < kClock) return false; // (a PlayClock that went back, a new map's, doesn't hold it up)
+	oldest = PlayClock;
+	graveNext = (graveNext + 1) % kGraveBursts;
+	return true;
+}
 
 static void ResetLitanies()
 {
 	forgeScent = nullptr;
 	forgeScentAt = INT_MIN / 2;
 	forgeExplosionNow = nullptr;
+	forgeSparingNow = nullptr;
+	forgeBlastNow = nullptr;
+	forgeBiting = false;
+	forgeBiteDeeper = false;
+	forgeBite = nullptr;
+	for (auto& at : graveBursts) at = INT_MIN / 2;
+	fetchCredit = 0;
+	fetchAlt.Clear();
+	forgeBursts.Clear();
+	starbursts.Clear();
+	forgeBurstNow = 0;
+	sweepHunted.Clear();
+	sweepAt = INT_MIN / 2;
 	forgeLit.Clear();
 	hymnPulls.Clear();
 	hymnShots.Clear();
@@ -3294,7 +4404,11 @@ static bool IsLive(DBloodActor* a, int stat)
 	return false;
 }
 
-static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, int spent)
+// A pull's payload. alt: the gun's alt mode, forged (FireMode): both barrels fire the Mouth's payload for both, half
+// again over; the tommy's sweep fires it along each of its 14 aims, twice on every other one; the flare's starburst
+// fires its carrier as stock, forged, and the carrier throws a ring of the payload when it bursts (ForgeBurst) or
+// strikes early (ForgeImpact).
+static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, int spent, bool alt)
 {
 	auto pl = p->GetActor();
 	int vessel = run.forge[kForgeVessel];
@@ -3302,32 +4416,77 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 	auto r = Rates(run.forge);
 	int mouth = run.forge[kForgeMouth];
 	int fan = run.forge[kForgePath] == kPathChoir ? 3 : 1;
+	bool starburst = alt && vessel == kVesselFlare;
+	bool sweep = alt && vessel == kVesselTommy;
+	int capM = alt ? kForgeAltMissiles : kForgeMissiles, capV = alt ? kForgeAltVectors : kForgeVectors;
 	// The rounds this callback fires: the flare one (its id is the akimbo hand), the sawed-off and tommy their trigger.
-	int units = vessel == kVesselFlare ? 1 : std::max(id, 1);
-	int perRound = mouth ? std::max(1, std::min(r.perRound, kForgeMissiles / (units * fan))) : 0; // whole fans within the cap
+	// An alt pull's: the starburst's 8 (the stock alt's price), both barrels (four akimbo, by id), and a sweep step the
+	// shots it fired (its id is the step's place in the sweep, not a count).
+	int units = starburst ? kStarburstFlares : sweep ? int(shots.Size()) : vessel == kVesselFlare ? 1 : std::max(id, 1);
+	int perRound = mouth ? std::max(1, std::min(r.perRound, capM / (units * fan))) : 0; // whole fans within the cap
 
 	// The ammo: the stock function took a round a round fired; the rest of the drink is taken here. Short, the payload
-	// shrinks to what was paid for; dry with the Blood Price, the pull is paid in health (or not fired at all).
+	// shrinks to what was paid for; dry with the Blood Price, the pull is paid in health (or not fired at all). An alt
+	// pull is never paid in blood (dry, every alt fires the primary instead): short, it only shrinks. An alt pull drinks
+	// only for what its cap lets it fire (AltOwed): the starburst at most the stock alt's 8 flares, with the Choir too.
 	double share = 1;
-	int roundsPaid = units * r.drink;
+	double altBonus = sweep ? ((id & 1) ? 2. : 1.) : kForgeAltBonus;
+	int owed = alt ? AltOwed(run.forge, units, altBonus, starburst) : units * r.drink;
+	int roundsPaid = owed;
 	bool bloodPaid = false;
 	if (!gInfiniteAmmo)
 	{
-		int owed = units * r.drink, paid = std::max(spent, 0);
+		int paid = std::max(spent, 0);
+		// A clipped alt pull drinks less than the stock alt took (the starburst's 8 flares, the akimbo pair's 4
+		// shells): the rest goes back. AltOwed is at least a round, so the pull is never free.
+		if (alt && paid > owed)
+		{
+			p->ammoCount[v.ammo] = ClipHigh(p->ammoCount[v.ammo] + (paid - owed), gAmmoInfo[v.ammo].max);
+			paid = owed;
+		}
 		int extra = std::min(std::max(owed - paid, 0), p->ammoCount[v.ammo]);
 		if (extra > 0) UseAmmo(p, v.ammo, extra);
 		paid += extra;
 		roundsPaid = paid;
 		if (paid < owed)
 		{
-			if (BloodPriced() && PayInBlood(p)) share = 1, bloodPaid = true;
+			if (!alt && BloodPriced() && PayInBlood(p)) share = 1, bloodPaid = true;
 			else if (pl->xspr.health <= 0) return; // Last Rites took your life: the pull fires nothing
 			else if (paid > 0) share = double(paid) / owed;
 			else return; // nothing paid: nothing fires
 		}
 	}
 
-	DBloodActor* target = run.forge[kForgePath] == kPathHound && r.missile ? HoundTarget(p, shots[0].dv) : nullptr;
+	// The Hound's Nose: the foes this pull hunts, its missiles shared out among them in turn. Both barrels hunt up to
+	// three foes, not one; a sweep step hunts the least hunted foe of its sweep, so the sweep rakes across a pack; the
+	// starburst's carrier flies as stock and its children hunt (ReleaseStarburst).
+	TArray<DBloodActor*> prey;
+	if (run.forge[kForgePath] == kPathHound && r.missile && !starburst)
+	{
+		DVector3 eye(pl->spr.pos.XY(), p->zWeapon);
+		DAngle heading = shots[0].dv.XY().Angle();
+		if (sweep)
+		{
+			if (PlayClock - sweepAt > kClock / 4 || PlayClock < sweepAt) sweepHunted.Clear(); // a new sweep
+			sweepAt = PlayClock;
+			if (auto t = HoundFoe(eye, pl->sector(), heading, kHoundCone, kHoundRange, nullptr, &sweepHunted))
+			{
+				if (sweepHunted.Size() >= 64) sweepHunted.Delete(0);
+				sweepHunted.Push(t);
+				prey.Push(t);
+			}
+		}
+		else if (alt)
+		{
+			for (int i = 0; i < 3; i++)
+			{
+				auto t = HoundFoe(eye, pl->sector(), heading, kHoundCone, kHoundRange, nullptr, &prey);
+				if (!t || prey.Find(t) < prey.Size()) break; // no other foe in the cone
+				prey.Push(t);
+			}
+		}
+		else if (auto t = HoundTarget(p, shots[0].dv)) prey.Push(t);
+	}
 	// Blood Feud: a pull paid in blood hunts whoever last drew your blood, anywhere in sight.
 	if (bloodPaid && run.forge[kForgePath] == kPathHound && Sings(kLitBloodFeud) && forgeScent && IsLive(forgeScent, kStatDude)
 		&& forgeScent->hasX() && forgeScent->xspr.health > 0 && PlayClock - forgeScentAt >= 0 && PlayClock - forgeScentAt < 5 * kClock)
@@ -3335,14 +4494,23 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 		DVector3 eye(pl->spr.pos.XY(), p->zWeapon);
 		if ((forgeScent->spr.pos.XY() - eye.XY()).Length() <= 2048 && cansee(eye, pl->sector(), MiddleOf(forgeScent), forgeScent->sector()))
 		{
-			target = forgeScent;
+			prey.Clear();
+			prey.Push(forgeScent);
 			LitanyFired(kLitBloodFeud);
 		}
 	}
 	TArray<ForgeAim> out;
-	if (mouth)
+	int children = 0; // the starburst: each carrier's ring
+	if (starburst)
 	{
-		int count = std::max(1, int(perRound * units * share)); // something paid: at least one
+		children = StarburstCount(run.forge, share);
+		out.Push(shots[0]); // the carrier keeps its type (kMissileFlareAlt): the Choir fans it below, three that share the cap
+	}
+	else if (mouth)
+	{
+		// Something paid: at least one. Both barrels' payload is half again over; a sweep step's comes twice on every
+		// other step (half again over the sweep).
+		int count = !alt ? std::max(1, int(perRound * units * share)) : AltPayload(run.forge, units, share, altBonus);
 		for (int i = 0; i < count; i++)
 		{
 			auto s = shots[i % shots.Size()];
@@ -3358,90 +4526,120 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 	}
 	if (out.Size() == 0) return;
 	DVector3 from(pl->spr.pos.XY(), p->zWeapon);
-	if (target) // aim at the foe, so the hunt starts on it (the stock homing only steers sideways and down)
-		for (auto& s : out) if (s.missile) s.dv = (MiddleOf(target) - from).Unit();
+	if (prey.Size()) // aim at the foe, so the hunt starts on it (the stock homing only steers sideways and down)
+		for (unsigned i = 0; i < out.Size(); i++) if (out[i].missile) out[i].dv = (MiddleOf(prey[i % prey.Size()]) - from).Unit();
+	// Copies of one aim (the flare's five cleavers) fly a little apart, +2, -2, +4, -4 degrees and on: stacked, they'd
+	// all strike the one spot. Copy k of an aim is the k-th time the payload loop came round to it.
+	if (mouth)
+		for (unsigned i = shots.Size(); i < out.Size(); i++)
+		{
+			int k = int(i / shots.Size());
+			double step = (k & 1 ? 2. : -2.) * ((k + 1) / 2);
+			out[i].dv = DVector3(out[i].dv.XY().Rotated(DAngle::fromDeg(step)), out[i].dv.Z);
+		}
 	bool shears = false;
 	if (fan > 1)
 	{
-		// The Shears: with a foe close to the aim, each fan's three cleavers converge on it from the barrel's sides.
-		DBloodActor* quarry = Sings(kLitShears) && mouth == kMouthCleaver ? HoundFoe(from, pl->sector(), out[0].dv.XY().Angle(), 5, 1024) : nullptr;
+		// The Shears: with a foe close to the aim, each fan's three cleavers converge on it from the barrel's sides (not
+		// the starburst's carriers: their cleavers are in the ring).
+		DBloodActor* quarry = Sings(kLitShears) && mouth == kMouthCleaver && !starburst ? HoundFoe(from, pl->sector(), out[0].dv.XY().Angle(), 5, 1024) : nullptr;
 		TArray<ForgeAim> fanned;
-		for (auto& s : out)
+		DVector2 across = (pl->spr.Angles.Yaw + DAngle90).ToVector();
+		for (unsigned j = 0; j < out.Size(); j++)
+		{
+			auto& s = out[j];
+			// The Shears' copies of one blade (the flare's four, a barrel's three pellets) would share its spawn point and
+			// aim, and fly as one: each leaves 5 units further aside (0, +5, -5, +10, ...) and keeps half that apart at the
+			// quarry, close enough that each still strikes it.
+			double spread = ((j & 1) ? 5. : -5.) * ((j + 1) / 2);
 			for (int i = 0; i < 3; i++)
 			{
 				auto t = s;
 				if (quarry)
 				{
-					double off = (i - 1) * 24.;
+					double apart = spread;
+					double off = (i - 1) * 24. + apart;
 					if (off != 0) // actFireMissile's own spawn trace (actor.cpp): where it would strike a wall, the blade fires from the middle
 					{
 						double cd = missileInfo[kMissileButcherKnife - kMissileBase].fClipDist() + pl->clipdist;
-						DVector2 side = (pl->spr.Angles.Yaw + DAngle90).ToVector() * (s.off + off) + pl->spr.Angles.Yaw.ToVector() * cd;
+						DVector2 side = across * (s.off + off) + pl->spr.Angles.Yaw.ToVector() * cd;
 						int h = HitScan(pl, pl->spr.pos.Z + s.zoff, DVector3(side, 0), CLIPMASK0, cd * 4);
-						if (h == 0 || h == 3) off = 0;
+						if (h == 0 || h == 3) off = 0, apart = 0;
 					}
-					DVector3 start = from + DVector3((pl->spr.Angles.Yaw + DAngle90).ToVector() * off, 0);
+					DVector3 start = from + DVector3(across * off, 0);
 					t.off = s.off + off;
-					t.dv = (MiddleOf(quarry) - start).Unit();
+					t.dv = (MiddleOf(quarry) + DVector3(across * (apart * 0.5), 0) - start).Unit();
 				}
 				else t.dv = DVector3(s.dv.XY().Rotated(DAngle::fromDeg((i - 1) * 10.)), s.dv.Z);
 				fanned.Push(t);
 			}
+		}
 		out = std::move(fanned);
 		if (quarry) shears = true, LitanyFired(kLitShears);
 	}
 
-	// Hymn of Ash: the pull's refunds (one a fireball on flesh, up to the drink less one, never more than it paid).
+	// Hymn of Ash: the pull's refunds (one a fireball on flesh), up to what it drank less a round for each round it
+	// fired, never more than it paid (both barrels: up to 6 of 8 shells under the Choir). The starburst's ring is
+	// offspring, which the Hymn leaves be.
 	hymnNow = -1;
-	if (Sings(kLitHymn) && mouth == kMouthHellmouth)
+	if (Sings(kLitHymn) && mouth == kMouthHellmouth && !starburst)
 	{
 		if (hymnPulls.Size() >= 32) hymnPulls.Delete(0);
 		hymnNow = hymnNextId++;
-		hymnPulls.Push({ hymnNow, std::max(std::min(r.drink, roundsPaid) - 1, 0), v.ammo, PlayClock });
+		hymnPulls.Push({ hymnNow, std::max(std::min(owed, roundsPaid) - units, 0), v.ammo, PlayClock });
 	}
 	forgeBloodBoughtNow = bloodPaid;
+	forgeBurstNow = children;
 
 	int missiles = 0, vectors = 0;
 	forgeHits.Clear();
 	forgeEmitting = true;
-	for (auto& s : out)
+	for (unsigned i = 0; i < out.Size(); i++)
 	{
+		auto& s = out[i];
 		if (s.missile)
 		{
-			if (missiles++ >= kForgeMissiles) continue;
+			if (missiles++ >= capM) continue;
 			auto m = actFireMissile(pl, s.off, s.zoff, s.dv, s.type);
 			if (!m) continue;
 			m->modFlags |= kModForged | (bloodPaid ? kModBloodBought : 0);
-			if (shears) m->spr.cstat &= ~CSTAT_SPRITE_BLOCK; // converging blades don't strike each other
+			// The Forge's missiles don't strike each other: they leave from one spot along near aims, and a copy that
+			// struck the one ahead fell as debris (or, under the Larder, stuck in the air beside you). The Shears'
+			// converging blades need it too.
+			m->spr.cstat &= ~CSTAT_SPRITE_BLOCK;
+			if (m->spr.type == kMissileButcherKnife) m->vel = s.dv.Unit() * ForgeSpeed(m->spr.type); // a forged cleaver flies faster
 			if (hymnNow >= 0) hymnShots.Push({ m, hymnNow });
-			if (target)
+			if (alt && m->spr.type == kMissileButcherKnife && Sings(kLitFetch)) NoteFetchAlt(m);
+			if (starburst)
 			{
-				m->SetTarget(target);
-				// The stock homing sets the full speed sideways and keeps vel.Z: give it the slope to the foe's middle.
-				DVector3 d = MiddleOf(target) - m->spr.pos;
-				double flat = d.XY().Length();
-				if (flat > 1) m->vel.Z = missileInfo[m->spr.type - kMissileBase].fVelocity() * d.Z / flat;
+				if (forgeBursts.Size() >= 32) forgeBursts.Delete(0);
+				forgeBursts.Push({ m, children });
 			}
+			if (prey.Size()) AimAt(m, prey[i % prey.Size()]);
 		}
 		else
 		{
-			if (vectors++ >= kForgeVectors) continue;
+			if (vectors++ >= capV) continue;
 			actFireVector(pl, s.off, s.zoff, s.dv, VECTOR_TYPE(s.type));
 		}
 	}
-	// The Censer: three spray-can flames along the leftmost, middle and rightmost pellets.
-	if (Sings(kLitCenser) && !mouth && vessel == kVesselShotgun && out.Size() >= 3)
+	// The Censer: three spray-can flames along the spread, its leftmost, middle and rightmost pellets; both barrels
+	// swing three a barrel, spaced evenly across it.
+	if (Sings(kLitCenser) && !mouth && vessel == kVesselShotgun)
 	{
 		DAngle aim = shots[0].dv.XY().Angle();
 		TArray<int> order;
 		for (unsigned i = 0; i < out.Size(); i++) if (!out[i].missile) order.Push(int(i));
-		if (order.Size() >= 3)
+		int flames = std::min(alt ? 3 * units : 3, int(order.Size()));
+		if (flames >= 3)
 		{
 			std::sort(order.begin(), order.end(), [&](int a, int b) { return deltaangle(aim, out[a].dv.XY().Angle()).Degrees() < deltaangle(aim, out[b].dv.XY().Angle()).Degrees(); });
-			for (int i : { order[0], order[order.Size() / 2], order[order.Size() - 1] })
+			int n = int(order.Size());
+			for (int j = 0; j < flames; j++)
 			{
+				int i = order[(j * (n - 1) + (flames - 1) / 2) / (flames - 1)]; // three: the first, the middle (n/2) and the last
 				auto m = actFireMissile(pl, out[i].off, out[i].zoff, out[i].dv, kMissileFlameSpray);
-				if (m) { m->modFlags |= kModForged; SetOffspring(m, 1); }
+				if (m) { m->modFlags |= kModForged; SetOffspring(m, 1); m->spr.cstat &= ~CSTAT_SPRITE_BLOCK; }
 			}
 			LitanyFired(kLitCenser);
 		}
@@ -3449,14 +4647,9 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 	forgeEmitting = false;
 	hymnNow = -1;
 	forgeBloodBoughtNow = false;
+	forgeBurstNow = 0;
 	if (run.forge[kForgeWound] == kWoundPyre)
-		for (auto t : forgeHits)
-			if (t->hasX() && t->xspr.health > 0)
-			{
-				bool was = t->xspr.burnTime > 0;
-				actBurnSprite(pl, t, kPyreBurn);
-				if (!was) NoteLit(t);
-			}
+		for (auto t : forgeHits) PyreLight(pl, t);
 	forgeHits.Clear();
 }
 
@@ -3470,19 +4663,31 @@ void WeaponCallback(int nCallback, int id, void* data)
 		return;
 	}
 	int ammo = forgeVessels[v].ammo, before = p->ammoCount[ammo];
-	TArray<ForgeAim> shots;
-	if (!PrimaryCallback(p, v, nCallback))
+	int mode = FireMode(p, v, nCallback);
+	if (mode == kFireStock)
 	{
-		// Alt fire stays stock and needs ammo: dry (only the Blood Price lets it get this far), it does nothing at all
+		// Alt fire left stock needs ammo: dry (only the Blood Price lets it get this far), it does nothing at all
 		// (the tommy's spread would put the gun away).
 		if (before == 0 && BloodPriced() && !gInfiniteAmmo) return;
 		qavClientCallback[nCallback](id, data);
 		return;
 	}
-	forgeShots = &shots;
-	qavClientCallback[nCallback](id, data);
-	forgeShots = nullptr;
-	if (shots.Size()) EmitForge(p, shots, id, before - p->ammoCount[ammo]);
+	bool alt = mode == kFireAlt;
+	if (!alt || before > 0 || gInfiniteAmmo)
+	{
+		TArray<ForgeAim> shots;
+		forgeShots = &shots;
+		qavClientCallback[nCallback](id, data);
+		forgeShots = nullptr;
+		if (shots.Size()) EmitForge(p, shots, id, before - p->ammoCount[ammo], alt);
+	}
+	// An alt pull is never paid in blood: dry, it fires nothing. The tommy's sweep puts the gun away once dry, as the
+	// stock sweep does (its own check came before the Forge drank the rest of the step's rounds).
+	if (alt && v == kVesselTommy && !gInfiniteAmmo && p->ammoCount[ammo] == 0 && p->weaponState != -1)
+	{
+		WeaponLower(p);
+		p->weaponState = -1;
+	}
 }
 
 bool SwallowMissile(DBloodActor* shooter, double xyoff, double zoff, const DVector3& dv, int type)
@@ -3494,6 +4699,13 @@ bool SwallowMissile(DBloodActor* shooter, double xyoff, double zoff, const DVect
 
 bool SwallowVector(DBloodActor* shooter, double offset, double zoffset, const DVector3& dv, int type)
 {
+	// A foe's vector, for ScaleDamage: a hitscan (the bullet and shell kinds, unlimited in range) or not (a bite, a
+	// slash). Only noted: the shot goes out as stock.
+	if (shooter && shooter->IsDudeActor() && !shooter->IsPlayerActor())
+	{
+		foeHitscan = type >= kVectorShell && type <= kVectorTommyRegular ? shooter : nullptr;
+		foeHitscanAt = PlayClock;
+	}
 	if (!forgeShots || forgeEmitting || !shooter || !shooter->IsPlayerActor()) return false;
 	forgeShots->Push({ false, type, offset, zoffset, dv });
 	return true;
@@ -3514,7 +4726,19 @@ bool ForgeLoadedWeapon(DBloodPlayer* pPlayer, int weapon)
 	return weapon == forgeVessels[v].weapon && pPlayer->hasWeapon[weapon] && pPlayer->ammoCount[forgeVessels[v].ammo] == 0 && CanPayInBlood(pPlayer);
 }
 
-ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit)
+// FlareBurst: a forged starburst's carrier (the flare's alt, offspring 0) throws its own ring, once (it then counts as
+// offspring); false leaves the stock burst.
+bool ForgeBurst(DBloodActor* carrier)
+{
+	if (!carrier || !run.active || run.over || !(carrier->modFlags & kModForged) || carrier->spr.type != kMissileFlareAlt || Offspring(carrier) != 0)
+		return false;
+	SetOffspring(carrier, 1);
+	int count = BurstCount(carrier);
+	if (carrier->insector()) ReleaseStarburst(carrier->spr.pos, carrier->sector(), carrier->vel, count);
+	return true;
+}
+
+ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit, int code, walltype* hitWall)
 {
 	if (!m || !run.active || run.over) return;
 	auto owner = m->GetOwner();
@@ -3524,12 +4748,71 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit)
 	active = true;
 	missile = m;
 	type = m->spr.type;
+	hitCode = code;
+	wall = (code == 0 || code == 4) ? hitWall : nullptr;
+	flight = m->vel.XY().LengthSquared() > 0 ? m->vel.XY().Angle().Degrees() : m->spr.Angles.Yaw.Degrees();
 	forgeImpacts++;
 	m->modFlags |= kModForged; // a point-blank missile is marked here (its knife, its candle)
 	liveHit = hit && hit->IsDudeActor() && !hit->IsPlayerActor() && hit->hasX() && hit->xspr.health > 0;
 	sky = !hit && m->insector() && (m->sector()->ceilingstat & CSTAT_SECTOR_SKY) && m->spr.pos.Z <= m->sector()->ceilingz + 4;
 	int offspring = Offspring(m);
-	bool bloodBought = (m->modFlags & kModBloodBought) || (emitted && forgeBloodBoughtNow);
+	bloodBought = (m->modFlags & kModBloodBought) || (emitted && forgeBloodBoughtNow);
+
+	if (liveHit) foe = hit;
+
+	// The forged starburst's carrier, struck before it burst (FlareBurst): it throws its ring from there, on the Forge's
+	// next tic (not from inside the missiles' move). Into a body it struck the ring goes on, from a little back along
+	// its flight, so it strikes it; off a wall, floor or ceiling it bounces away; into the sky it's lost, as the stock
+	// carrier is. Once: the carrier then counts as offspring, and its own stock blast is all the Grave gets of it.
+	bool carrier = type == kMissileFlareAlt && offspring == 0;
+	if (carrier)
+	{
+		SetOffspring(m, 1);
+		int count = BurstCount(m);
+		DVector3 v = m->vel;
+		if (!sky && m->insector() && v.XY().LengthSquared() > 0)
+		{
+			DVector3 pos = m->spr.pos;
+			auto sect = m->sector();
+			if (code == 0 || code == 4)
+			{
+				if (hitWall) // mirrored in the wall (the normal's side doesn't matter)
+				{
+					DVector2 n = hitWall->normalAngle().ToVector();
+					v.XY() -= n * (2 * v.XY().dot(n));
+				}
+			}
+			else if (code == 1 || code == 2) v.Z = -v.Z;
+			else if (code == 3)
+			{
+				DVector3 back = pos - v.Unit() * 16; // where it flew a moment ago
+				updatesector(back.XY(), &sect);
+				if (sect) pos = back;
+				else sect = m->sector();
+			}
+			if (starbursts.Size() < 16) starbursts.Push({ pos, sect, v, count });
+		}
+	}
+
+	// The cleaver's bite: the stock impact wounds the foe and then heals you 10; ScaleHealing makes that heal half the
+	// health the wound took from a live foe, and nothing at all when the cleaver struck no live foe. ScaleDamage makes
+	// the wound deeper (kCleaverBite).
+	if (type == kMissileButcherKnife)
+	{
+		auto p = getPlayer(myconnectindex);
+		biting = true;
+		forgeBiting = true;
+		forgeBite = liveHit ? hit : nullptr;
+		forgeBiteHealth = liveHit ? int(hit->xspr.health) : 0;
+		forgeBiteDeeper = liveHit;
+		healthBefore = p && p->GetActor() && p->GetActor()->hasX() ? int(p->GetActor()->xspr.health) : 0;
+	}
+	// The bare forged flare: the stock flare only burns a foe that can burn (at most 15 a second, however long), so it
+	// strikes as well, as Blood 1.0x's flare did (the stock code does that itself when that option is on, and to a foe
+	// that can't burn). The destructor deals it, once the stock impact has lit the foe.
+	if (type == kMissileFlareRegular && offspring == 0 && run.forge[kForgeVessel] == kVesselFlare && !run.forge[kForgeMouth] && liveHit
+		&& code == 3 && getDudeInfo(hit->spr.type)->damageVal[kDamageBurn] != 0 && !(gGameOptions.weaponsV10x && !VanillaMode()))
+		flareStrike = true;
 
 	// Witchfire: a cleaver striking a foe that has burned a while scatters its fire on every body near, you too.
 	if (Sings(kLitWitchfire) && type == kMissileButcherKnife && offspring == 0 && liveHit && hit->xspr.burnTime > 0 && LitFor(hit) >= kClock / 4
@@ -3541,18 +4824,12 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit)
 		{
 			if (d == hit || !d->hasX() || d->xspr.health <= 0 || (d->spr.pos.XY() - hit->spr.pos.XY()).Length() > 128) continue;
 			if (!cansee(MiddleOf(hit), hit->sector(), MiddleOf(d), d->sector())) continue;
-			BurnTo(owner, d, kPyreBurn);
+			BurnTo(owner, d, kWitchfireBurn);
 		}
 		LitanyFired(kLitWitchfire);
 	}
-	// The Pyre: at emission its hits are burned once each by EmitForge; later impacts burn here (a top-up for offspring).
-	if (!emitted && run.forge[kForgeWound] == kWoundPyre && liveHit)
-	{
-		bool was = hit->xspr.burnTime > 0;
-		if (offspring) BurnTo(owner, hit, kPyreBurn);
-		else actBurnSprite(owner, hit, kPyreBurn);
-		if (!was) NoteLit(hit);
-	}
+	// The Pyre: at emission its hits are lit once each by EmitForge; later impacts light here.
+	if (!emitted && run.forge[kForgeWound] == kWoundPyre && liveHit) PyreLight(owner, hit);
 	// Hymn of Ash: a fireball on flesh gives a round back; one on stone (or nothing) drinks one more.
 	if (Sings(kLitHymn) && type == kMissileFireballNapalm && offspring == 0)
 	{
@@ -3585,27 +4862,38 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit)
 			bigger = true;
 		}
 	}
-	if (run.forge[kForgeWound] == kWoundGrave && m->insector() && !bigger)
+	if (run.forge[kForgeWound] == kWoundGrave && m->insector() && !bigger && !carrier)
 	{
 		bool flesh = hit && (hit->IsDudeActor() || hit->spr.statnum == kStatThing) && GetExtInfo(hit->spr.spritetexture()).surftype == kSurfFlesh;
-		if (Sings(kLitCandle) && type == kMissileFlareRegular && flesh)
+		bool candle = Sings(kLitCandle) && type == kMissileFlareRegular && flesh;
+		if (Sings(kLitLarder) && type == kMissileButcherKnife && !liveHit && !sky && offspring == 0
+			&& (wall || !(m->sector()->floorstat & CSTAT_SECTOR_SKY))) // off a wall it lies on the floor: not in a sky pit
+			larder = true; // the Larder of Knives: a missed cleaver sticks and waits (the destructor sets it; ForgeTick keeps 8 at most)
+		else if (!GraveBurst()) // the rest are the Grave's bursts, kGraveBursts a second: past that, a hit doesn't burst
 		{
-			// Corpse-Candle: the flare lodged in flesh holds the blast; it bursts bigger in 1.5 s, or when its bearer dies.
-			if (candles.Size() < 16) candles.Push({ m, PlayClock + kClock * 3 / 2, m->spr.pos, m->sector() });
-			sfxPlay3DSound(m, 450, -1, 0);
-			LitanyFired(kLitCandle);
+			if (candle) m->modFlags &= ~kModForged; // a flare lodged without a fuse: a load doesn't light it either
 		}
-		else if (Sings(kLitLarder) && type == kMissileButcherKnife && !liveHit && !sky && offspring == 0)
-			larder = true; // the Larder of Knives: a missed cleaver sticks and waits (the destructor sets it)
-		else if (Sings(kLitRequiem))
+		else
 		{
-			if (tolls.Size() < 32) tolls.Push({ m->spr.pos, m->sector(), PlayClock }); // Requiem: it waits to ring with the others
-			lastTollAt = PlayClock;
+			if (candle)
+			{
+				// Corpse-Candle: the flare lodged in flesh holds the blast; it bursts bigger in 1.5 s, or when its bearer dies.
+				if (candles.Size() < 16) candles.Push({ m, PlayClock + kClock * 3 / 2, m->spr.pos, m->sector() });
+				sfxPlay3DSound(m, 450, -1, 0);
+				LitanyFired(kLitCandle);
+			}
+			else if (Sings(kLitRequiem))
+			{
+				if (tolls.Size() < 32) tolls.Push({ m->spr.pos, m->sector(), PlayClock }); // Requiem: it waits to ring with the others
+				lastTollAt = PlayClock;
+			}
+			else ForgeBlast(m->spr.pos, m->sector(), 0); // the Grave's small blast, the player's
 		}
-		else ForgeBlast(m->spr.pos, m->sector(), 0); // the Grave's small blast, the player's
 	}
-	// The Fetch: a hunting cleaver that strikes anything but a foe (not the sky) flies back (the destructor queues it).
-	if (Sings(kLitFetch) && type == kMissileButcherKnife && !liveHit && !sky && offspring == 0 && run.forge[kForgePath] == kPathHound)
+	// The Fetch: a hunting cleaver that strikes anything but a foe (not the sky) flies back (the destructor queues it),
+	// if it struck far enough off that it doesn't come straight back into your hand.
+	if (Sings(kLitFetch) && type == kMissileButcherKnife && !liveHit && !sky && offspring == 0 && run.forge[kForgePath] == kPathHound
+		&& owner && (m->spr.pos.XY() - owner->spr.pos.XY()).Length() >= kFetchMinRange)
 		fetch = true;
 }
 
@@ -3613,54 +4901,142 @@ ForgeImpact::~ForgeImpact()
 {
 	if (!active) return;
 	forgeImpacts--;
-	if (!missile || !missile->insector()) return;
+	// A cleaver's strike ends it (debris, or a Larder knife): it leaves the Fetch's alt list whatever it struck.
+	bool wasAlt = missile && FetchAlt(missile);
+	if (wasAlt) DropFetchAlt(missile);
+	// The bare forged flare's strike (Blood 1.0x's 20-29), after the stock burn, on a foe still standing: dealt to one
+	// the stock impact just killed, it would land on the corpse it was turned into.
+	if (flareStrike && foe && missile && foe->IsDudeActor() && foe->spr.statnum == kStatDude && foe->hasX() && foe->xspr.health > 0)
+		actDamageSprite(missile->GetOwner(), foe, kDamageBullet, (20 + int(Random(10))) << 4);
+	if (biting)
+	{
+		// A bite that healed you shows: blood from the foe it was drunk from, and a short gold flash as a pickup gives.
+		auto bitten = forgeBite;
+		forgeBiting = false;
+		forgeBiteDeeper = false;
+		forgeBite = nullptr;
+		auto p = getPlayer(myconnectindex);
+		if (bitten && p && p->GetActor() && p->GetActor()->hasX() && int(p->GetActor()->xspr.health) > healthBefore)
+		{
+			fxSpawnBlood(bitten, 0);
+			p->pickupEffect = std::max(p->pickupEffect, 10);
+		}
+	}
+	if (!missile) return;
+	// The explosion a fireball becomes is the same actor, and on a blast 64 means it spares you (kModSpareYou): the
+	// blood-bought mark is spent once the impact is worked out.
+	missile->modFlags &= ~kModBloodBought;
+	if (!missile->insector()) return;
 	if (larder)
 	{
-		// The stock impact turned the cleaver into a puff of debris: it stays a cleaver, stuck where it struck.
+		// The stock impact turned the cleaver into a puff of debris: it stays a cleaver, stuck where it struck. Its tile
+		// spins (2138 animates through the seven after it), so a stuck one shows one of those frames, still.
 		seqKill(missile);
-		missile->spr.setspritetexture(missileInfo[kMissileButcherKnife - kMissileBase].textureID());
+		missile->spr.setspritetexture(tileGetTextureID(missileInfo[kMissileButcherKnife - kMissileBase].picno + (wall ? 1 : 4)));
 		missile->spr.type = kSpriteDecoration;
 		missile->vel.Zero();
+		missile->spr.cstat &= ~CSTAT_SPRITE_ALIGNMENT_MASK;
+		DVector3 pos = missile->spr.pos;
+		if (wall)
+		{
+			// Flush on the wall at the strike point, as the stock code lays a bullet hole there (actFireVector), on the
+			// side it came from (a masked wall can be struck from behind).
+			DVector2 at = NearestPointOnWall(pos.X, pos.Y, wall);
+			DAngle normal = wall->normalAngle();
+			if ((pos.XY() - at).dot(normal.ToVector()) < 0) normal += DAngle180;
+			missile->spr.Angles.Yaw = normal;
+			missile->spr.cstat |= CSTAT_SPRITE_ALIGNMENT_WALL | CSTAT_SPRITE_YCENTER;
+			missile->spr.cstat2 |= CSTAT2_SPRITE_DECAL;
+			SetActor(missile, DVector3(at + normal.ToVector() * 0.5, pos.Z));
+		}
+		else
+		{
+			// On the floor it lies flat along its flight; off the ceiling or a body it drops there and lies the same.
+			missile->spr.Angles.Yaw = DAngle::fromDeg(flight);
+			missile->spr.cstat |= CSTAT_SPRITE_ALIGNMENT_FLOOR;
+			missile->spr.cstat &= ~CSTAT_SPRITE_YCENTER;
+			SetActor(missile, DVector3(pos.XY(), getflorzofslopeptr(missile->sector(), pos) - 0.25));
+		}
 		if (missile->hasX()) missile->xspr.data2 = kClock / 4; // it arms in a second (counted in tics, 4 PlayClock each)
 		evKillActor(missile, kCallbackRemove);               // the missile's 5-second removal doesn't apply to a knife
-		actPostSprite(missile, kStatDecoration);
-		// Eight at most: a ninth sets off the oldest.
-		TArray<DBloodActor*> knives;
-		BloodStatIterator it(kStatDecoration);
-		while (auto a = it.Next()) if (a != missile && (a->modFlags & kModForged) && a->spr.type == kSpriteDecoration) knives.Push(a);
-		if (knives.Size() >= 8)
-		{
-			ForgeBlast(knives[0]->spr.pos, knives[0]->sector(), 0);
-			actPostSprite(knives[0], kStatFree);
-		}
+		actPostSprite(missile, kStatDecoration);             // eight at most: ForgeTick sets off the oldest past that
 	}
 	else if (fetch)
 	{
 		DVector3 back = missile->spr.pos;
 		if (missile->vel.LengthSquared() > 0) back -= missile->vel.Unit() * 4;
-		if (fetching.Size() < 8) fetching.Push({ back, missile->sector() });
+		if (fetching.Size() < 8) fetching.Push({ back, missile->sector(), wasAlt, bloodBought });
 		seqKill(missile);
 		actPostSprite(missile, kStatFree);
 	}
 }
 
-// Brimstone Leap: while a forged blast is worked out, the damage it does you is turned into a throw (ScaleDamage).
+// While a forged blast is worked out, ScaleDamage sees it: Brimstone Leap turns the damage it does you into a throw,
+// a blast of the Larder's (kModSpareYou) does you none, and any other of yours does you half.
 ForgeExplosion::ForgeExplosion(DBloodActor* explosion)
 {
-	forgeExplosionNow = explosion && (explosion->modFlags & kModForged) && Sings(kLitLeap) ? explosion : nullptr;
+	bool forged = explosion && run.active && !run.over && (explosion->modFlags & kModForged);
+	forgeExplosionNow = forged && Sings(kLitLeap) ? explosion : nullptr;
+	forgeSparingNow = forged && (explosion->modFlags & kModSpareYou) ? explosion : nullptr;
+	forgeBlastNow = forged ? explosion : nullptr;
 }
 
-ForgeExplosion::~ForgeExplosion() { forgeExplosionNow = nullptr; }
+ForgeExplosion::~ForgeExplosion() { forgeExplosionNow = nullptr; forgeSparingNow = nullptr; forgeBlastNow = nullptr; }
 
-// The Litanies that live between shots: second heads, candles, tolls, knives, cleavers flying back.
+// The stock homing sets a hunting missile's speed from its type each tic: a forged cleaver keeps the Forge's.
+double MissileSpeedScale(DBloodActor* m)
+{
+	if (!m || !run.active || run.over || !(m->modFlags & kModForged) || m->spr.type != kMissileButcherKnife) return 1;
+	return kCleaverSpeed;
+}
+
+// The Pyre's lodged flares, each tic: a flare burns its bearer a second time over (the stock burn is 8 a tic, so twice
+// as hard), and goes out with the fire, or when its bearer has become one of the burning kinds (which burn out on
+// their own). One whose bearer died or is gone bursts, as actCheckFlares bursts a stock flare (it has no 5-second
+// removal to fall back on, as a fired flare has).
+static void PyreTick(DBloodActor* pl)
+{
+	TArray<DBloodActor*> bearers;
+	BloodStatIterator it(kStatFlare);
+	while (auto f = it.Next())
+	{
+		if (!(f->modFlags & kModPyreMark) || (f->spr.flags & 32)) continue; // 32: already on its way out
+		auto t = f->GetTarget();
+		if (!t || t->spr.statnum != kStatDude || !t->hasX() || t->xspr.health <= 0)
+		{
+			GibSprite(f, GIBTYPE_17, nullptr, nullptr);
+			actPostSprite(f, kStatFree);
+		}
+		else if (t->xspr.burnTime == 0 || IsBurningDude(t)) actPostSprite(f, kStatFree);
+		else bearers.Push(t);
+	}
+	for (auto t : bearers) if (t->hasX() && t->xspr.health > 0) actDamageSprite(pl, t, kDamageBurn, 8);
+}
+
+// The Litanies that live between shots: second heads, candles, tolls, knives, cleavers flying back (and the Pyre's
+// flares, which aren't a Litany's).
 static void ForgeTick()
 {
-	if (!run.active || run.over || crypt.in || gamestate != GS_LEVEL || !run.litanies) return;
+	if (!run.active || run.over || crypt.in || gamestate != GS_LEVEL) return;
 	auto p = getPlayer(myconnectindex);
 	if (!p || !p->GetActor()) return;
 	auto pl = p->GetActor();
+	PruneFetchAlt(); // after the post pass: what struck, was caught or timed out this tic has left the missiles
+	if (run.forge[kForgeWound] == kWoundPyre) PyreTick(pl);
+	// The starburst's rings thrown by carriers that struck early (ForgeImpact).
+	if (starbursts.Size())
+	{
+		auto rings = std::move(starbursts);
+		starbursts.Clear();
+		for (auto& s : rings) ReleaseStarburst(s.pos, s.sect, s.vel, s.count);
+	}
+	if (!run.litanies)
+	{
+		actPostProcess(); // the flares put out
+		return;
+	}
 
-	// Cerberus: a hunting fireball 256 from you grows a second head for another foe (8 forged fireballs at most).
+	// Cerberus: a hunting fireball 256 from you grows a second head for another foe (kCerberusFlying fireballs at most).
 	if (Sings(kLitCerberus))
 	{
 		TArray<DBloodActor*> heads;
@@ -3675,7 +5051,7 @@ static void ForgeTick()
 		}
 		for (auto m : heads)
 		{
-			if (flying >= kForgeMissiles || !m->insector()) break;
+			if (flying >= kCerberusFlying || !m->insector()) break;
 			auto second = HoundFoe(m->spr.pos, m->sector(), m->vel.XY().Angle(), kHoundCone, kHoundRange, m->GetTarget());
 			if (!second) continue;
 			DVector3 dir = (MiddleOf(second) - m->spr.pos).Unit();
@@ -3730,19 +5106,35 @@ static void ForgeTick()
 			if (group.Size() >= 2) LitanyFired(kLitRequiem);
 		}
 	}
-	// The Larder of Knives: an armed knife goes off when a body comes within 64 of it, you included.
+	// The Larder of Knives: an armed knife goes off when a foe comes within 64 of it. You don't set them off, and their
+	// blasts spare you (kModSpareYou).
 	if (Sings(kLitLarder))
 	{
+		// Eight at most: past that the oldest go off (sparing you too). Counted here, not as each sticks: by now the post
+		// pass has settled every knife a volley stuck this tic, and freed the ones already set off. Oldest first (Blood
+		// adds to a list's tail).
+		TArray<DBloodActor*> knives;
+		BloodStatIterator kt(kStatDecoration);
+		while (auto k = kt.Next())
+			if ((k->modFlags & kModForged) && k->spr.type == kSpriteDecoration && !(k->spr.flags & 32)) knives.Push(k);
+		unsigned excess = knives.Size() > 8 ? knives.Size() - 8 : 0;
 		TArray<DBloodActor*> blown;
-		BloodStatIterator it(kStatDecoration);
-		while (auto k = it.Next())
+		for (unsigned i = 0; i < knives.Size(); i++)
 		{
-			if (!(k->modFlags & kModForged) || k->spr.type != kSpriteDecoration || !k->hasX() || !k->insector()) continue;
+			auto k = knives[i];
+			if (i < excess)
+			{
+				if (k->insector()) ForgeBlast(k->spr.pos, k->sector(), 0, true);
+				actPostSprite(k, kStatFree);
+				continue;
+			}
+			if (!k->hasX() || !k->insector()) continue;
 			if (k->xspr.data2 > 0) { k->xspr.data2--; continue; }
 			BloodStatIterator di(kStatDude);
 			while (auto d = di.Next())
 			{
-				if (!d->hasX() || d->xspr.health <= 0 || (d->spr.pos.XY() - k->spr.pos.XY()).Length() > 64 || std::abs(d->spr.pos.Z - k->spr.pos.Z) > 64) continue;
+				if (d->IsPlayerActor() || !d->hasX() || d->xspr.health <= 0) continue;
+				if ((d->spr.pos.XY() - k->spr.pos.XY()).Length() > 64 || std::abs(d->spr.pos.Z - k->spr.pos.Z) > 64) continue;
 				if (!cansee(k->spr.pos, k->sector(), MiddleOf(d), d->sector())) continue;
 				blown.Push(k);
 				break;
@@ -3750,12 +5142,12 @@ static void ForgeTick()
 		}
 		for (auto k : blown)
 		{
-			ForgeBlast(k->spr.pos, k->sector(), 0);
+			ForgeBlast(k->spr.pos, k->sector(), 0, true);
 			actPostSprite(k, kStatFree);
 			LitanyFired(kLitLarder);
 		}
 	}
-	// The Fetch: cleavers that struck stone fly back at your chest; caught within 48, they heal you 5.
+	// The Fetch: cleavers that struck stone fly back at your chest; caught within 48, they give back what they cost.
 	if (Sings(kLitFetch))
 	{
 		DVector3 chest(pl->spr.pos.XY(), p->zWeapon);
@@ -3769,6 +5161,8 @@ static void ForgeTick()
 			if (dir.LengthSquared() <= 1) continue;
 			auto twin = ForgeSpawnMissile(f.pos, f.sect, dir.Unit(), kMissileButcherKnife, 2);
 			if (!twin) continue;
+			if (f.alt) NoteFetchAlt(twin);
+			if (f.blood) twin->modFlags |= kModBloodBought; // offspring 2: no Litany reads it, and its strike clears it
 			evPostActor(twin, 3 * kClock, kCallbackRemove);
 			twins++;
 			LitanyFired(kLitFetch);
@@ -3781,14 +5175,30 @@ static void ForgeTick()
 			if (!(m->modFlags & kModForged) || Offspring(m) != 2) continue;
 			DVector3 d = chest - m->spr.pos;
 			if (d.Length() < 48) { caught.Push(m); continue; }
-			m->vel = d.Unit() * missileInfo[m->spr.type - kMissileBase].fVelocity();
+			m->vel = d.Unit() * ForgeSpeed(m->spr.type);
 		}
+		// The Vessel's ammo back for what the caught cleavers cost (Rates: a round's drink buys perRound of them), so a
+		// flare gun firing five a flare gives one back for every five caught. A round a cleaver would let a flare shot
+		// at a wall bring five flares back. An alt pull's cleaver cost a third less (kForgeAltBonus): it gives that
+		// much back. Counted in thirds of a drink. One bought with blood (the Blood Price, dry) cost no ammo, so it
+		// gives none back: else health would turn into ammo.
+		auto r = Rates(run.forge);
+		int ammo = forgeVessels[run.forge[kForgeVessel]].ammo;
 		for (auto m : caught)
 		{
+			bool wasAlt = FetchAlt(m);
+			if (wasAlt) DropFetchAlt(m);
+			if (!(m->modFlags & kModBloodBought)) fetchCredit += (wasAlt ? 2 : 3) * r.drink;
 			evKillActor(m);
 			actPostSprite(m, kStatFree);
-			ForgeHeal(5);
-			sfxPlay3DSound(pl, 780, -1, 0);
+			bool refund = false;
+			while (r.perRound > 0 && fetchCredit >= 3 * r.perRound)
+			{
+				fetchCredit -= 3 * r.perRound;
+				p->ammoCount[ammo] = ClipHigh(p->ammoCount[ammo] + 1, gAmmoInfo[ammo].max);
+				refund = true;
+			}
+			if (refund) sfxPlay3DSound(pl, 782, -1, 0); // as Hymn of Ash's refund
 		}
 	}
 	// Hymn of Ash's records last as long as a missile can fly (5 s); a shot goes with its record.
@@ -3802,6 +5212,16 @@ static void ForgeTick()
 int ScaleHealing(DBloodActor* actor, int add)
 {
 	if (!run.active || run.over || !actor || !actor->IsPlayerActor() || add <= 0) return add;
+	if (forgeBiting)
+	{
+		// A forged cleaver's stock heal (10, whatever it did): half the health its wound took from a live foe, rounded,
+		// and at least 1; none when it struck no live foe. actHealDude counts whole health; health is in sixteenths.
+		int lost = forgeBite && forgeBite->hasX() ? std::max(forgeBiteHealth - int(forgeBite->xspr.health), 0) : 0;
+		if (lost <= 0) return 0;
+		// Already whole (actHealDude's threshold here is your start health): nothing heals, so none of the cap is spent.
+		if (actor->hasX() && actor->xspr.health >= unsigned(getDudeInfo(actor->spr.type)->startHealth << 4)) return 0;
+		add = std::max(1, (lost / 2 + 8) >> 4);
+	}
 	if (forgeImpacts > 0) // healing from a forged missile (the cleaver): kForgeHealPerSecond at most
 	{
 		int second = PlayClock / kClock;
@@ -3922,12 +5342,24 @@ void Serialize(FSerializer& arc)
 				("nextwave", run.nextWave)
 				("partime", run.parTime)
 				("nextovertime", run.nextOvertime)
-				("unspent", run.unspent);
+				("unspent", run.unspent)
+				("omenrolls", run.omenRolls);
 			arc.Array("cov", run.cov, kNumConditions);
 			arc.Array("kit", run.kit, kNumKit);
 			arc.Array("offers", run.offers, 3);
 			arc.Array("forge", run.forge, kForgeSlots);
 			arc("litanies", run.litanies);
+			// The Omens running, four numbers each: the Omen, its time left, its base time, the most it has had. Their
+			// stock powerups' time is the player's own (saved with it); their base effects start again on the load.
+			TArray<int> running;
+			for (auto& r : omens)
+			{
+				running.Push(r.id);
+				running.Push(r.left);
+				running.Push(r.base);
+				running.Push(r.peak);
+			}
+			arc("omens", running);
 			arc.EndObject();
 		}
 		return;
@@ -3936,7 +5368,10 @@ void Serialize(FSerializer& arc)
 	// Reading: the save's run, if it has one that can still go on.
 	startingRun = false;
 	refusedLoad = false;
+	omens.Clear();
+	reliquaryHint = "";
 	Run loaded;
+	TArray<int> running;
 	bool has = false;
 	if (arc.BeginObject("roguelite"))
 	{
@@ -3958,12 +5393,14 @@ void Serialize(FSerializer& arc)
 			("nextwave", loaded.nextWave)
 			("partime", loaded.parTime)
 			("nextovertime", loaded.nextOvertime)
-			("unspent", loaded.unspent);
+			("unspent", loaded.unspent)
+			("omenrolls", loaded.omenRolls);
 		arc.Array("cov", loaded.cov, kNumConditions);
 		arc.Array("kit", loaded.kit, kNumKit);
 		arc.Array("offers", loaded.offers, 3);
 		arc.Array("forge", loaded.forge, kForgeSlots);
 		arc("litanies", loaded.litanies);
+		arc("omens", running);
 		arc.EndObject();
 		has = true;
 	}
@@ -3978,6 +5415,9 @@ void Serialize(FSerializer& arc)
 	run = std::move(loaded);
 	run.active = true;
 	run.curseClock = INT_MIN / 2;
+	for (unsigned i = 0; i + 3 < running.Size(); i += 4) // the save's Omens (OmensLoaded starts their effects)
+		if (running[i] >= 0 && running[i] < kNumOmens && running[i + 1] > 0 && running[i + 2] > 0 && !RunningOf(running[i]))
+			omens.Push({ running[i], running[i + 1], running[i + 2], std::max(running[i + 3], running[i + 1]), false });
 	bmod::modeEnemyTimeScale = run.over ? 1. : 1. + 0.15 * run.cov[kHaste];
 }
 
@@ -4299,6 +5739,119 @@ CCMD(rl_kit)
 	for (auto& c : conditions)
 		if (*c.cvar > 0) cov.AppendFormat("%s%s %d", cov.IsEmpty() ? "" : ", ", c.name, int(*c.cvar));
 	Printf("Covenant: %s (Dread %d)\n", cov.IsEmpty() ? "none" : cov.GetChars(), ChosenDread());
+}
+
+// The Omens, for testing every one without a run of luck. An Omen is named by its number in "rl_omen list", by its name
+// without spaces or capitals ("twinvessel", "deathsgrin"), or by the start of that ("twin").
+static int FindOmen(const char* arg)
+{
+	auto squash = [](const char* s)
+	{
+		FString out;
+		for (; *s; s++) if (isalnum((unsigned char)*s)) out += char(tolower((unsigned char)*s));
+		return out;
+	};
+	char* end;
+	long n = strtol(arg, &end, 10);
+	if (*arg && !*end) return n >= 1 && n <= kNumOmens ? int(n) - 1 : -1;
+	FString want = squash(arg);
+	if (want.IsEmpty()) return -1;
+	for (int i = 0; i < kNumOmens; i++) if (squash(omenInfo[i].name).Compare(want) == 0) return i;
+	for (int i = 0; i < kNumOmens; i++) if (squash(omenInfo[i].name).IndexOf(want) == 0) return i;
+	return -1;
+}
+
+static bool OmenReady(const char* cmd)
+{
+	auto p = getPlayer(myconnectindex);
+	if (OmensLive() && gamestate == GS_LEVEL && p && p->GetActor() && p->GetActor()->insector()) return true;
+	Printf("%s: no run in progress (or rl_omens is 0, or this is the Crypt)\n", cmd);
+	return false;
+}
+
+// One lying in front of you (or beside you, with no room ahead; at your feet, with none at all).
+static void SpawnOmenAhead(const char* cmd, int id)
+{
+	auto p = getPlayer(myconnectindex);
+	auto pl = p->GetActor();
+	std::mt19937 rng(uint32_t(PlayClock) ^ 0x5BD1E995u);
+	DVector2 ahead = pl->spr.pos.XY() + pl->spr.Angles.Yaw.ToVector() * 64;
+	auto s = pl->sector();
+	updatesector(ahead, &s);
+	DVector3 floor = FloorAt(pl);
+	TArray<DVector2> taken;
+	DVector2 spot = pl->spr.pos.XY();
+	sectortype* sect = pl->sector();
+	if (s && cansee(DVector3(pl->spr.pos.XY(), p->zView), pl->sector(), DVector3(ahead, getflorzofslopeptr(s, ahead.X, ahead.Y) - 16), s)
+		&& SpotOk(s, ahead, floor.Z, taken, true))
+	{
+		spot = ahead;
+		sect = s;
+	}
+	else FindItemSpot(rng, pl->sector(), floor, 24, 80, taken, spot, sect);
+	if (SpawnOmenItem(sect, spot, id)) Printf(PRINT_NOTIFY, "%s: %s\n", cmd, omenInfo[id].name);
+	else Printf("%s: no room for it\n", cmd);
+}
+
+CCMD(rl_omen)
+{
+	if (argv.argc() < 2)
+	{
+		Printf("usage: rl_omen list | rl_omen <name|number> [seconds]   (rl_omen_drop, rl_reliquary <name|number>: one in front of you)\n");
+		return;
+	}
+	if (!stricmp(argv[1], "list"))
+	{
+		for (int i = 0; i < kNumOmens; i++)
+		{
+			auto& o = omenInfo[i];
+			auto r = RunningOf(i);
+			Printf("%2d  %-13s %-7s %2d s  %s%s\n", i + 1, o.name, omenTierNames[o.tier], o.seconds, o.sentence,
+				r ? FStringf("  (running: %d s left)", bmod::SecondsLeft(r->left)).GetChars() : "");
+		}
+		Printf("Drops: every champion (blue: common %d%%, rare %d%%; red: rare %d%%, relic %d%%), a plain enemy 1 in %d (common %d%%,"
+			" rare %d%%, relic %d%%). Cursed reliquaries (the gambles, taken with Use): red champions 1 in %d, blue 1 in %d. rl_omens %d\n",
+			int(100 * (1 - kOmenBlueRare) + 0.5), int(100 * kOmenBlueRare + 0.5), int(100 * (1 - kOmenRedRelic) + 0.5), int(100 * kOmenRedRelic + 0.5),
+			int(1 / kOmenPlain + 0.5), int(100 * (1 - kOmenPlainRare - kOmenPlainRelic) + 0.5), int(100 * kOmenPlainRare + 0.5),
+			int(100 * kOmenPlainRelic + 0.5), int(1 / kReliquaryRed + 0.5), int(1 / kReliquaryBlue + 0.5), (int)rl_omens);
+		return;
+	}
+	int id = FindOmen(argv[1]);
+	if (id < 0)
+	{
+		Printf("rl_omen: no Omen '%s' (rl_omen list)\n", argv[1]);
+		return;
+	}
+	if (!OmenReady("rl_omen")) return;
+	int seconds = argv.argc() > 2 ? std::clamp(atoi(argv[2]), 1, 600) : omenInfo[id].seconds;
+	if (!GrantOmen(id, seconds * kClock))
+	{
+		Printf("rl_omen: %s can't take hold %s\n", omenInfo[id].name, HoldBar(id).GetChars());
+		return;
+	}
+	Printf(PRINT_NOTIFY, "Omen: %s, %d s: %s\n", omenInfo[id].name, bmod::SecondsLeft(RunningOf(id)->left), omenInfo[id].sentence);
+}
+
+CCMD(rl_omen_drop)
+{
+	int id = argv.argc() > 1 ? FindOmen(argv[1]) : -1;
+	if (id < 0 || omenInfo[id].tier == kOmenGamble)
+	{
+		Printf("usage: rl_omen_drop <name|number>   (an Omen; a gamble comes in a cursed reliquary: rl_reliquary)\n");
+		return;
+	}
+	if (OmenReady("rl_omen_drop")) SpawnOmenAhead("rl_omen_drop", id);
+}
+
+CCMD(rl_reliquary)
+{
+	int id = argv.argc() > 1 ? FindOmen(argv[1]) : -1;
+	if (id < 0 || omenInfo[id].tier != kOmenGamble)
+	{
+		Printf("usage: rl_reliquary <name|number>   (a gamble: Glass Cannon, Frenzy, Powder Keg; rl_omen list)\n");
+		return;
+	}
+	if (OmenReady("rl_reliquary")) SpawnOmenAhead("rl_reliquary", id);
 }
 
 CCMD(rl_clearmap)

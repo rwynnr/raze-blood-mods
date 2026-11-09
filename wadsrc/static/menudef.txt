@@ -2266,6 +2266,7 @@ OptionMenu "RogueliteMenu" protected
 	Option "Skill",							"rl_skill", "RogueliteSkills"
 	Submenu "The Armory: your starting kit",	"RogueliteArmory"
 	Submenu "The Covenant: harder runs, more ichor",	"RogueliteCovenant"
+	Option "Omens: the dead drop timed boons",	"rl_omens", "OnOff"
 	StaticText ""
 }
 
@@ -2329,7 +2330,7 @@ OptionValue "RLForgeMouth"
 {
 	0, "None: the gun's own round"
 	1, "Hellmouth (20): napalm fireballs"
-	2, "Cleaver's Psalm (15): cleavers that heal you"
+	2, "Cleaver's Psalm (15): fast cleavers that heal you as they wound"
 }
 OptionValue "RLForgePath"
 {
@@ -2340,7 +2341,7 @@ OptionValue "RLForgePath"
 OptionValue "RLForgeWound"
 {
 	0, "None"
-	1, "Pyre (10): sets foes alight"
+	1, "Pyre (10): a lodged flare sets foes alight"
 	2, "Gravedigger's Blast (20): missiles burst where they land"
 }
 OptionValue "RLForgePenance"
@@ -2376,7 +2377,7 @@ OptionMenu "RogueliteForge" protected
 	StaticText " ", 1
 	Submenu "The Book of Litanies",				"RogueliteBook"
 	StaticText ""
-	StaticText "One forged gun a run. It keeps its key, ammo, hands and alt fire: only its primary fire changes.", 1
+	StaticText "One forged gun a run. It keeps its key, ammo and hands; its fire changes, and its alt fire is a forged mode.", 1
 	StaticText "Its points come out of the kit's. A rune that can't go with the others is taken off, and the line", 1
 	StaticText "above says why.", 1
 	StaticText ""
@@ -2399,7 +2400,7 @@ OptionMenu "RogueliteCovenant" protected
 	StaticText "Each rank adds Dread, and each point of Dread pays +10% ichor.", 1
 	StaticText "Dread per rank: Haste, Horde, Champions 2; Hourglass, Wardens 3; the rest 1.", 1
 	StaticText ""
-	Slider "Wrath: enemies deal +20% damage",	"rl_cov_wrath", 0, 5, 1, 0
+	Slider "Wrath: enemies +20% damage, bullets +10%",	"rl_cov_wrath", 0, 5, 1, 0
 	Slider "Flesh: enemies +15% health",		"rl_cov_flesh", 0, 4, 1, 0
 	Slider "Haste: enemies 15% faster",			"rl_cov_haste", 0, 2, 1, 0
 	Slider "Horde: +20% enemies, in waves",		"rl_cov_horde", 0, 3, 1, 0

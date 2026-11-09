@@ -2871,7 +2871,10 @@ DBloodActor* actDropObject(DBloodActor* actor, int nType)
 bool actHealDude(DBloodActor* actor, int add, int threshold)
 {
 	if (!actor) return false;
-	add = rogue::ScaleHealing(actor, add); // blood2d roguelite: the Covenant's Famine (stock outside a run)
+	// blood2d roguelite: the Covenant's Famine, the Forge's cleavers (stock outside a run); nothing left: no heal sound
+	int scaled = rogue::ScaleHealing(actor, add);
+	if (add > 0 && scaled <= 0) return false;
+	add = scaled;
 	add <<= 4;
 	threshold <<= 4;
 	if (actor->xspr.health < (unsigned)threshold)
@@ -3744,12 +3747,15 @@ int actDamageSprite(DBloodActor* source, DBloodActor* actor, DAMAGE_TYPE damageT
 
 	if (source == nullptr) source = actor;
 	damage = bmod::ScaleDamage(source, actor, damage);
-	damage = rogue::ScaleDamage(source, actor, damage); // blood2d roguelite: champions hit harder
+	int unscaled = damage;
+	damage = rogue::ScaleDamage(source, actor, damageType, damage); // blood2d roguelite: champions hit harder
+	if (unscaled > 0 && damage <= 0) return 0; // blood2d roguelite: a hit the run made harmless (your own Larder or Leap blast) isn't one: no pain sound
 
 	DBloodPlayer* pSourcePlayer = nullptr;
 	if (source->IsPlayerActor()) pSourcePlayer = getPlayer(source->spr.type - kDudePlayer1);
 	if (!gGameOptions.bFriendlyFire && IsTargetTeammate(pSourcePlayer, actor)) return 0;
 
+	rogue::OmenWound omenWound(source, actor); // blood2d roguelite: Bloodlust (an Omen) heals you from the health your hit takes
 	switch (actor->spr.statnum)
 	{
 	case kStatDude:
@@ -3805,7 +3811,7 @@ static void actImpactMissile(DBloodActor* missileActor, int hitCode)
 	walltype* pWallHit = nullptr;
 
 	actHitcodeToData(hitCode, &gHitInfo, &actorHit, &pWallHit);
-	rogue::ForgeImpact forgeImpact(missileActor, actorHit); // blood2d roguelite: a forged missile's Wound, for this impact
+	rogue::ForgeImpact forgeImpact(missileActor, actorHit, hitCode, pWallHit); // blood2d roguelite: a forged missile's Wound, for this impact
 
 	const THINGINFO* pThingInfo = nullptr;
 	DUDEINFO* pDudeInfo = nullptr;
@@ -5200,7 +5206,7 @@ int MoveMissile(DBloodActor* actor)
 
 		if (target->spr.statnum == kStatDude && target->hasX() && target->xspr.health > 0)
 		{
-			double vel = missileInfo[actor->spr.type - kMissileBase].fVelocity();
+			double vel = missileInfo[actor->spr.type - kMissileBase].fVelocity() * rogue::MissileSpeedScale(actor); // blood2d roguelite: forged cleavers fly faster
 			actor->vel.SetXY(DVector2(vel, 0).Rotated((target->spr.pos - actor->spr.pos).Angle()));
 
 			double deltaz = (target->spr.pos.Z - actor->spr.pos.Z) / (10 * 256);
