@@ -5,23 +5,21 @@
 // seconds, picked by each effect's chance (chaos_chance_<name>, 0-10); up to
 // chaos_maxactive run at once (when a new one starts, the one closest to
 // ending makes room). A new effect is announced with a big title at the top
-// for two seconds, then shown as a chip in a row above the status bar until it
-// ends. Settings menu: Options > Chaos mode (wadsrc/static/menudef.txt).
+// for two seconds, then shown as a chip in the mod base's shared chip row above
+// the status bar until it ends. Settings menu: Options > Chaos mode
+// (wadsrc/static/menudef.txt).
 // Design in the blood2d workspace, docs/chaos.md.
 //
 //---------------------------------------------------------------------------
 
 #include "ns.h"
 #include <algorithm>
-#include <climits>
 #include <random>
 #include <vector>
 #include "build.h"
 #include "blood.h"
 #include "c_cvars.h"
 #include "c_dispatch.h"
-#include "gamecvars.h"
-#include "texturemanager.h"
 #include "v_draw.h"
 #include "v_font.h"
 #include "printf.h"
@@ -382,12 +380,13 @@ void ChaosEvent(const bmod::EventInfo& ev)
 
 //---------------------------------------------------------------------------
 //
-// drawing: the warning and new effects' big titles at the top; a row of chips
-// just above the status bar (oldest left), each in its category's colour with
-// the seconds left and a fill that drains, then a dashed "next" chip with the
-// countdown (hidden while the warning shows). Ending chips fade out where they
-// were; the rest close the gap. With the status bar hidden (hud_size, No HUD)
-// the row sits at the bottom edge; a row too wide for the screen wraps upward.
+// drawing: the warning and new effects' big titles at the top, drawn here. The
+// chips go to the mod base's shared chip row just above the status bar
+// (bmod::AddChip; the base lays the row out and draws it once every drawer has
+// run): oldest left, each in its category's colour with the seconds left and a
+// fill that drains, then a dashed "next" chip with the countdown (hidden while
+// the warning shows). Ending chips fade out where they were; the rest close the
+// gap.
 //
 //---------------------------------------------------------------------------
 
@@ -407,73 +406,9 @@ PalEntry CategoryRGB(bmod::Category c)
 	return c == bmod::Category::Silly ? PalEntry(0xff4fdc4f) : c == bmod::Category::Twist ? PalEntry(0xfff2c230) : PalEntry(0xffff4a3a);
 }
 
-// Screen y of the top of the status bar or HUD, found the way the level stats find it (statusbar.zs,
-// PrintLevelStats, with the heights Blood's sbar.zs reports); the bottom edge when nothing is drawn there.
-double ChipsFloor()
-{
-	double h = twod->GetHeight();
-	if (bmod::mods.hideHud || hud_size == Hud_Nothing) return h;
-	double space = 28; // the fullscreen HUDs
-	if (hud_size <= Hud_StbarOverlay)
-	{
-		auto id = TexMan.CheckForTexture("Statusbar", ETextureType::Any);
-		auto tex = id.isValid() ? TexMan.GetGameTexture(id) : nullptr;
-		if (tex) space = tex->GetDisplayHeight();
-	}
-	return h * (200. - space * (double)hud_scalefactor) / 200.;
-}
-
-struct Chip
-{
-	FString text;
-	PalEntry rgb;
-	double frac;  // time left, 0..1 (the fill)
-	double alpha;
-	bool next;    // the dashed countdown chip
-	double w;
-};
-
-void DrawChip(const Chip& c, double x, double y, double h, double tsc, double padX, double padY, double sc)
-{
-	int ix = int(x), iy = int(y), iw = int(c.w), ih = int(h);
-	int bt = std::max(1, int(sc * 0.75 + 0.5)); // border thickness
-	float ba = float(0.9 * c.alpha);
-	Dim(twod, 0xff000000, float(0.55 * c.alpha), ix, iy, iw, ih);
-	if (!c.next)
-	{
-		int fw = int(iw * std::clamp(c.frac, 0., 1.));
-		if (fw > 0) Dim(twod, c.rgb, float(0.3 * c.alpha), ix, iy, fw, ih);
-		Dim(twod, c.rgb, ba, ix, iy, iw, bt);
-		Dim(twod, c.rgb, ba, ix, iy + ih - bt, iw, bt);
-		Dim(twod, c.rgb, ba, ix, iy, bt, ih);
-		Dim(twod, c.rgb, ba, ix + iw - bt, iy, bt, ih);
-	}
-	else
-	{
-		int dash = std::max(3, int(4 * sc)), space = std::max(2, int(3 * sc));
-		for (int dx = 0; dx < iw; dx += dash + space)
-		{
-			int len = std::min(dash, iw - dx);
-			Dim(twod, c.rgb, ba, ix + dx, iy, len, bt);
-			Dim(twod, c.rgb, ba, ix + dx, iy + ih - bt, len, bt);
-		}
-		for (int dy = 0; dy < ih; dy += dash + space)
-		{
-			int len = std::min(dash, ih - dy);
-			Dim(twod, c.rgb, ba, ix, iy + dy, bt, len);
-			Dim(twod, c.rgb, ba, ix + iw - bt, iy + dy, bt, len);
-		}
-	}
-	DrawText(twod, SmallFont, c.next ? CR_GRAY : CR_WHITE, x + padX, y + padY, c.text.GetChars(),
-		DTA_ScaleX, tsc, DTA_ScaleY, tsc, DTA_Alpha, c.alpha, TAG_DONE);
-}
-
-int SecondsLeft(int clocks) { return (std::max(clocks, 0) + kClock - 1) / kClock; }
-
 void ChaosDraw(DBloodPlayer*)
 {
 	if (!chaos || !on) return;
-	double W = twod->GetWidth();
 	double sc = twod->GetHeight() / 480.;
 	for (unsigned i = fading.Size(); i-- > 0; )
 		if (PlayClock - fading[i].from >= kFade || PlayClock < fading[i].from) fading.Delete(i);
@@ -500,55 +435,27 @@ void ChaosDraw(DBloodPlayer*)
 		y += BigFont->GetHeight() * tsc + 3 * sc;
 	}
 
-	// Bottom: the chips, by order of arrival (fading ones keep their place), then the countdown.
-	std::vector<std::pair<int, Chip>> list;
+	// Bottom: the chips, by order of arrival (fading ones keep their place), then the countdown, queued in that
+	// order for the shared chip row.
+	std::vector<std::pair<int, bmod::Chip>> list;
 	for (auto& r : running)
 	{
 		int age = PlayClock - r.start;
 		if (r.effect->oneShot || age < kAnnounce) continue;
 		double frac = r.end > r.start ? double(r.end - PlayClock) / (r.end - r.start) : 0.;
 		double alpha = std::clamp((age - kAnnounce) / (0.25 * kClock), 0., 1.); // fades in as the title goes
-		list.push_back({ r.seq, { FStringf("%s %ds", r.title.GetChars(), SecondsLeft(r.end - PlayClock)),
-			CategoryRGB(r.effect->category), frac, alpha, false, 0 } });
+		list.push_back({ r.seq, { FStringf("%s %ds", r.title.GetChars(), bmod::SecondsLeft(r.end - PlayClock)),
+			CategoryRGB(r.effect->category), frac, alpha } });
 	}
 	for (auto& f : fading)
 	{
 		double alpha = 1. - double(PlayClock - f.from) / kFade;
-		list.push_back({ f.seq, { FStringf("%s 0s", f.title.GetChars()), CategoryRGB(f.category), 0., alpha, false, 0 } });
+		list.push_back({ f.seq, { FStringf("%s 0s", f.title.GetChars()), CategoryRGB(f.category), 0., alpha } });
 	}
 	std::stable_sort(list.begin(), list.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+	for (auto& e : list) bmod::AddChip(e.second);
 	if (!(picked && pending))
-		list.push_back({ INT_MAX, { FStringf("next %ds", SecondsLeft(nextStart - PlayClock)), PalEntry(0xff9a9a9a), 0., 0.8, true, 0 } });
-	if (list.empty()) return;
-
-	double tsc = 1.2 * sc, padX = 7 * sc, padY = 3 * sc, gap = 6 * sc;
-	double chipH = SmallFont->GetHeight() * tsc + 2 * padY;
-	double maxW = W * 0.9;
-	std::vector<std::vector<int>> lines;
-	std::vector<double> lineW;
-	for (int i = 0; i < int(list.size()); i++)
-	{
-		Chip& c = list[i].second;
-		c.w = SmallFont->StringWidth(c.text.GetChars()) * tsc + 2 * padX;
-		if (lines.empty() || lineW.back() + gap + c.w > maxW)
-		{
-			lines.push_back({});
-			lineW.push_back(-gap);
-		}
-		lines.back().push_back(i);
-		lineW.back() += gap + c.w;
-	}
-	double bottom = ChipsFloor() - 5 * sc;
-	for (size_t l = 0; l < lines.size(); l++)
-	{
-		double ly = bottom - (l + 1) * chipH - l * gap * 0.5; // the first line sits lowest; more wrap upward
-		double x = (W - lineW[l]) * 0.5;
-		for (int i : lines[l])
-		{
-			DrawChip(list[i].second, x, ly, chipH, tsc, padX, padY, sc);
-			x += list[i].second.w + gap;
-		}
-	}
+		bmod::AddChip({ FStringf("next %ds", bmod::SecondsLeft(nextStart - PlayClock)), PalEntry(0xff9a9a9a), 0., 0.8, true });
 }
 
 struct ChaosRegistrar
