@@ -2095,14 +2095,21 @@ int CurseWeight(const bmod::Effect* e)
 	return e->category == bmod::Category::Silly ? 6 : e->category == bmod::Category::Twist ? 4 : 2;
 }
 
+// An effect of e's group is running (chaos's, the curse's or an Omen's), one that starting e would end.
+bool RivalActive(const bmod::Effect* e)
+{
+	for (int i = 0; i < bmod::NumEffects(); i++)
+		if (bmod::IsActive(&bmod::GetEffect(i)) && bmod::Rivals(&bmod::GetEffect(i), e)) return true;
+	return false;
+}
+
 // Starts the curse unless it's on already, or a rival effect (from chaos mode) is on: then it comes back later.
 bool StartCurse()
 {
 	auto e = CurseEffect();
 	if (!e) return false;
 	if (bmod::IsActive(e)) return true;
-	for (int i = 0; i < bmod::NumEffects(); i++)
-		if (bmod::IsActive(&bmod::GetEffect(i)) && bmod::Rivals(&bmod::GetEffect(i), e)) return false;
+	if (RivalActive(e)) return false;
 	return bmod::StartEffect(e);
 }
 
@@ -2569,10 +2576,11 @@ constexpr int omenPal[] = { 0, 10, 2, 9 };
 constexpr int kOmenShade = -128;
 constexpr int kOmenKillTime = kClock;                // a kill of yours adds this to each boon running, up to 2x its time
 constexpr double kReliquaryRange = 96;               // a reliquary names itself, and Use takes it, this near (to the eye)
-constexpr double kReliquaryCone = 30;                // and this close to the way you face (degrees)
+constexpr double kReliquaryCone = 25;                // and this close to where you look, up and down too (degrees)
 constexpr int kLustPerSecond = 15 << 4;              // Bloodlust heals at most this a second (health is in sixteenths)
 constexpr int kLustTop = 100 << 4;                   // and never above this
-constexpr uint32_t kBoonChip = 0xfff2c230, kGambleChip = 0xffb45cff; // the chips' gold (chaos's twist gold) and purple
+// The chips' gold (chaos's twist gold), purple, and the map curse's red (chaos's nasty red).
+constexpr uint32_t kBoonChip = 0xfff2c230, kGambleChip = 0xffb45cff, kCurseChip = 0xffff4a3a;
 
 struct RunningOmen
 {
@@ -2679,9 +2687,28 @@ void ResetOmens()
 	omenPowerItem = nullptr;
 }
 
-// An Omen begins, or one running gets more time: clocks of it, up to 3x its time. False: it can't take hold now (its
-// base effect can't run: Dread and Frenzy need enemies left), and its pickup stays. A base effect the curse or chaos
-// runs already does: the Omen rides it, and leaves it running as it ends.
+// An Omen can begin now (one running can always take more time): not when its base effect can't run (Dread and Frenzy
+// need enemies left), nor when starting it would end another Omen's (Dread's slow and Frenzy's speed are rivals: the one
+// running stays, and the newcomer waits on the floor). *rival: that Omen, else -1.
+bool CanGrant(int id, int* rival = nullptr)
+{
+	if (rival) *rival = -1;
+	if (id < 0 || id >= kNumOmens) return false;
+	if (RunningOf(id)) return true;
+	auto e = OmenEffect(id);
+	if (omenInfo[id].effect && (!e || (!bmod::IsActive(e) && !bmod::CanStart(e)))) return false;
+	for (auto& r : omens)
+		if (bmod::Rivals(OmenEffect(r.id), e))
+		{
+			if (rival) *rival = r.id;
+			return false;
+		}
+	return true;
+}
+
+// An Omen begins, or one running gets more time: clocks of it, up to 3x its time. False: it can't take hold now
+// (CanGrant), and its pickup stays. A base effect the curse or chaos runs already does: the Omen rides it, and leaves it
+// running as it ends.
 bool GrantOmen(int id, int clocks, bool* chimed = nullptr)
 {
 	auto p = getPlayer(myconnectindex);
@@ -2690,8 +2717,8 @@ bool GrantOmen(int id, int clocks, bool* chimed = nullptr)
 	auto r = RunningOf(id);
 	if (!r)
 	{
+		if (!CanGrant(id)) return false;
 		auto e = OmenEffect(id);
-		if (o.effect && (!e || (!bmod::IsActive(e) && !bmod::CanStart(e)))) return false;
 		bool owns = e && !bmod::IsActive(e) && bmod::StartEffect(e); // ends a rival first: Dread's slow ends a fast curse
 		omens.Push({ id, 0, clocks, 0, owns });
 		r = &omens.Last();
@@ -2830,15 +2857,19 @@ void DropOmens(DBloodActor* victim, bool champion, bool red)
 	}
 }
 
-// The cursed reliquary you face: within kReliquaryRange of your eye and kReliquaryCone of your view, in sight; the
-// nearest.
-DBloodActor* NearReliquary(DBloodPlayer* p)
+// The cursed reliquary you face: within kReliquaryRange of your eye and kReliquaryCone of your view (where Use's own scan
+// aims, its pitch too: one at your feet you look down at), in sight; the nearest that can take hold now (CanGrant).
+// *blocked: the nearest you face that can't, so the hint can say why.
+DBloodActor* NearReliquary(DBloodPlayer* p, DBloodActor** blocked = nullptr)
 {
+	if (blocked) *blocked = nullptr;
 	auto pl = p ? p->GetActor() : nullptr;
 	if (!pl || !pl->insector()) return nullptr;
 	DVector3 eye(pl->spr.pos.XY(), p->zView);
+	DVector3 view = DVector3(pl->spr.Angles.Yaw.ToVector(), p->slope).Unit(); // as ActionScan aims
+	double cone = DAngle::fromDeg(kReliquaryCone).Cos();
 	DBloodActor* best = nullptr;
-	double bestDist = kReliquaryRange;
+	double bestDist = kReliquaryRange, blockedDist = kReliquaryRange;
 	BloodStatIterator it(kStatItem);
 	while (auto a = it.Next())
 	{
@@ -2846,30 +2877,43 @@ DBloodActor* NearReliquary(DBloodPlayer* p)
 		double top, bottom;
 		GetActorExtents(a, &top, &bottom);
 		DVector3 mid(a->spr.pos.XY(), (top + bottom) / 2);
-		double dist = (mid - eye).Length();
-		DVector2 d = mid.XY() - eye.XY();
-		if (dist >= bestDist || (d.Length() > 16 && absangle(d.Angle(), pl->spr.Angles.Yaw).Degrees() > kReliquaryCone)) continue;
-		if (!cansee(eye, pl->sector(), mid, a->sector())) continue;
-		best = a;
-		bestDist = dist;
+		DVector3 d = mid - eye;
+		double dist = d.Length();
+		if (dist >= kReliquaryRange || (d | view) < dist * cone) continue;
+		bool takes = CanGrant(a->xspr.data1);
+		double& nearest = takes ? bestDist : blockedDist;
+		if ((!takes && !blocked) || dist >= nearest || !cansee(eye, pl->sector(), mid, a->sector())) continue;
+		nearest = dist;
+		(takes ? best : *blocked) = a;
 	}
 	return best;
 }
 
-// Use (a fresh press: Blood's Use is a one-shot input) facing a cursed reliquary: its gamble begins, or one running
-// gets its time again. True: the press was the reliquary's.
+// Why a gamble can't take hold now (CanGrant false): "while Dread runs", or "here now" (no enemies left for Frenzy).
+FString HoldBar(int id)
+{
+	int rival;
+	CanGrant(id, &rival);
+	return rival >= 0 ? FStringf("while %s runs", omenInfo[rival].name) : FString("here now");
+}
+
+// Use with nothing else to do (ActionScan found nothing to push: a door, switch or the like comes first; a fresh press,
+// as Blood's Use is a one-shot input) facing a cursed reliquary: its gamble begins, or one running gets its time again.
+// One that can't take hold now says why and stays. True: the press took one.
 bool TakeReliquary(DBloodPlayer* p)
 {
 	if (!OmensLive() || !p || p != getPlayer(myconnectindex)) return false;
-	auto a = NearReliquary(p);
-	if (!a) return false;
+	DBloodActor* blocked;
+	auto a = NearReliquary(p, &blocked);
+	if (!a)
+	{
+		if (blocked)
+			viewSetMessage(FStringf("%s can't take hold %s", omenInfo[blocked->xspr.data1].name, HoldBar(blocked->xspr.data1).GetChars()).GetChars());
+		return false;
+	}
 	int id = a->xspr.data1;
 	auto& o = omenInfo[id];
-	if (!GrantOmen(id, o.seconds * kClock))
-	{
-		viewSetMessage(FStringf("%s can't take hold here now", o.name).GetChars());
-		return true;
-	}
+	if (!GrantOmen(id, o.seconds * kClock)) return false; // CanGrant said it could: it can't fail
 	sfxPlay3DSound(p->GetActor(), 463, -1, 0); // the voodoo doll's laugh
 	p->pickupEffect = 30;
 	viewSetMessage(FStringf("Cursed reliquary: %s, %d s: %s", o.name, bmod::SecondsLeft(RunningOf(id)->left), o.sentence).GetChars(),
@@ -2880,8 +2924,9 @@ bool TakeReliquary(DBloodPlayer* p)
 }
 
 // Each tic: the Omens' time runs down, and one whose base effect or stock powerup was ended by another (chaos starting a
-// rival, a powerup cleared) is dropped; one riding an effect another ran takes it over as that one stops. Then the
-// reliquary you face is named. Not live (rl_omens off, the run over, the Crypt): everything ends.
+// rival, a powerup cleared) is dropped; one riding an effect another ran takes it over as that one stops on its own (not
+// when a rival replaced it: restarting would end the newcomer). Then the reliquary you face is named, or why it can't
+// take hold now. Not live (rl_omens off, the run over, the Crypt): everything ends.
 void OmenTick()
 {
 	if (!OmensLive())
@@ -2901,17 +2946,20 @@ void OmenTick()
 		auto e = OmenEffect(r.id);
 		if (e && !bmod::IsActive(e))
 		{
-			if (r.owns || !bmod::CanStart(e) || !bmod::StartEffect(e)) lost = true;
+			if (r.owns || RivalActive(e) || !bmod::CanStart(e) || !bmod::StartEffect(e)) lost = true;
 			else r.owns = true;
 		}
 		if (lost || r.left <= 0) EndOmen(i, false);
 	}
-	auto rel = NearReliquary(p);
+	DBloodActor* blocked;
+	auto rel = NearReliquary(p, &blocked);
+	if (!rel) rel = blocked;
 	if (!rel) reliquaryHint = "";
 	else
 	{
 		auto& o = omenInfo[rel->xspr.data1];
-		reliquaryHint.Format("Cursed reliquary: %s: %s, %d s. Use to take.", o.name, o.sentence, o.seconds);
+		FString tail = rel == blocked ? FStringf("It can't take hold %s.", HoldBar(rel->xspr.data1).GetChars()) : FString("Use to take.");
+		reliquaryHint.Format("Cursed reliquary: %s: %s, %d s. %s", o.name, o.sentence, o.seconds, tail.GetChars());
 	}
 }
 
@@ -3128,11 +3176,20 @@ void DrawLitanyTitle()
 		DTA_Alpha, alpha, TAG_DONE);
 }
 
-// The Omens' chips in the shared row, oldest first (gold a boon, purple a gamble, blinking their last 3 s; the map's
-// curse is on the run line already, so it gets none), and the cursed reliquary you face, named where the Crypt's
-// prompts go: even under the "No HUD" curse, as it's how you choose whether to take one.
+// The Omens' chips in the shared row, oldest first (gold a boon, purple a gamble, blinking their last 3 s). The map's
+// curse is on the run line, but "No HUD" (chaos's, or the curse itself) hides that: then, with the Omens on (rl_omens),
+// it's a red chip first, with no countdown (while it runs: one a chaos rival holds off isn't). And the cursed reliquary
+// you face, named where the Crypt's prompts go: even under "No HUD", as it's how you choose whether to take one.
 void DrawOmens()
 {
+	auto curse = CurseEffect();
+	if (bmod::mods.hideHud && OmensLive() && curse && bmod::IsActive(curse))
+	{
+		bmod::Chip c;
+		c.text.Format("Curse: %s", bmod::EffectTitle(curse));
+		c.color = PalEntry(kCurseChip);
+		bmod::AddChip(c);
+	}
 	for (auto& r : omens)
 	{
 		auto& o = omenInfo[r.id];
@@ -3622,9 +3679,14 @@ void OnNewGame()
 	}
 }
 
+// Use with nothing in reach to push: a cursed reliquary you face is taken (the Omens). A door or switch comes first.
+bool OnUseNothing(DBloodPlayer* pPlayer)
+{
+	return TakeReliquary(pPlayer);
+}
+
 bool OnUse(DBloodPlayer* pPlayer)
 {
-	if (TakeReliquary(pPlayer)) return true; // a cursed reliquary you face (the Omens)
 	int id = NearFeature(pPlayer);
 	if (!id) return false;
 	M_StartControlPanel(false);
@@ -3705,7 +3767,7 @@ bool ClaimPickup(DBloodPlayer* pPlayer, DBloodActor* item)
 	auto& o = omenInfo[id];
 	if (o.tier == kOmenGamble) return true;
 	bool chimed = false;
-	if (!GrantOmen(id, o.seconds * kClock, &chimed)) return true; // it can't take hold now: it stays
+	if (!GrantOmen(id, o.seconds * kClock, &chimed)) return true; // it can't take hold now (CanGrant): it stays
 	if (!chimed) sfxPlay3DSound(pPlayer->GetActor(), 776, -1, 0); // Blood's powerup chime (powerupActivate plays it)
 	pPlayer->pickupEffect = 30;
 	viewSetMessage(FStringf("Omen: %s, %d s: %s", o.name, bmod::SecondsLeft(RunningOf(id)->left), o.sentence).GetChars(),
@@ -5764,7 +5826,7 @@ CCMD(rl_omen)
 	int seconds = argv.argc() > 2 ? std::clamp(atoi(argv[2]), 1, 600) : omenInfo[id].seconds;
 	if (!GrantOmen(id, seconds * kClock))
 	{
-		Printf("rl_omen: %s can't take hold now\n", omenInfo[id].name);
+		Printf("rl_omen: %s can't take hold %s\n", omenInfo[id].name, HoldBar(id).GetChars());
 		return;
 	}
 	Printf(PRINT_NOTIFY, "Omen: %s, %d s: %s\n", omenInfo[id].name, bmod::SecondsLeft(RunningOf(id)->left), omenInfo[id].sentence);

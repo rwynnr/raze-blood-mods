@@ -1625,6 +1625,7 @@ void ProcessInput(DBloodPlayer* pPlayer)
 		HitInfo result;
 
 		int hit = ActionScan(pPlayer, &result);
+		if (hit < 0) rogue::OnUseNothing(pPlayer); // blood2d roguelite: nothing to push, so Use takes a cursed reliquary you face
 		switch (hit)
 		{
 		case 6:
