@@ -8,7 +8,8 @@
 // one-line hooks. Effects change behavior through the Modifiers (read by
 // those hooks) or by changing actor data that they restore on stop - and also
 // while a savegame is being written (suspend/resume), so saves never contain
-// an effect. Modules (chaos, ...) register listeners, tickers and drawers.
+// an effect. Modules (chaos, ...) register listeners, tickers and drawers, and
+// show their timed effects as chips in the shared chip row.
 //
 //---------------------------------------------------------------------------
 
@@ -37,6 +38,22 @@ namespace bmod
 	void AddListener(Listener fn);
 	void AddTicker(TickFn fn);   // once per game tic, only while the game runs (not paused / in menus)
 	void AddDrawer(DrawFn fn);   // 2D overlay, drawn after the status bar
+
+	// ---- the chip row: one shared row of chips for timed effects (chaos, the roguelite's omens) ----
+	// Drawers queue this frame's chips. Once every drawer has run, the base draws them all in one row, in the order
+	// queued (drawers run in registration order), centred just above the status bar or HUD (at the bottom edge when
+	// it's hidden) and wrapping upward past 90% of the screen width. Then the queue is emptied: a chip shows only on
+	// the frames it's queued, and with nothing queued nothing is drawn.
+	struct Chip
+	{
+		FString text;        // e.g. "Low gravity 12s"
+		PalEntry color = 0xffc0c0c0; // the border and the fill (a light grey unless set)
+		double frac = 1;     // the fill: share of the time left, 0..1
+		double alpha = 1;    // fades the whole chip (background, fill, border, text)
+		bool dashed = false; // a dashed border, no fill and grey text (chaos's "next 9s" countdown); ends the row
+	};
+	void AddChip(const Chip& c); // call from a drawer: a chip queued anywhere else is ignored
+	int SecondsLeft(int clocks); // PlayClock units left as the whole seconds a chip shows, rounded up
 
 	// Hooks called from stock code.
 	void OnLevelStart();
