@@ -16,9 +16,12 @@
 //   random types from a threat budget that grows with depth (the stock map's
 //   total on the first map, 1.5x on the last); key carriers keep their kind;
 // - a chance growing from 6% to 18% makes each a champion (2.5x health,
-//   1.25x size and damage, tinted blue), and a rarer one, from 4% to 12%, a
-//   red champion: 5x health, 1.5x damage, 1.4x size, moving and animating
-//   1.35x as fast, and it doesn't flinch;
+//   1.25x size and damage, 1.1x for its bullets and shells, tinted blue), and
+//   a rarer one, from 4% to 12%, a red champion: 5x health, 1.5x damage (1.2x
+//   for its bullets and shells), 1.4x size, moving and animating 1.35x as fast
+//   but attacking at stock speed, and it flinches only from a heavy hit of the
+//   player's (32 health in a tic, once every 3 s). As they die, red champions
+//   drop body armour, and champions basic armour one time in four;
 // - health, armor, ammo, explosive, weapon and powerup pickups reroll within
 //   their category (keys, the diving suit, jump boots and other quest-like
 //   items stay, as do items wired into the map's script); ammo leans to the
@@ -189,6 +192,9 @@ static void ResetLitanies();
 static void LitaniesLoaded();
 static void ForgeTick();
 static bool Sings(int k);
+// The red champions' flinches (Unflinching), defined with the champion hooks.
+static void StaggerTick();
+static void StaggerReset();
 
 namespace
 {
@@ -201,9 +207,16 @@ constexpr int kIchorKill = 1, kIchorChampion = 5, kIchorRed = 15, kIchorMap = 10
 // champion that is as rare as the current ones but holds a lot more HP, speed, etc."): the old 4-12% and 2x went to
 // 6-18% and 2.5x, and red champions took the old rate.
 constexpr double kChampionFirst = 0.06, kChampionLast = 0.18; // champion chance on a run's first and last map
-constexpr double kChampionHealth = 2.5, kChampionSize = 1.25; // and 1.25x damage (ScaleDamage)
+constexpr double kChampionHealth = 2.5, kChampionSize = 1.25; // and 1.25x damage, 1.1x for a foe's hitscan (ScaleDamage)
 constexpr double kRedFirst = 0.04, kRedLast = 0.12;           // red champions: the rarer tier
-constexpr double kRedHealth = 5.0, kRedSize = 1.4, kRedSpeed = 1.35; // and 1.5x damage; they don't flinch
+constexpr double kRedHealth = 5.0, kRedSize = 1.4, kRedSpeed = 1.35; // and 1.5x damage, 1.2x hitscan; few flinches
+// A playtest on Extra Crispy with a full Covenant: "the red champions can just vaporize you without good armor. The
+// hitscan is a bit intense." A red tommy cultist killed you in 0.4 s without armour (1.5x a round, 16 rounds a
+// second, never flinching). Now a foe's hitscan takes less of the tiers' bonus and of Wrath's, reds attack at stock
+// speed (RedSpeed), your heavy hits make them flinch now and then (Unflinching), and champions drop armour.
+constexpr double kChampionArmourChance = 0.25;                // a champion's basic armour as it dies (a red's body armour: always)
+constexpr int kStaggerHit = 32 << 4;                          // a hit of yours this big (a tic's, before its armour) makes a red flinch
+constexpr int kStaggerEvery = 3 * kClock;                     // at most this often
 constexpr double kCurseChance = 0.25;                         // per map, from the second on, with the Covenant's Curses
 constexpr int kCurseTitle = 5 * kClock;                       // how long a curse is announced
 constexpr int kSkipIchor = 10;                                // the reward choice's "nothing" pays this
@@ -271,7 +284,7 @@ struct Condition
 
 const Condition conditions[kNumConditions] =
 {
-	{ &rl_cov_wrath, "Wrath", 1 },         // enemies deal +20% damage per rank
+	{ &rl_cov_wrath, "Wrath", 1 },         // enemies deal +20% damage per rank (+10% with their bullets and shells)
 	{ &rl_cov_flesh, "Flesh", 1 },         // +15% enemy health per rank
 	{ &rl_cov_haste, "Haste", 2 },         // enemies 15% faster per rank
 	{ &rl_cov_horde, "Horde", 2 },         // +20% enemies per rank, arriving in waves
@@ -1198,8 +1211,18 @@ void MakeChampion(DBloodActor* a, bool grow = true, bool red = false)
 	a->xspr.scale = int((a->xspr.scale ? a->xspr.scale : 256) * size); // SEQ frames keep the size
 }
 
-// The red champions' speed, for the base's modeActorSpeed (set as each map starts and on each load).
-double RedSpeed(DBloodActor* a) { return a && (a->modFlags & kModRedChampion) ? kRedSpeed : 1.; }
+// The red champions' speed, for the base's modeActorSpeed (set as each map starts and on each load): their extra moves
+// and their animation, but not while they attack, where a red tommy cultist's 12 rounds a second became 16. An attack
+// is a state whose SEQ calls back (funcId, -1 for none) as it chases: a gun's fire, a throw, a bite, a slash (stateType
+// can't tell: the fire states are kAiStateChase too). Of the kinds a red can be, the one other state that calls back,
+// a zombie standing up, isn't a chase state. In an attack a red turns at stock speed too (its moveFunc's extra calls).
+double RedSpeed(DBloodActor* a)
+{
+	if (!a || !(a->modFlags & kModRedChampion)) return 1.;
+	auto st = a->hasX() ? a->xspr.aiState : nullptr;
+	if (st && st->funcId >= 0 && st->stateType == kAiStateChase) return 1.;
+	return kRedSpeed;
+}
 
 // A wave enemy copies a kind alive on the map, its size too: a champion's size without its tier would mislead, so
 // the copy keeps the stock look.
@@ -1853,9 +1876,11 @@ void PlaceAmmo(std::mt19937& rng, const bool* owned)
 
 struct ItemPick { int type, weight; };
 
+// The Red Potion is a 2-health bonus (no stock map places one): at weight 2 the remix made 18% of health pickups duds.
+// It stays in the list, so one a map did place still rerolls, but its weight went to the Life Essence.
 const ItemPick healthPicks[] =
 {
-	{ kItemHealthRedPotion, 2 }, { kItemHealthLifeEssense, 4 }, { kItemHealthMedPouch, 3 },
+	{ kItemHealthRedPotion, 0 }, { kItemHealthLifeEssense, 6 }, { kItemHealthMedPouch, 3 },
 	{ kItemHealthDoctorBag, 1 }, { kItemHealthLifeSeed, 1 },
 };
 const ItemPick armorPicks[] =
@@ -2379,6 +2404,42 @@ int NearFeature(DBloodPlayer* p)
 
 //---------------------------------------------------------------------------
 //
+// a champion's armour, dropped as it dies
+//
+//---------------------------------------------------------------------------
+
+// A red champion drops body armour, a champion basic armour one time in four: the armour that stops bullets (fire and
+// spirit armour stop none), as on the hardest settings the champions' hitscan is what kills you. The roll is the
+// run's (its seed and the champion's number in the run), so a reload rolls the same. A dropped item has no xsprite
+// or mark, so the ammo ledger (counted as the map starts), the remix (the same) and the big pickups (marked, with an
+// xsprite) never take it for theirs. It lies where the champion fell if a pickup can lie there; else on a spot in
+// sight of that one, or else near you (a flyer shot over lava or a pit, a foe in a door or on a lift); if none
+// will do, where it fell, as a stock drop would (in water, say, where you can swim to it).
+void DropChampionArmour(DBloodActor* victim, bool red)
+{
+	std::mt19937 rng(run.seed ^ (0x9E3779B9u * uint32_t(run.champions)) ^ 0x2545F491u);
+	if (!red && Rand01(rng) >= kChampionArmourChance) return;
+	auto item = actDropObject(victim, red ? kItemArmorBody : kItemArmorBasic);
+	if (!item || !item->insector() || SpotSectorOk(item->sector())) return;
+	TArray<DVector2> taken;
+	DVector2 spot;
+	sectortype* sect = nullptr;
+	bool found = FindItemSpot(rng, item->sector(), FloorAt(item), 16, 96, taken, spot, sect);
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!found && pl && pl->insector()) found = FindItemSpot(rng, pl->sector(), FloorAt(pl), 24, 80, taken, spot, sect);
+	if (!found || !sect) return;
+	double top, bottom;
+	GetActorExtents(item, &top, &bottom);
+	double lift = item->spr.pos.Z - bottom; // as dropped, its bottom rests on the floor
+	ChangeActorSect(item, sect);
+	SetActor(item, DVector3(spot, getflorzofslopeptr(sect, spot.X, spot.Y) + lift));
+	item->interpolated = false;
+	viewBackupSpriteLoc(item);
+}
+
+//---------------------------------------------------------------------------
+//
 // events and the ticker
 //
 //---------------------------------------------------------------------------
@@ -2389,6 +2450,7 @@ void OnEvent(const bmod::EventInfo& ev)
 	{
 	case bmod::Event::LevelStart:
 		ResetLitanies();
+		StaggerReset();
 		bmod::modeActorSpeed = RedSpeed; // only actors a run marked are faster
 		bmod::modeWaveSpawned = WaveSpawned;
 		if (IsCryptLevel()) SetupCrypt();
@@ -2397,6 +2459,7 @@ void OnEvent(const bmod::EventInfo& ev)
 		break;
 	case bmod::Event::SaveLoaded:
 		LitaniesLoaded();
+		StaggerReset(); // the flinches aren't saved: a loaded red can flinch at once
 		bmod::modeActorSpeed = RedSpeed;
 		bmod::modeWaveSpawned = WaveSpawned;
 		nextCurseTry = 0;
@@ -2412,6 +2475,7 @@ void OnEvent(const bmod::EventInfo& ev)
 			run.kills++;
 			if (champion) run.champions++;
 			run.ichor += red ? kIchorRed : champion ? kIchorChampion : kIchorKill;
+			if (champion && !crypt.in) DropChampionArmour(ev.actor, red);
 		}
 		break;
 	case bmod::Event::PlayerDeath:
@@ -2426,6 +2490,7 @@ void OpenRewardChoice(); // the menu section below
 
 void OnTick()
 {
+	StaggerTick(); // first: this ticker runs right after the tic's AI pass, before the Forge's (whose hits count next)
 	if (refusedLoad)
 	{
 		refusedLoad = false;
@@ -3093,7 +3158,51 @@ bool PickupTaken(DBloodActor* item, const char*& msg)
 	return item->xspr.data1 > 0;
 }
 
-int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
+//---------------------------------------------------------------------------
+//
+// the champion hooks: their damage, their flinches
+//
+//---------------------------------------------------------------------------
+
+// A foe's hitscan shot as it's worked out: SwallowVector sees every vector fired, and actFireVector deals the wound
+// within the same call. Bites, slashes and missiles wound as bullets too (kDamageBullet), so the damage type alone
+// can't tell a cultist's bullet from an axe. Compared, never followed.
+static DBloodActor* foeHitscan;
+static int foeHitscanAt = INT_MIN / 2;
+
+// The red champions you hit: what you dealt each since the AI last looked (StaggerTick clears it right after the AI's
+// pass, as aiProcessDudes clears cumulDamage), and when it last flinched. Compared, never followed: a red that dies or
+// is freed stays only until its 3 seconds are up, and the list is emptied as each map starts and on each load.
+struct Stagger { DBloodActor* red; int hit; int flinchAt; };
+static TArray<Stagger> staggers;
+
+static void StaggerHit(DBloodActor* red, int damage)
+{
+	for (auto& t : staggers)
+		if (t.red == red)
+		{
+			t.hit += damage;
+			return;
+		}
+	staggers.Push({ red, damage, INT_MIN / 2 });
+}
+
+// Right after the tic's AI pass (the run's ticker): the hits are counted afresh, and a red whose flinch is 3 seconds
+// old (or that was never made to flinch) is let go. A tic with no AI pass (enemies slowed) keeps counting, as
+// cumulDamage does.
+static void StaggerTick()
+{
+	if (staggers.Size() == 0 || bmod::EnemyPasses() <= 0) return;
+	for (int i = int(staggers.Size()) - 1; i >= 0; i--)
+	{
+		staggers[i].hit = 0;
+		if (PlayClock - staggers[i].flinchAt >= kStaggerEvery || staggers[i].flinchAt > PlayClock) staggers.Delete(i);
+	}
+}
+
+static void StaggerReset() { staggers.Clear(); foeHitscan = nullptr; }
+
+int ScaleDamage(DBloodActor* source, DBloodActor* target, DAMAGE_TYPE damageType, int damage)
 {
 	if (!source || !target || damage <= 0) return damage;
 	if (forgeEmitting && source->IsPlayerActor() && target != source && target->IsDudeActor() && !target->IsPlayerActor())
@@ -3131,15 +3240,38 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
 		forgeScent = s; // Blood Feud's quarry
 		forgeScentAt = PlayClock;
 	}
+	// Your hit on a red champion, as dealt (before its own armour: its type's and the skill's), for its flinch.
+	if (s && s != target && s->IsPlayerActor() && (target->modFlags & kModRedChampion) && target->spr.statnum == kStatDude)
+		StaggerHit(target, damage);
 	if (!s || s == target || !s->IsDudeActor() || s->IsPlayerActor()) return damage;
-	if (s->modFlags & kModRedChampion) damage += damage / 2;  // red champions hit 1.5x
-	else if (s->modFlags & kModChampion) damage += damage / 4; // champions 1.25x
+	// A foe's hitscan, its bullets and shells (the tommy and shotgun cultists'), takes less of the tiers' bonus and of
+	// Wrath's: on Extra Crispy, with Wrath's 5 ranks, a red tommy cultist's rounds at 1.5x and 2x killed in 0.2 s.
+	// Its bites, slashes, missiles and blasts keep the whole bonus.
+	bool hitscan = damageType == kDamageBullet && source == foeHitscan && foeHitscanAt == PlayClock;
+	if (s->modFlags & kModRedChampion) damage += hitscan ? damage / 5 : damage / 2;   // red champions hit 1.5x (1.2x shooting)
+	else if (s->modFlags & kModChampion) damage += hitscan ? damage / 10 : damage / 4; // champions 1.25x (1.1x shooting)
 	if (run.active && !run.over && target->IsPlayerActor() && run.cov[kWrath] > 0)
-		damage = int(damage * (1. + 0.2 * run.cov[kWrath]) + 0.5); // the Covenant's Wrath
+		damage = int(damage * (1. + (hitscan ? 0.1 : 0.2) * run.cov[kWrath]) + 0.5); // the Covenant's Wrath
 	return damage;
 }
 
-bool Unflinching(DBloodActor* actor) { return actor && (actor->modFlags & kModRedChampion); }
+// Red champions don't flinch (nor stagger under tesla), but for a heavy hit of yours: one that deals a red 32 health or
+// more, as dealt, before its armour (the tic's hits together, as Blood adds them up for a flinch, so a sawed-off
+// blast's pellets count as one hit), at most once every 3 seconds each. It breaks a red tommy cultist's endless burst.
+// RecoilDude still asks only when the tic's wound (after armour) is one that would make the stock enemy flinch.
+bool Unflinching(DBloodActor* actor)
+{
+	if (!actor || !(actor->modFlags & kModRedChampion)) return false;
+	for (auto& t : staggers)
+		if (t.red == actor)
+		{
+			if (t.hit < kStaggerHit || PlayClock - t.flinchAt < kStaggerEvery) return true;
+			t.hit = 0;
+			t.flinchAt = PlayClock;
+			return false;
+		}
+	return true;
+}
 
 //---------------------------------------------------------------------------
 //
@@ -3878,6 +4010,13 @@ bool SwallowMissile(DBloodActor* shooter, double xyoff, double zoff, const DVect
 
 bool SwallowVector(DBloodActor* shooter, double offset, double zoffset, const DVector3& dv, int type)
 {
+	// A foe's vector, for ScaleDamage: a hitscan (the bullet and shell kinds, unlimited in range) or not (a bite, a
+	// slash). Only noted: the shot goes out as stock.
+	if (shooter && shooter->IsDudeActor() && !shooter->IsPlayerActor())
+	{
+		foeHitscan = type >= kVectorShell && type <= kVectorTommyRegular ? shooter : nullptr;
+		foeHitscanAt = PlayClock;
+	}
 	if (!forgeShots || forgeEmitting || !shooter || !shooter->IsPlayerActor()) return false;
 	forgeShots->Push({ false, type, offset, zoffset, dv });
 	return true;

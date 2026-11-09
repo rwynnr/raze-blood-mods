@@ -2325,7 +2325,7 @@ OptionMenu "RogueliteCovenant" protected
 	StaticText "Each rank adds Dread, and each point of Dread pays +10% ichor.", 1
 	StaticText "Dread per rank: Haste, Horde, Champions 2; Hourglass, Wardens 3; the rest 1.", 1
 	StaticText ""
-	Slider "Wrath: enemies deal +20% damage",	"rl_cov_wrath", 0, 5, 1, 0
+	Slider "Wrath: enemies +20% damage, bullets +10%",	"rl_cov_wrath", 0, 5, 1, 0
 	Slider "Flesh: enemies +15% health",		"rl_cov_flesh", 0, 4, 1, 0
 	Slider "Haste: enemies 15% faster",			"rl_cov_haste", 0, 2, 1, 0
 	Slider "Horde: +20% enemies, in waves",		"rl_cov_horde", 0, 3, 1, 0

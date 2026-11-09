@@ -3747,7 +3747,7 @@ int actDamageSprite(DBloodActor* source, DBloodActor* actor, DAMAGE_TYPE damageT
 
 	if (source == nullptr) source = actor;
 	damage = bmod::ScaleDamage(source, actor, damage);
-	damage = rogue::ScaleDamage(source, actor, damage); // blood2d roguelite: champions hit harder
+	damage = rogue::ScaleDamage(source, actor, damageType, damage); // blood2d roguelite: champions hit harder
 
 	DBloodPlayer* pSourcePlayer = nullptr;
 	if (source->IsPlayerActor()) pSourcePlayer = getPlayer(source->spr.type - kDudePlayer1);

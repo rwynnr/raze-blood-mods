@@ -1224,7 +1224,7 @@ int aiDamageSprite(DBloodActor* source, DBloodActor* actor, DAMAGE_TYPE nDmgType
 
 void RecoilDude(DBloodActor* actor)
 {
-	if (rogue::Unflinching(actor)) return; // blood2d roguelite: red champions don't flinch (nor stagger under tesla)
+	if (rogue::Unflinching(actor)) return; // blood2d roguelite: red champions don't flinch (nor stagger under tesla), but for a heavy hit
 	uint8_t v4 = Chance(0x8000);
 	DUDEEXTRA* pDudeExtra = &actor->dudeExtra;
 	if (actor->spr.statnum == kStatDude && (actor->spr.type >= kDudeBase && actor->spr.type < kDudeMax))

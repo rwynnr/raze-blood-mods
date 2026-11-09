@@ -38,10 +38,10 @@ namespace rogue
 	MapRecord* NextLevel(MapRecord* stockNext);                            // levelEndLevel: a run picks its own next map (null: the run is won)
 	bool OnDeathRestart();                                                 // playerProcess, Use while dead in single player: true = handled
 	void OnNewGame();                                                      // GameInterface::NewGame
-	int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage); // actDamageSprite: champions, the Covenant's Wrath, the Forge
+	int ScaleDamage(DBloodActor* source, DBloodActor* target, DAMAGE_TYPE damageType, int damage); // actDamageSprite: champions, the Covenant's Wrath, the Forge
 	int ScaleHealing(DBloodActor* actor, int add);                         // actHealDude: the Covenant's Famine heals less (0: no heal)
 	bool OnUse(DBloodPlayer* pPlayer);                                     // playerProcess, Use: true = taken by the Crypt (a menu opened)
-	bool Unflinching(DBloodActor* actor);                                  // RecoilDude: red champions don't flinch
+	bool Unflinching(DBloodActor* actor);                                  // RecoilDude: red champions don't flinch, but for a heavy hit of yours
 	// The Forge (roguelite.cpp): the run's forged gun fires its runes' payloads in place of its own primary fire, and its
 	// alt fire is a forged mode of its own (rl_forge_alt).
 	void WeaponCallback(int nCallback, int id, void* data);                // qavPlay: a weapon frame's callback (the stock one if no Forge)
