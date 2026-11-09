@@ -2255,7 +2255,7 @@ OptionValue "RLForgeMouth"
 {
 	0, "None: the gun's own round"
 	1, "Hellmouth (20): napalm fireballs"
-	2, "Cleaver's Psalm (15): cleavers that heal you as they wound"
+	2, "Cleaver's Psalm (15): fast cleavers that heal you as they wound"
 }
 OptionValue "RLForgePath"
 {

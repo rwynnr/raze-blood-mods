@@ -37,7 +37,7 @@ namespace rogue
 	MapRecord* NextLevel(MapRecord* stockNext);                            // levelEndLevel: a run picks its own next map (null: the run is won)
 	bool OnDeathRestart();                                                 // playerProcess, Use while dead in single player: true = handled
 	void OnNewGame();                                                      // GameInterface::NewGame
-	int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage); // actDamageSprite: champions and the Covenant's Wrath hit harder
+	int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage); // actDamageSprite: champions, the Covenant's Wrath, the Forge
 	int ScaleHealing(DBloodActor* actor, int add);                         // actHealDude: the Covenant's Famine heals less (0: no heal)
 	bool OnUse(DBloodPlayer* pPlayer);                                     // playerProcess, Use: true = taken by the Crypt (a menu opened)
 	bool Unflinching(DBloodActor* actor);                                  // RecoilDude: red champions don't flinch
@@ -60,8 +60,11 @@ namespace rogue
 		bool liveHit = false, sky = false, larder = false, fetch = false;
 		bool biting = false;                                               // a cleaver: its stock heal is the Forge's (ScaleHealing)
 		int healthBefore = 0;                                              // your health before it struck (sixteenths)
+		DBloodActor* foe = nullptr;                                        // the live foe it struck (liveHit)
+		bool flareStrike = false;                                          // the bare forged flare: its impact damage comes after the stock burn
 	};
-	struct ForgeExplosion                                                  // actCheckExplosion: a forged blast (Brimstone Leap, the Larder)
+	double MissileSpeedScale(DBloodActor* missile);                        // actMoveMissile, homing: a forged cleaver flies faster (1: stock)
+	struct ForgeExplosion                                                  // actCheckExplosion: a forged blast (Brimstone Leap, the Larder, half on you)
 	{
 		ForgeExplosion(DBloodActor* explosion);
 		~ForgeExplosion();

@@ -296,26 +296,22 @@ enum { kPathHound = 1, kPathChoir };
 enum { kWoundPyre = 1, kWoundGrave };
 enum { kPenanceBloodPrice = 1 };
 
-// A Vessel's worth per round of its own ammo against a plain 50-health foe (ammoProfiles' damage, capped at the foe's
-// health, times the hit rate), so a Mouth can be weighed against it: a heavier payload drinks more rounds a pull, a
-// lighter one fires more projectiles a round.
 struct ForgeVesselInfo
 {
 	const char* name;
 	int weapon, ammo;
 	FIntCVarRef* kit;  // its kit line: forging a gun puts it in the kit
 	int kitCost;
-	double worth;      // per round
 	int stockMissile;  // its own round, if a missile (the flare), else 0
 	bool slow;         // at least 0.3 s between pulls: may take a heavy Mouth
 	const char* round; // its own round, in a sentence
 };
 const ForgeVesselInfo forgeVessels[] =
 {
-	{ "", 0, 0, nullptr, 0, 1, 0, false, "" },
-	{ "Flare Gun", kWeapFlareGun, 1, &rl_kit_flare, 10, 40, kMissileFlareRegular, true, "a flare" },
-	{ "Sawed-off", kWeapShotgun, 2, &rl_kit_shotgun, 20, 30, 0, true, "its pellets" },
-	{ "Tommy Gun", kWeapTommyGun, 3, &rl_kit_tommy, 30, 7.2, 0, false, "a bullet" },
+	{ "", 0, 0, nullptr, 0, 0, false, "" },
+	{ "Flare Gun", kWeapFlareGun, 1, &rl_kit_flare, 10, kMissileFlareRegular, true, "a flare" },
+	{ "Sawed-off", kWeapShotgun, 2, &rl_kit_shotgun, 20, 0, true, "its pellets" },
+	{ "Tommy Gun", kWeapTommyGun, 3, &rl_kit_tommy, 30, 0, false, "a bullet" },
 };
 
 struct ForgeRuneInfo
@@ -333,7 +329,17 @@ const ForgeRuneInfo forgeMouths[] =
 };
 const char* forgeMouthPlural[] = { "", "napalm fireballs", "cleavers" };
 const int forgeMouthMissile[] = { 0, kMissileFireballNapalm, kMissileButcherKnife };
-const double forgeMouthWorth[] = { 1, 52.5, 8.7 }; // napalm: 50 x 0.7 hit x 1.5 foes; cleaver: 14.5 spirit x 0.6
+// What a Mouth fires for a round of its Vessel's ammo, and the rounds that round drinks, set by hand so each recipe is
+// a clear step up from its stock gun (a rule from the payloads' worth undercharged the fireball and starved the
+// cleaver). The sawed-off's are a barrel's. The tommy can't take Hellmouth (too heavy for its rate of fire).
+struct ForgeLoad { int perRound, drink; };
+const ForgeLoad forgeLoads[4][3] = // [Vessel][Mouth]
+{
+	{ { 0, 1 }, { 1, 1 }, { 1, 1 } }, // no Vessel: never fired
+	{ { 0, 1 }, { 1, 1 }, { 5, 1 } }, // flare gun: a fireball a flare; five cleavers a flare
+	{ { 0, 1 }, { 1, 2 }, { 3, 1 } }, // sawed-off: a fireball for two shells; three cleavers a shell
+	{ { 0, 1 }, { 1, 2 }, { 1, 2 } }, // tommy gun: no fireball (ForgeIllegal); a cleaver for two bullets
+};
 const bool forgeMouthHeavy[] = { false, true, false };
 const bool forgeMouthBurns[] = { false, true, false };
 const ForgeRuneInfo forgePaths[] =
@@ -346,14 +352,19 @@ const ForgeRuneInfo forgeWounds[] =
 {
 	{ "", "", 0, "" },
 	{ "Pyre", "of the Pyre", 10, "Lodges a flare: foes burn hard for 4 s." }, // kept short: it shares a line with the Mouth's
-	{ "Gravedigger's Blast", "of the Grave", 20, "Bursts where it lands; the blast reaches you too." },
+	{ "Gravedigger's Blast", "of the Grave", 20, "Bursts where it lands, 4 a second at most." },
 };
 const ForgeRuneInfo forgePenances[] =
 {
 	{ "", "", 0, "" },
 	{ "Blood Price", "Blood-Priced", 15, "Dry, a pull costs 4 health." },
 };
-constexpr int kForgeMissiles = 8, kForgeVectors = 32; // most a pull fires
+constexpr int kForgeMissiles = 12, kForgeVectors = 32; // most a pull fires (the flare's Choir: three fans of four cleavers)
+constexpr int kChoirPerAim = 4;                      // the Choir: a Mouth's missiles in each of its three aims, at most
+constexpr int kCerberusFlying = 8;                   // Cerberus: forged fireballs flying at once, at most
+constexpr double kCleaverSpeed = 1.5;                // forged cleavers fly half again as fast as the Butcher's
+constexpr int kCleaverBite = 8, kCleaverBiteRange = 6; // and wound 8-13 more than his (the stock 10-19: 18-32 in all)
+constexpr int kGraveBursts = 4;                      // Gravedigger's Blast: the Grave's bursts a second, at most
 // Burn time counts down a PlayClock at a time: 480 is 4 s (a stock flare's). A hit tops it back up to that, never past.
 constexpr int kPyreBurn = 480;
 constexpr int kPyreMarks = 12;                       // the Pyre's flares lodged at once, at most (one a foe)
@@ -387,7 +398,7 @@ struct Litany
 const Litany litanies[kNumLitanies] =
 {
 	{ "shears", "The Shears", { kForgeMouth, kMouthCleaver }, { kForgePath, kPathChoir }, kKindBoon,
-		"Aimed at a foe, the three cleavers close on it like shears.", 0 },
+		"Aimed at a foe, the cleavers close on it from three sides like shears.", 0 },
 	{ "cerberus", "Cerberus", { kForgeMouth, kMouthHellmouth }, { kForgePath, kPathHound }, kKindBoon,
 		"Each hunting fireball grows a second head that hunts another foe.", 0 },
 	{ "bloodfeud", "Blood Feud", { kForgePath, kPathHound }, { kForgePenance, kPenanceBloodPrice }, kKindBoon,
@@ -642,16 +653,17 @@ ForgeRates Rates(const int* f)
 	int m = f[kForgeMouth];
 	if (m)
 	{
-		double worth = forgeMouthWorth[m];
-		r.perRound = std::clamp(int(v.worth / worth + 0.5), 1, kForgeMissiles);
-		r.drink = std::max(int(worth / v.worth + 0.5), 1);
+		auto& load = forgeLoads[f[kForgeVessel]][m];
+		r.perRound = load.perRound;
+		r.drink = load.drink;
 		r.missile = true;
 	}
 	else r.missile = v.stockMissile != 0;
+	// The Choir sings each round three times over (three fireballs, or three fans of cleavers) for twice the drink.
 	if (f[kForgePath] == kPathChoir)
 	{
 		r.drink *= 2;
-		if (r.perRound) r.perRound = std::max(1, std::min(r.perRound, kForgeMissiles / 3)); // three of each still fit a pull
+		if (r.perRound) r.perRound = std::min(r.perRound, kChoirPerAim);
 	}
 	return r;
 }
@@ -675,23 +687,29 @@ FString ForgeSentence(const int* f)
 	auto& v = forgeVessels[f[kForgeVessel]];
 	auto r = Rates(f);
 	FString s = f[kForgeVessel] == kVesselShotgun ? "Each barrel: " : "Each pull: ";
-	if (f[kForgeMouth])
+	// The Choir's fans of several (the cleavers) are counted whole: "12 cleavers, in three fans of 4".
+	bool fans = f[kForgeMouth] && f[kForgePath] == kPathChoir && r.perRound > 1;
+	if (fans) s.AppendFormat("%d %s, in three fans of %d", 3 * r.perRound, forgeMouthPlural[f[kForgeMouth]], r.perRound);
+	else if (f[kForgeMouth])
 	{
 		if (r.perRound > 1) s.AppendFormat("%d %s", r.perRound, forgeMouthPlural[f[kForgeMouth]]);
 		else s.AppendFormat("a %s", forgeMouths[f[kForgeMouth]].says);
 	}
 	else s += v.round;
-	if (f[kForgePath]) s.AppendFormat(", %s", forgePaths[f[kForgePath]].says);
+	if (f[kForgePath] && !fans) s.AppendFormat(", %s", forgePaths[f[kForgePath]].says);
 	s += ".";
 	return s;
 }
 
+// Kept to about 110 characters with every part in: the menu doesn't wrap it.
 FString ForgeEffectLine(const int* f)
 {
 	FString s;
-	if (f[kForgeWound]) s += forgeWounds[f[kForgeWound]].says;
-	if (f[kForgeMouth] == kMouthCleaver)
-		s.AppendFormat("%sCleavers drink half the wound they deal, %d a second at most.", s.IsEmpty() ? "" : " ", kForgeHealPerSecond);
+	auto add = [&](const char* text) { s.AppendFormat("%s%s", s.IsEmpty() ? "" : " ", text); };
+	if (f[kForgeVessel] == kVesselFlare && !f[kForgeMouth]) add("Flares strike for 20-29, then burn.");
+	if (f[kForgeWound]) add(forgeWounds[f[kForgeWound]].says);
+	if (f[kForgeWound] == kWoundGrave || f[kForgeMouth] == kMouthHellmouth) add("Your blasts hurt you half.");
+	if (f[kForgeMouth] == kMouthCleaver) add(FStringf("Cleavers heal half the wound, %d a second.", kForgeHealPerSecond).GetChars());
 	return s;
 }
 
@@ -2960,7 +2978,9 @@ static int forgeHealSecond = -1, forgeHealed;
 static bool forgeBiting;               // inside a forged cleaver's impact
 static DBloodActor* forgeBite;         // the live foe it struck (null: none, so no heal)
 static int forgeBiteHealth;            // that foe's health before the wound (sixteenths)
+static bool forgeBiteDeeper;           // its stock wound is still to come, and bites deeper (ScaleDamage)
 static DBloodActor* forgeSparingNow;   // the Larder's blast being worked out: it doesn't hurt you (kModSpareYou)
+static DBloodActor* forgeBlastNow;     // any forged blast being worked out: yours hurts you half
 static DBloodActor* forgeScent;          // Blood Feud: the last foe that drew your blood (compared, never followed)
 static int forgeScentAt = INT_MIN / 2;
 static DBloodActor* forgeExplosionNow;   // Brimstone Leap: the forged blast being worked out (kModKicked once it threw you)
@@ -3018,6 +3038,14 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
 	if (!source || !target || damage <= 0) return damage;
 	if (forgeEmitting && source->IsPlayerActor() && target != source && target->IsDudeActor() && !target->IsPlayerActor())
 		if (forgeHits.Find(target) == forgeHits.Size()) forgeHits.Push(target); // a forged hitscan's hit
+	// A forged cleaver bites deeper than the Butcher's: its stock wound (the first the impact deals the foe) grows, so
+	// the heal that follows it (ScaleHealing) counts the whole of it. Dealt apart, after, it could land on a foe the
+	// stock wound had just killed.
+	if (forgeBiteDeeper && target == forgeBite && source->IsPlayerActor())
+	{
+		forgeBiteDeeper = false;
+		damage += (kCleaverBite + int(Random(kCleaverBiteRange))) << 4;
+	}
 	// Brimstone Leap: your own forged blast throws you, the first tic it reaches you, and doesn't wound you.
 	if (forgeExplosionNow && target->IsPlayerActor() && target == getPlayer(myconnectindex)->GetActor())
 	{
@@ -3033,6 +3061,9 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, int damage)
 	}
 	// The Larder of Knives: its blasts are set for foes and spare you.
 	if (forgeSparingNow && target->IsPlayerActor() && target == getPlayer(myconnectindex)->GetActor()) return 0;
+	// Any other forged blast of yours (the Grave's, a fireball's) hurts you half: the Forge's blasts land close.
+	if (forgeBlastNow && target->IsPlayerActor() && target == getPlayer(myconnectindex)->GetActor() && forgeBlastNow->GetOwner() == target)
+		damage -= damage / 2;
 	auto s = source;
 	for (int i = 0; i < 2 && s && !s->IsDudeActor(); i++) s = s->GetOwner(); // a missile's or explosion's owner
 	if (s && s != target && s->IsDudeActor() && !s->IsPlayerActor() && target->IsPlayerActor())
@@ -3150,6 +3181,14 @@ static DVector3 MiddleOf(DBloodActor* a)
 static int Offspring(DBloodActor* a) { return (a->modFlags & kModOffspring) >> 4; }
 static void SetOffspring(DBloodActor* a, int code) { a->modFlags = uint8_t((a->modFlags & ~kModOffspring) | ((code & 3) << 4)); }
 
+// A forged missile's speed: a cleaver flies kCleaverSpeed times the Butcher's (it was too slow to land on a moving
+// foe), the rest as stock. EmitForge, ForgeSpawnMissile, the Fetch and the stock homing (MissileSpeedScale) all use it.
+static double ForgeSpeed(int type)
+{
+	double speed = missileInfo[type - kMissileBase].fVelocity();
+	return type == kMissileButcherKnife ? speed * kCleaverSpeed : speed;
+}
+
 // A missile a Litany spawns away from the gun (a second head, a cleaver flying back): the player's, forged, with its
 // offspring code, set up as actFireMissile does but without its trace from the shooter's eye.
 static DBloodActor* ForgeSpawnMissile(const DVector3& pos, sectortype* sect, const DVector3& dir, int type, int offspring)
@@ -3169,7 +3208,7 @@ static DBloodActor* ForgeSpawnMissile(const DVector3& pos, sectortype* sect, con
 	m->spr.scale = DVector2(mi.xrepeat * REPEAT_SCALE, mi.yrepeat * REPEAT_SCALE);
 	m->spr.setspritetexture(mi.textureID());
 	m->spr.Angles.Yaw = dir.XY().Angle() + mapangle(mi.angleOfs);
-	m->vel = dir.Unit() * mi.fVelocity();
+	m->vel = dir.Unit() * ForgeSpeed(type);
 	m->SetOwner(pl);
 	m->spr.cstat &= ~CSTAT_SPRITE_BLOCK; // unlike actFireMissile's: the Forge's missiles don't strike each other
 	m->SetTarget(nullptr);
@@ -3326,14 +3365,31 @@ static int fetchCredit;              // the Fetch: cleavers caught, in drink uni
 static int witchfireNext = INT_MIN / 2;
 static int lastTollAt = INT_MIN / 2;
 
+// Gravedigger's Blast: when its last kGraveBursts bursts went off (PlayClock, oldest next), so that no more than that
+// go off in any second: the tommy's cleavers would otherwise set off fifteen. A hit over the budget doesn't burst.
+static int graveBursts[kGraveBursts] = { INT_MIN / 2, INT_MIN / 2, INT_MIN / 2, INT_MIN / 2 };
+static int graveNext;
+static bool GraveBurst()
+{
+	int& oldest = graveBursts[graveNext];
+	int since = PlayClock - oldest;
+	if (since >= 0 && since < kClock) return false; // (a PlayClock that went back, a new map's, doesn't hold it up)
+	oldest = PlayClock;
+	graveNext = (graveNext + 1) % kGraveBursts;
+	return true;
+}
+
 static void ResetLitanies()
 {
 	forgeScent = nullptr;
 	forgeScentAt = INT_MIN / 2;
 	forgeExplosionNow = nullptr;
 	forgeSparingNow = nullptr;
+	forgeBlastNow = nullptr;
 	forgeBiting = false;
+	forgeBiteDeeper = false;
 	forgeBite = nullptr;
+	for (auto& at : graveBursts) at = INT_MIN / 2;
 	fetchCredit = 0;
 	forgeLit.Clear();
 	hymnPulls.Clear();
@@ -3497,6 +3553,7 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 			// struck the one ahead fell as debris (or, under the Larder, stuck in the air beside you). The Shears'
 			// converging blades need it too.
 			m->spr.cstat &= ~CSTAT_SPRITE_BLOCK;
+			if (m->spr.type == kMissileButcherKnife) m->vel = s.dv.Unit() * ForgeSpeed(m->spr.type); // a forged cleaver flies faster
 			if (hymnNow >= 0) hymnShots.Push({ m, hymnNow });
 			if (target)
 			{
@@ -3504,7 +3561,7 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 				// The stock homing sets the full speed sideways and keeps vel.Z: give it the slope to the foe's middle.
 				DVector3 d = MiddleOf(target) - m->spr.pos;
 				double flat = d.XY().Length();
-				if (flat > 1) m->vel.Z = missileInfo[m->spr.type - kMissileBase].fVelocity() * d.Z / flat;
+				if (flat > 1) m->vel.Z = ForgeSpeed(m->spr.type) * d.Z / flat;
 			}
 		}
 		else
@@ -3612,8 +3669,11 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit, int code, walltype* h
 	int offspring = Offspring(m);
 	bool bloodBought = (m->modFlags & kModBloodBought) || (emitted && forgeBloodBoughtNow);
 
+	if (liveHit) foe = hit;
+
 	// The cleaver's bite: the stock impact wounds the foe and then heals you 10; ScaleHealing makes that heal half the
-	// health the wound took from a live foe, and nothing at all when the cleaver struck no live foe.
+	// health the wound took from a live foe, and nothing at all when the cleaver struck no live foe. ScaleDamage makes
+	// the wound deeper (kCleaverBite).
 	if (type == kMissileButcherKnife)
 	{
 		auto p = getPlayer(myconnectindex);
@@ -3621,8 +3681,15 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit, int code, walltype* h
 		forgeBiting = true;
 		forgeBite = liveHit ? hit : nullptr;
 		forgeBiteHealth = liveHit ? int(hit->xspr.health) : 0;
+		forgeBiteDeeper = liveHit;
 		healthBefore = p && p->GetActor() && p->GetActor()->hasX() ? int(p->GetActor()->xspr.health) : 0;
 	}
+	// The bare forged flare: the stock flare only burns a foe that can burn (at most 15 a second, however long), so it
+	// strikes as well, as Blood 1.0x's flare did (the stock code does that itself when that option is on, and to a foe
+	// that can't burn). The destructor deals it, once the stock impact has lit the foe.
+	if (type == kMissileFlareRegular && offspring == 0 && run.forge[kForgeVessel] == kVesselFlare && !run.forge[kForgeMouth] && liveHit
+		&& code == 3 && getDudeInfo(hit->spr.type)->damageVal[kDamageBurn] != 0 && !(gGameOptions.weaponsV10x && !VanillaMode()))
+		flareStrike = true;
 
 	// Witchfire: a cleaver striking a foe that has burned a while scatters its fire on every body near, you too.
 	if (Sings(kLitWitchfire) && type == kMissileButcherKnife && offspring == 0 && liveHit && hit->xspr.burnTime > 0 && LitFor(hit) >= kClock / 4
@@ -3675,22 +3742,30 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit, int code, walltype* h
 	if (run.forge[kForgeWound] == kWoundGrave && m->insector() && !bigger)
 	{
 		bool flesh = hit && (hit->IsDudeActor() || hit->spr.statnum == kStatThing) && GetExtInfo(hit->spr.spritetexture()).surftype == kSurfFlesh;
-		if (Sings(kLitCandle) && type == kMissileFlareRegular && flesh)
-		{
-			// Corpse-Candle: the flare lodged in flesh holds the blast; it bursts bigger in 1.5 s, or when its bearer dies.
-			if (candles.Size() < 16) candles.Push({ m, PlayClock + kClock * 3 / 2, m->spr.pos, m->sector() });
-			sfxPlay3DSound(m, 450, -1, 0);
-			LitanyFired(kLitCandle);
-		}
-		else if (Sings(kLitLarder) && type == kMissileButcherKnife && !liveHit && !sky && offspring == 0
+		bool candle = Sings(kLitCandle) && type == kMissileFlareRegular && flesh;
+		if (Sings(kLitLarder) && type == kMissileButcherKnife && !liveHit && !sky && offspring == 0
 			&& (wall || !(m->sector()->floorstat & CSTAT_SECTOR_SKY))) // off a wall it lies on the floor: not in a sky pit
-			larder = true; // the Larder of Knives: a missed cleaver sticks and waits (the destructor sets it)
-		else if (Sings(kLitRequiem))
+			larder = true; // the Larder of Knives: a missed cleaver sticks and waits (the destructor sets it; 8 at most)
+		else if (!GraveBurst()) // the rest are the Grave's bursts, kGraveBursts a second: past that, a hit doesn't burst
 		{
-			if (tolls.Size() < 32) tolls.Push({ m->spr.pos, m->sector(), PlayClock }); // Requiem: it waits to ring with the others
-			lastTollAt = PlayClock;
+			if (candle) m->modFlags &= ~kModForged; // a flare lodged without a fuse: a load doesn't light it either
 		}
-		else ForgeBlast(m->spr.pos, m->sector(), 0); // the Grave's small blast, the player's
+		else
+		{
+			if (candle)
+			{
+				// Corpse-Candle: the flare lodged in flesh holds the blast; it bursts bigger in 1.5 s, or when its bearer dies.
+				if (candles.Size() < 16) candles.Push({ m, PlayClock + kClock * 3 / 2, m->spr.pos, m->sector() });
+				sfxPlay3DSound(m, 450, -1, 0);
+				LitanyFired(kLitCandle);
+			}
+			else if (Sings(kLitRequiem))
+			{
+				if (tolls.Size() < 32) tolls.Push({ m->spr.pos, m->sector(), PlayClock }); // Requiem: it waits to ring with the others
+				lastTollAt = PlayClock;
+			}
+			else ForgeBlast(m->spr.pos, m->sector(), 0); // the Grave's small blast, the player's
+		}
 	}
 	// The Fetch: a hunting cleaver that strikes anything but a foe (not the sky) flies back (the destructor queues it),
 	// if it struck far enough off that it doesn't come straight back into your hand.
@@ -3703,11 +3778,16 @@ ForgeImpact::~ForgeImpact()
 {
 	if (!active) return;
 	forgeImpacts--;
+	// The bare forged flare's strike (Blood 1.0x's 20-29), after the stock burn, on a foe still standing: dealt to one
+	// the stock impact just killed, it would land on the corpse it was turned into.
+	if (flareStrike && foe && missile && foe->IsDudeActor() && foe->spr.statnum == kStatDude && foe->hasX() && foe->xspr.health > 0)
+		actDamageSprite(missile->GetOwner(), foe, kDamageBullet, (20 + int(Random(10))) << 4);
 	if (biting)
 	{
 		// A bite that healed you shows: blood from the foe it was drunk from, and a short gold flash as a pickup gives.
 		auto bitten = forgeBite;
 		forgeBiting = false;
+		forgeBiteDeeper = false;
 		forgeBite = nullptr;
 		auto p = getPlayer(myconnectindex);
 		if (bitten && p && p->GetActor() && p->GetActor()->hasX() && int(p->GetActor()->xspr.health) > healthBefore)
@@ -3775,15 +3855,23 @@ ForgeImpact::~ForgeImpact()
 }
 
 // While a forged blast is worked out, ScaleDamage sees it: Brimstone Leap turns the damage it does you into a throw,
-// and a blast of the Larder's (kModSpareYou) does you none.
+// a blast of the Larder's (kModSpareYou) does you none, and any other of yours does you half.
 ForgeExplosion::ForgeExplosion(DBloodActor* explosion)
 {
 	bool forged = explosion && run.active && !run.over && (explosion->modFlags & kModForged);
 	forgeExplosionNow = forged && Sings(kLitLeap) ? explosion : nullptr;
 	forgeSparingNow = forged && (explosion->modFlags & kModSpareYou) ? explosion : nullptr;
+	forgeBlastNow = forged ? explosion : nullptr;
 }
 
-ForgeExplosion::~ForgeExplosion() { forgeExplosionNow = nullptr; forgeSparingNow = nullptr; }
+ForgeExplosion::~ForgeExplosion() { forgeExplosionNow = nullptr; forgeSparingNow = nullptr; forgeBlastNow = nullptr; }
+
+// The stock homing sets a hunting missile's speed from its type each tic: a forged cleaver keeps the Forge's.
+double MissileSpeedScale(DBloodActor* m)
+{
+	if (!m || !run.active || run.over || !(m->modFlags & kModForged) || m->spr.type != kMissileButcherKnife) return 1;
+	return kCleaverSpeed;
+}
 
 // The Pyre's lodged flares, each tic: a flare burns its bearer a second time over (the stock burn is 8 a tic, so twice
 // as hard), and goes out with the fire, or when its bearer has become one of the burning kinds (which burn out on
@@ -3823,7 +3911,7 @@ static void ForgeTick()
 		return;
 	}
 
-	// Cerberus: a hunting fireball 256 from you grows a second head for another foe (8 forged fireballs at most).
+	// Cerberus: a hunting fireball 256 from you grows a second head for another foe (kCerberusFlying fireballs at most).
 	if (Sings(kLitCerberus))
 	{
 		TArray<DBloodActor*> heads;
@@ -3838,7 +3926,7 @@ static void ForgeTick()
 		}
 		for (auto m : heads)
 		{
-			if (flying >= kForgeMissiles || !m->insector()) break;
+			if (flying >= kCerberusFlying || !m->insector()) break;
 			auto second = HoundFoe(m->spr.pos, m->sector(), m->vel.XY().Angle(), kHoundCone, kHoundRange, m->GetTarget());
 			if (!second) continue;
 			DVector3 dir = (MiddleOf(second) - m->spr.pos).Unit();
@@ -3946,7 +4034,7 @@ static void ForgeTick()
 			if (!(m->modFlags & kModForged) || Offspring(m) != 2) continue;
 			DVector3 d = chest - m->spr.pos;
 			if (d.Length() < 48) { caught.Push(m); continue; }
-			m->vel = d.Unit() * missileInfo[m->spr.type - kMissileBase].fVelocity();
+			m->vel = d.Unit() * ForgeSpeed(m->spr.type);
 		}
 		// The Vessel's ammo back for what the caught cleavers cost (Rates: a round's drink buys perRound of them), so a
 		// flare gun firing five a flare gives one back for every five caught. A round a cleaver would let a flare shot

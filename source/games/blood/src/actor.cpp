@@ -5203,7 +5203,7 @@ int MoveMissile(DBloodActor* actor)
 
 		if (target->spr.statnum == kStatDude && target->hasX() && target->xspr.health > 0)
 		{
-			double vel = missileInfo[actor->spr.type - kMissileBase].fVelocity();
+			double vel = missileInfo[actor->spr.type - kMissileBase].fVelocity() * rogue::MissileSpeedScale(actor); // blood2d roguelite: forged cleavers fly faster
 			actor->vel.SetXY(DVector2(vel, 0).Rotated((target->spr.pos - actor->spr.pos).Angle()));
 
 			double deltaz = (target->spr.pos.Z - actor->spr.pos.Z) / (10 * 256);
