@@ -2302,7 +2302,7 @@ OptionMenu "RogueliteForge" protected
 	StaticText " ", 1
 	Submenu "The Book of Litanies",				"RogueliteBook"
 	StaticText ""
-	StaticText "One forged gun a run. It keeps its key, ammo, hands and alt fire: only its primary fire changes.", 1
+	StaticText "One forged gun a run. It keeps its key, ammo and hands; its fire changes, and its alt fire is a forged mode.", 1
 	StaticText "Its points come out of the kit's. A rune that can't go with the others is taken off, and the line", 1
 	StaticText "above says why.", 1
 	StaticText ""

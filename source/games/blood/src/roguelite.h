@@ -23,7 +23,8 @@ namespace rogue
 {
 	// DBloodActor::modFlags: a champion (elite) enemy; a pickup holding its own amount of ammo (in xspr.data1); a red
 	// champion (the rarer tier; also a champion); a missile from the run's forged gun, with bits 16-32 its offspring code
-	// (0 the gun's own shot, 1 a Litany's offspring, 2 offspring flying back to you, 3 the gun's own shot, split) and 64
+	// (0 the gun's own shot, 1 a Litany's offspring or the starburst's ring, and a starburst carrier once it has thrown
+	// its ring, 2 offspring flying back to you, 3 the gun's own shot, split) and 64
 	// for one bought with blood (the Blood Price); 128 on a forged blast that has thrown you (Brimstone Leap).
 	// Two bits mean something else on another kind of actor, where the meanings can't meet:
 	// - kModSpareYou (64): on a forged blast (the TNT thing ForgeBlast spawns, then the explosion it becomes), one that
@@ -41,7 +42,8 @@ namespace rogue
 	int ScaleHealing(DBloodActor* actor, int add);                         // actHealDude: the Covenant's Famine heals less (0: no heal)
 	bool OnUse(DBloodPlayer* pPlayer);                                     // playerProcess, Use: true = taken by the Crypt (a menu opened)
 	bool Unflinching(DBloodActor* actor);                                  // RecoilDude: red champions don't flinch
-	// The Forge (roguelite.cpp): the run's forged gun fires its runes' payloads in place of its own primary fire.
+	// The Forge (roguelite.cpp): the run's forged gun fires its runes' payloads in place of its own primary fire, and its
+	// alt fire is a forged mode of its own (rl_forge_alt).
 	void WeaponCallback(int nCallback, int id, void* data);                // qavPlay: a weapon frame's callback (the stock one if no Forge)
 	bool SwallowMissile(DBloodActor* shooter, double xyoff, double zoff, const DVector3& dv, int type); // actFireMissile
 	bool SwallowVector(DBloodActor* shooter, double offset, double zoffset, const DVector3& dv, int type); // actFireVector
@@ -64,6 +66,7 @@ namespace rogue
 		bool flareStrike = false;                                          // the bare forged flare: its impact damage comes after the stock burn
 	};
 	double MissileSpeedScale(DBloodActor* missile);                        // actMoveMissile, homing: a forged cleaver flies faster (1: stock)
+	bool ForgeBurst(DBloodActor* carrier);                                 // FlareBurst: true = a forged starburst threw its own ring
 	struct ForgeExplosion                                                  // actCheckExplosion: a forged blast (Brimstone Leap, the Larder, half on you)
 	{
 		ForgeExplosion(DBloodActor* explosion);

@@ -2923,6 +2923,11 @@ void WeaponProcess(DBloodPlayer* pPlayer) {
 			}
 			break;
 		case kWeapTommyGun:
+			if (rogue::ForgeLoaded(pPlayer, 3, 1)) // blood2d roguelite: dry under the Blood Price, alt fires the primary (alt is never paid in blood)
+			{
+				StartQAV(pPlayer, kQAVTOMFIRE, nClientFireTommy, 1);
+				return;
+			}
 			if (powerupCheck(pPlayer, kPwUpTwoGuns) && checkAmmo2(pPlayer, 3, 2))
 				StartQAV(pPlayer, kQAV2TOMALT, nClientAltFireSpread2);
 			else

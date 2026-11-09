@@ -87,6 +87,7 @@ void Remove(DBloodActor* actor, sectortype*) // 1
 void FlareBurst(DBloodActor* actor, sectortype*) // 2
 {
 	if (!actor) return;
+	if (rogue::ForgeBurst(actor)) { evPostActor(actor, 0, kCallbackRemove); return; } // blood2d roguelite: a forged starburst's own ring
 	auto nAngVec = actor->vel.XY().Angle().ToVector();
 	double nRadius = FixedToFloat(0x55555);
 	for (int i = 0; i < 8; i++)

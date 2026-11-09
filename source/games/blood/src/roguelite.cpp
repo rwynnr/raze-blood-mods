@@ -36,7 +36,9 @@
 // The Forge (docs/roguelite-forge.md): one gun of the kit, forged with runes in
 // the Armory, fires the runes' payload in place of its own primary fire: the
 // stock fire function still runs (hands, sounds, ammo, timing), its shots are
-// swallowed and their aims recorded, and the payload goes out along them.
+// swallowed and their aims recorded, and the payload goes out along them. Its
+// alt fire is a forged mode of its own the same way (both barrels, the sweep,
+// the starburst), unless rl_forge_alt is 0, which leaves the stock alt fire.
 // Litanies: two parts of a forged gun that together wake an effect neither has
 // (docs/roguelite-forge.md). Shown once both are carved, kept in the Book across
 // runs; at most two sing on a gun; banes add a point of Dread.
@@ -174,6 +176,7 @@ RL_FORGE(rl_forge_wound, 2)
 RL_FORGE(rl_forge_penance, 1)
 CVARD(Int, rl_forge_added, 0, CVAR_ARCHIVE, "roguelite Forge: the Vessel the Forge itself put in the kit (taken out again with it)")
 CVARD(String, rl_forge_sing, "", CVAR_ARCHIVE, "roguelite Forge: Litanies chosen to sing (ids), and '-id' for ones silenced")
+CVARD(Bool, rl_forge_alt, true, CVAR_ARCHIVE, "roguelite Forge: the forged gun's alt fire is a forged mode of its own (0 = its stock alt fire)")
 CVARD(String, rl_litanies, "", CVAR_ARCHIVE, "roguelite Forge: the Litanies found (ids), kept across runs")
 
 BEGIN_BLD_NS
@@ -360,6 +363,14 @@ const ForgeRuneInfo forgePenances[] =
 	{ "Blood Price", "Blood-Priced", 15, "Dry, a pull costs 4 health." },
 };
 constexpr int kForgeMissiles = 12, kForgeVectors = 32; // most a pull fires (the flare's Choir: three fans of four cleavers)
+// The alt modes (EmitForge): both barrels, the tommy's sweep, the flare's starburst. An alt pull has its own caps (the
+// stock alt already fires 64 pellets akimbo, and 8 sub-flares), and the Mouth's payload half again over the rounds it
+// drinks, as stock's alt is (armour-piercing shells 6 to 4, tommy bullets 20 to 12).
+constexpr int kForgeAltMissiles = 16, kForgeAltVectors = 64;
+constexpr double kForgeAltBonus = 1.5;
+constexpr int kStarburstFlares = 8;                  // the starburst: the stock alt's price in flares, and its 8 sub-flares
+constexpr int kSweepSteps = 14;                      // the tommy's alt sweep: 14 steps, its callback id the step's place
+constexpr double kStarburstCone = 60;                // degrees: a hunting starburst child looks for its foe this wide
 constexpr int kChoirPerAim = 4;                      // the Choir: a Mouth's missiles in each of its three aims, at most
 constexpr int kCerberusFlying = 8;                   // Cerberus: forged fireballs flying at once, at most
 constexpr double kCleaverSpeed = 1.5;                // forged cleavers fly half again as fast as the Butcher's
@@ -668,6 +679,27 @@ ForgeRates Rates(const int* f)
 	return r;
 }
 
+// An alt pull's Mouth payload, before the Choir fans it three ways: for the rounds it fires (units) and the share of
+// their drink paid, times its bonus (kForgeAltBonus; the sweep doubles its odd steps instead), within the alt's cap in
+// whole fans. Something paid fires at least one. EmitForge fires it and the menu counts it, so they agree.
+int AltPayload(const int* f, int units, double share, double bonus)
+{
+	auto r = Rates(f);
+	int fan = f[kForgePath] == kPathChoir ? 3 : 1;
+	units = std::max(units, 1);
+	int perRound = std::max(1, std::min(r.perRound, kForgeAltMissiles / (units * fan)));
+	int count = int(perRound * units * share * bonus + 1e-6); // rounded down: a short pull doesn't round up past its share
+	return std::max(1, std::min(count, kForgeAltMissiles / fan));
+}
+
+// The starburst's ring, each carrier's (the Choir fires three): the Mouth's payload for the 8 flares it drinks, or
+// with no Mouth the stock alt's 8 sub-flares, forged.
+int StarburstCount(const int* f, double share)
+{
+	if (f[kForgeMouth]) return AltPayload(f, kStarburstFlares, share, kForgeAltBonus);
+	return std::clamp(int(kStarburstFlares * share + 0.5), 1, kForgeAltMissiles);
+}
+
 FString ForgeName(const int* f)
 {
 	if (!f[kForgeVessel]) return "no forged gun";
@@ -713,6 +745,32 @@ FString ForgeEffectLine(const int* f)
 	return s;
 }
 
+// The alt mode's sentence, as EmitForge fires it with one gun and ammo enough (AltPayload counts both).
+FString ForgeAltLine(const int* f)
+{
+	if (!rl_forge_alt) return "Alt fire: stock.";
+	auto r = Rates(f);
+	int m = f[kForgeMouth], fan = f[kForgePath] == kPathChoir ? 3 : 1;
+	switch (f[kForgeVessel])
+	{
+	case kVesselShotgun: // FireShotgun(2): 32 armour-piercing pellets for 2 shells
+		if (!m) return "Alt: both barrels, 32 armor-piercing pellets for 2 shells.";
+		return FStringf("Alt: both barrels, %d %s for %d shells.", AltPayload(f, 2, 1, kForgeAltBonus) * fan, forgeMouthPlural[m], 2 * r.drink);
+	case kVesselTommy:
+	{
+		if (!m) return FStringf("Alt: a sweep of %d armor-piercing bullets.", kSweepSteps);
+		int n = 0;
+		for (int step = 1; step <= kSweepSteps; step++) n += AltPayload(f, 1, 1, (step & 1) ? 2 : 1) * fan;
+		return FStringf("Alt: a sweep of %d %s for %d bullets.", n, forgeMouthPlural[m], kSweepSteps * r.drink);
+	}
+	case kVesselFlare:
+		if (!m) return FStringf("Alt: a starburst of %d forged sub-flares for %d flares.", StarburstCount(f, 1), kStarburstFlares);
+		return FStringf("Alt: %s of %d %s for %d flares.", fan > 1 ? "3 starbursts" : "a starburst", StarburstCount(f, 1), forgeMouthPlural[m],
+			kStarburstFlares);
+	}
+	return "";
+}
+
 FString ForgeAmmoLine(const int* f)
 {
 	if (!f[kForgeVessel]) return "";
@@ -721,6 +779,8 @@ FString ForgeAmmoLine(const int* f)
 	static const char* ammoMany[] = { "", "flares", "shells", "bullets" };
 	int a = forgeVessels[f[kForgeVessel]].ammo;
 	FString s = FStringf("Drinks %d %s a %s.", r.drink, r.drink == 1 ? ammoOne[a] : ammoMany[a], f[kForgeVessel] == kVesselShotgun ? "barrel" : "pull");
+	s.AppendFormat(" %s", ForgeAltLine(f).GetChars());
+	// Dry, every Vessel's alt fires its primary (an alt pull is never paid in blood), so this holds for both.
 	if (f[kForgePenance]) s.AppendFormat(" %s", forgePenances[f[kForgePenance]].says);
 	return s;
 }
@@ -3097,11 +3157,29 @@ static bool ForgeOn(DBloodPlayer* p)
 	return v && run.active && !run.over && !crypt.in && p && p == getPlayer(myconnectindex) && p->GetActor() && p->curWeapon == forgeVessels[v].weapon;
 }
 
-static bool PrimaryCallback(DBloodPlayer* p, int vessel, int nCallback)
+// How a firing callback of the forged gun fires: as its forged primary, as its forged alt mode (both barrels, the
+// tommy's sweep, the flare's starburst), or stock (its other callbacks, and alt fire with rl_forge_alt off).
+enum { kFireStock, kFirePrimary, kFireAlt };
+static int FireMode(DBloodPlayer* p, int vessel, int nCallback)
 {
-	if (vessel == kVesselShotgun) // alt fire shares FireShotgun: both barrels (and the akimbo pair) stay stock
-		return nCallback == nClientFireShotgun && p->weaponQav != qavGetCorrectID(kQAVSHOTF3) && p->weaponQav != qavGetCorrectID(kQAV2SHOTFIR);
-	return (vessel == kVesselFlare && nCallback == nClientFireFlare) || (vessel == kVesselTommy && nCallback == nClientFireTommy);
+	bool alt = false;
+	switch (vessel)
+	{
+	case kVesselFlare:
+		if (nCallback == nClientFireFlare) return kFirePrimary;
+		alt = nCallback == nClientAltFireFlare;
+		break;
+	case kVesselShotgun: // alt fire shares FireShotgun: both barrels (and the akimbo pair) are told apart by their QAV
+		if (nCallback != nClientFireShotgun) return kFireStock;
+		alt = p->weaponQav == qavGetCorrectID(kQAVSHOTF3) || p->weaponQav == qavGetCorrectID(kQAV2SHOTFIR);
+		if (!alt) return kFirePrimary;
+		break;
+	case kVesselTommy:
+		if (nCallback == nClientFireTommy) return kFirePrimary;
+		alt = nCallback == nClientAltFireSpread2;
+		break;
+	}
+	return alt && rl_forge_alt ? kFireAlt : kFireStock;
 }
 
 static bool FiringCallback(int vessel, int nCallback)
@@ -3145,22 +3223,29 @@ static bool PayInBlood(DBloodPlayer* p)
 
 // The Hound's Nose: the nearest foe within the cone ahead, in sight.
 // The nearest live foe in sight from a point, within a cone around a heading and a range (exclude: one not to pick).
-static DBloodActor* HoundFoe(const DVector3& from, sectortype* sect, DAngle heading, double cone, double range, DBloodActor* exclude = nullptr)
+// Given the foes already hunted (a foe once for each hunter), the least hunted one wins, nearest first: hunters share
+// a pack out in turn.
+static DBloodActor* HoundFoe(const DVector3& from, sectortype* sect, DAngle heading, double cone, double range, DBloodActor* exclude = nullptr,
+	const TArray<DBloodActor*>* hunted = nullptr)
 {
 	DBloodActor* best = nullptr;
 	double bestDist = range;
+	int bestUses = INT_MAX;
 	BloodStatIterator it(kStatDude);
 	while (auto a = it.Next())
 	{
 		if (a == exclude || a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !AllowedKillType(a) || !a->insector()) continue;
 		DVector2 d = a->spr.pos.XY() - from.XY();
 		double dist = d.Length();
-		if (dist >= bestDist || absangle(d.Angle(), heading).Degrees() > cone) continue;
+		int uses = 0;
+		if (hunted) for (auto h : *hunted) if (h == a) uses++;
+		if (dist >= range || uses > bestUses || (uses == bestUses && dist >= bestDist) || absangle(d.Angle(), heading).Degrees() > cone) continue;
 		double top, bottom;
 		GetActorExtents(a, &top, &bottom);
 		if (!cansee(from, sect, DVector3(a->spr.pos.XY(), (top + bottom) / 2), a->sector())) continue;
 		best = a;
 		bestDist = dist;
+		bestUses = uses;
 	}
 	return best;
 }
@@ -3187,6 +3272,16 @@ static double ForgeSpeed(int type)
 {
 	double speed = missileInfo[type - kMissileBase].fVelocity();
 	return type == kMissileButcherKnife ? speed * kCleaverSpeed : speed;
+}
+
+// A missile set to hunt a foe (already flying at it): the stock homing sets the full speed sideways and keeps vel.Z,
+// so it starts on the slope to the foe's middle.
+static void AimAt(DBloodActor* m, DBloodActor* foe)
+{
+	m->SetTarget(foe);
+	DVector3 d = MiddleOf(foe) - m->spr.pos;
+	double flat = d.XY().Length();
+	if (flat > 1) m->vel.Z = ForgeSpeed(m->spr.type) * d.Z / flat;
 }
 
 // A missile a Litany spawns away from the gun (a second head, a cleaver flying back): the player's, forged, with its
@@ -3217,6 +3312,49 @@ static DBloodActor* ForgeSpawnMissile(const DVector3& pos, sectortype* sect, con
 	evPostActor(m, 600, kCallbackRemove);
 	actBuildMissile(m, pl);
 	return m;
+}
+
+// The forged starburst's ring (the flare's alt): count children leave a point in the ring FlareBurst throws around
+// the carrier's flight (vel), a step round it each and every other one at half the spread: the Mouth's missiles, or
+// with no Mouth forged sub-flares, so the Wound comes with each. They are offspring (1), so a Litany that only takes
+// the gun's own shots (Cerberus, the Hymn, the Fetch) leaves them be. Under the Hound's Nose each child hunts a foe
+// of its own from there, the least hunted one in its cone, nearest first.
+static void ReleaseStarburst(const DVector3& pos, sectortype* sect, const DVector3& vel, int count)
+{
+	if (!sect || count <= 0 || vel.XY().LengthSquared() <= 0) return;
+	int mouth = run.forge[kForgeMouth];
+	int type = mouth ? forgeMouthMissile[mouth] : kMissileFlareAlt;
+	bool hound = run.forge[kForgePath] == kPathHound;
+	auto heading = vel.XY().Angle().ToVector();
+	double radius = FixedToFloat(0x55555); // FlareBurst's
+	TArray<DBloodActor*> hunted;
+	for (int i = 0; i < count; i++)
+	{
+		auto ring = DAngle::fromDeg(360. * i / count).ToVector().Rotated90CW() * radius;
+		if (i & 1) ring *= 0.5;
+		DVector3 v = vel + DVector3(DVector2(0, ring.X).Rotated(heading.X, heading.Y), ring.Y);
+		DBloodActor* foe = hound ? HoundFoe(pos, sect, v.XY().Angle(), kStarburstCone, kHoundRange, nullptr, &hunted) : nullptr;
+		DVector3 dir = foe ? MiddleOf(foe) - pos : v;
+		auto m = ForgeSpawnMissile(pos, sect, dir.Unit(), type, 1);
+		if (!m) continue;
+		if (type == kMissileFlareAlt)
+		{
+			// A stock sub-flare, as FlareBurst spawns it: it doesn't burst again, trails no sparks and doesn't hiss.
+			evKillActor(m, kCallbackFXFlareBurst);
+			evKillActor(m, kCallbackFXFlareSpark);
+			sfxKill3DSound(m, -1, -1);
+			m->spr.setspritetexture(aTexIds[kTexFLAREBURST]);
+			m->spr.shade = -128;
+			m->spr.scale = DVector2(0.5, 0.5);
+			m->clipdist = 0.5;
+			if (!foe) m->vel = v;
+		}
+		if (foe)
+		{
+			AimAt(m, foe);
+			hunted.Push(foe);
+		}
+	}
 }
 
 // A blast of the player's: small (a TNT stick, 75), standard (a bundle, 150) or large (225), forged. One that spares
@@ -3357,11 +3495,44 @@ static bool forgeBloodBoughtNow;    // the pull being fired was paid in blood (L
 // Corpse-Candle's lit flares, Requiem's waiting blasts, the Fetch's cleavers to send back.
 struct Candle { DBloodActor* flare; int blowAt; DVector3 pos; sectortype* sect; };
 struct Toll { DVector3 pos; sectortype* sect; int at; };
-struct Fetching { DVector3 pos; sectortype* sect; };
+struct Fetching { DVector3 pos; sectortype* sect; bool alt; };
 static TArray<Candle> candles;
 static TArray<Toll> tolls;
 static TArray<Fetching> fetching;
-static int fetchCredit;              // the Fetch: cleavers caught, in drink units, toward the next round given back
+static int fetchCredit;              // the Fetch: cleavers caught, in thirds of a drink, toward the next round given back
+// The Fetch: cleavers an alt pull fired, and the twins they send back (compared, never followed). The alt's bonus makes
+// each cost a third less, so a catch gives back a third less: else the bonus would come back as ammo.
+static TArray<DBloodActor*> fetchAlt;
+static bool FetchAlt(DBloodActor* m) { return fetchAlt.Find(m) < fetchAlt.Size(); }
+static void NoteFetchAlt(DBloodActor* m)
+{
+	if (fetchAlt.Size() >= 64) fetchAlt.Delete(0);
+	fetchAlt.Push(m);
+}
+
+// The forged starburst: each carrier's ring, kept from the pull that fired it until it bursts (a record lost to a save
+// is worked out again from the recipe); rings thrown by a carrier that struck early, to go out on the Forge's tic; and
+// the ring of the starburst being fired (a carrier fired point blank strikes before its record is kept).
+struct BurstRecord { DBloodActor* carrier; int count; };
+struct Starburst { DVector3 pos; sectortype* sect; DVector3 vel; int count; };
+static TArray<BurstRecord> forgeBursts;
+static TArray<Starburst> starbursts;
+static int forgeBurstNow;
+static int BurstCount(DBloodActor* carrier)
+{
+	for (int i = int(forgeBursts.Size()) - 1; i >= 0; i--)
+		if (forgeBursts[i].carrier == carrier)
+		{
+			int n = forgeBursts[i].count;
+			forgeBursts.Delete(i);
+			return n;
+		}
+	if (forgeEmitting && forgeBurstNow > 0) return forgeBurstNow;
+	return StarburstCount(run.forge, 1);
+}
+// The tommy's sweep under the Hound's Nose: the foes this sweep has hunted, so it rakes across a pack.
+static TArray<DBloodActor*> sweepHunted;
+static int sweepAt = INT_MIN / 2;
 static int witchfireNext = INT_MIN / 2;
 static int lastTollAt = INT_MIN / 2;
 
@@ -3391,6 +3562,12 @@ static void ResetLitanies()
 	forgeBite = nullptr;
 	for (auto& at : graveBursts) at = INT_MIN / 2;
 	fetchCredit = 0;
+	fetchAlt.Clear();
+	forgeBursts.Clear();
+	starbursts.Clear();
+	forgeBurstNow = 0;
+	sweepHunted.Clear();
+	sweepAt = INT_MIN / 2;
 	forgeLit.Clear();
 	hymnPulls.Clear();
 	hymnShots.Clear();
@@ -3422,7 +3599,11 @@ static bool IsLive(DBloodActor* a, int stat)
 	return false;
 }
 
-static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, int spent)
+// A pull's payload. alt: the gun's alt mode, forged (FireMode): both barrels fire the Mouth's payload for both, half
+// again over; the tommy's sweep fires it along each of its 14 aims, twice on every other one; the flare's starburst
+// fires its carrier as stock, forged, and the carrier throws a ring of the payload when it bursts (ForgeBurst) or
+// strikes early (ForgeImpact).
+static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, int spent, bool alt)
 {
 	auto pl = p->GetActor();
 	int vessel = run.forge[kForgeVessel];
@@ -3430,32 +3611,69 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 	auto r = Rates(run.forge);
 	int mouth = run.forge[kForgeMouth];
 	int fan = run.forge[kForgePath] == kPathChoir ? 3 : 1;
+	bool starburst = alt && vessel == kVesselFlare;
+	bool sweep = alt && vessel == kVesselTommy;
+	int capM = alt ? kForgeAltMissiles : kForgeMissiles, capV = alt ? kForgeAltVectors : kForgeVectors;
 	// The rounds this callback fires: the flare one (its id is the akimbo hand), the sawed-off and tommy their trigger.
-	int units = vessel == kVesselFlare ? 1 : std::max(id, 1);
-	int perRound = mouth ? std::max(1, std::min(r.perRound, kForgeMissiles / (units * fan))) : 0; // whole fans within the cap
+	// An alt pull's: the starburst's 8 (the stock alt's price), both barrels (four akimbo, by id), and a sweep step the
+	// shots it fired (its id is the step's place in the sweep, not a count).
+	int units = starburst ? kStarburstFlares : sweep ? int(shots.Size()) : vessel == kVesselFlare ? 1 : std::max(id, 1);
+	int perRound = mouth ? std::max(1, std::min(r.perRound, capM / (units * fan))) : 0; // whole fans within the cap
 
 	// The ammo: the stock function took a round a round fired; the rest of the drink is taken here. Short, the payload
-	// shrinks to what was paid for; dry with the Blood Price, the pull is paid in health (or not fired at all).
+	// shrinks to what was paid for; dry with the Blood Price, the pull is paid in health (or not fired at all). An alt
+	// pull is never paid in blood (dry, every alt fires the primary instead): short, it only shrinks. The starburst
+	// drinks the stock alt's 8 flares, with the Choir too.
 	double share = 1;
-	int roundsPaid = units * r.drink;
+	int owed = starburst ? kStarburstFlares : units * r.drink;
+	int roundsPaid = owed;
 	bool bloodPaid = false;
 	if (!gInfiniteAmmo)
 	{
-		int owed = units * r.drink, paid = std::max(spent, 0);
+		int paid = std::max(spent, 0);
 		int extra = std::min(std::max(owed - paid, 0), p->ammoCount[v.ammo]);
 		if (extra > 0) UseAmmo(p, v.ammo, extra);
 		paid += extra;
 		roundsPaid = paid;
 		if (paid < owed)
 		{
-			if (BloodPriced() && PayInBlood(p)) share = 1, bloodPaid = true;
+			if (!alt && BloodPriced() && PayInBlood(p)) share = 1, bloodPaid = true;
 			else if (pl->xspr.health <= 0) return; // Last Rites took your life: the pull fires nothing
 			else if (paid > 0) share = double(paid) / owed;
 			else return; // nothing paid: nothing fires
 		}
 	}
 
-	DBloodActor* target = run.forge[kForgePath] == kPathHound && r.missile ? HoundTarget(p, shots[0].dv) : nullptr;
+	// The Hound's Nose: the foes this pull hunts, its missiles shared out among them in turn. Both barrels hunt up to
+	// three foes, not one; a sweep step hunts the least hunted foe of its sweep, so the sweep rakes across a pack; the
+	// starburst's carrier flies as stock and its children hunt (ReleaseStarburst).
+	TArray<DBloodActor*> prey;
+	if (run.forge[kForgePath] == kPathHound && r.missile && !starburst)
+	{
+		DVector3 eye(pl->spr.pos.XY(), p->zWeapon);
+		DAngle heading = shots[0].dv.XY().Angle();
+		if (sweep)
+		{
+			if (PlayClock - sweepAt > kClock / 4 || PlayClock < sweepAt) sweepHunted.Clear(); // a new sweep
+			sweepAt = PlayClock;
+			if (auto t = HoundFoe(eye, pl->sector(), heading, kHoundCone, kHoundRange, nullptr, &sweepHunted))
+			{
+				if (sweepHunted.Size() >= 64) sweepHunted.Delete(0);
+				sweepHunted.Push(t);
+				prey.Push(t);
+			}
+		}
+		else if (alt)
+		{
+			for (int i = 0; i < 3; i++)
+			{
+				auto t = HoundFoe(eye, pl->sector(), heading, kHoundCone, kHoundRange, nullptr, &prey);
+				if (!t || prey.Find(t) < prey.Size()) break; // no other foe in the cone
+				prey.Push(t);
+			}
+		}
+		else if (auto t = HoundTarget(p, shots[0].dv)) prey.Push(t);
+	}
 	// Blood Feud: a pull paid in blood hunts whoever last drew your blood, anywhere in sight.
 	if (bloodPaid && run.forge[kForgePath] == kPathHound && Sings(kLitBloodFeud) && forgeScent && IsLive(forgeScent, kStatDude)
 		&& forgeScent->hasX() && forgeScent->xspr.health > 0 && PlayClock - forgeScentAt >= 0 && PlayClock - forgeScentAt < 5 * kClock)
@@ -3463,14 +3681,24 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 		DVector3 eye(pl->spr.pos.XY(), p->zWeapon);
 		if ((forgeScent->spr.pos.XY() - eye.XY()).Length() <= 2048 && cansee(eye, pl->sector(), MiddleOf(forgeScent), forgeScent->sector()))
 		{
-			target = forgeScent;
+			prey.Clear();
+			prey.Push(forgeScent);
 			LitanyFired(kLitBloodFeud);
 		}
 	}
 	TArray<ForgeAim> out;
-	if (mouth)
+	int children = 0; // the starburst: each carrier's ring
+	if (starburst)
 	{
-		int count = std::max(1, int(perRound * units * share)); // something paid: at least one
+		children = StarburstCount(run.forge, share);
+		out.Push(shots[0]); // the carrier keeps its type (kMissileFlareAlt): the Choir fans it below, three that share the cap
+	}
+	else if (mouth)
+	{
+		// Something paid: at least one. Both barrels' payload is half again over; a sweep step's comes twice on every
+		// other step (half again over the sweep).
+		int count = !alt ? std::max(1, int(perRound * units * share))
+			: AltPayload(run.forge, units, share, sweep ? ((id & 1) ? 2. : 1.) : kForgeAltBonus);
 		for (int i = 0; i < count; i++)
 		{
 			auto s = shots[i % shots.Size()];
@@ -3486,8 +3714,8 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 	}
 	if (out.Size() == 0) return;
 	DVector3 from(pl->spr.pos.XY(), p->zWeapon);
-	if (target) // aim at the foe, so the hunt starts on it (the stock homing only steers sideways and down)
-		for (auto& s : out) if (s.missile) s.dv = (MiddleOf(target) - from).Unit();
+	if (prey.Size()) // aim at the foe, so the hunt starts on it (the stock homing only steers sideways and down)
+		for (unsigned i = 0; i < out.Size(); i++) if (out[i].missile) out[i].dv = (MiddleOf(prey[i % prey.Size()]) - from).Unit();
 	// Copies of one aim (the flare's five cleavers) fly a little apart, +2, -2, +4, -4 degrees and on: stacked, they'd
 	// all strike the one spot. Copy k of an aim is the k-th time the payload loop came round to it.
 	if (mouth)
@@ -3500,8 +3728,9 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 	bool shears = false;
 	if (fan > 1)
 	{
-		// The Shears: with a foe close to the aim, each fan's three cleavers converge on it from the barrel's sides.
-		DBloodActor* quarry = Sings(kLitShears) && mouth == kMouthCleaver ? HoundFoe(from, pl->sector(), out[0].dv.XY().Angle(), 5, 1024) : nullptr;
+		// The Shears: with a foe close to the aim, each fan's three cleavers converge on it from the barrel's sides (not
+		// the starburst's carriers: their cleavers are in the ring).
+		DBloodActor* quarry = Sings(kLitShears) && mouth == kMouthCleaver && !starburst ? HoundFoe(from, pl->sector(), out[0].dv.XY().Angle(), 5, 1024) : nullptr;
 		TArray<ForgeAim> fanned;
 		for (auto& s : out)
 			for (int i = 0; i < 3; i++)
@@ -3528,24 +3757,28 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 		if (quarry) shears = true, LitanyFired(kLitShears);
 	}
 
-	// Hymn of Ash: the pull's refunds (one a fireball on flesh, up to the drink less one, never more than it paid).
+	// Hymn of Ash: the pull's refunds (one a fireball on flesh), up to what it drank less a round for each round it
+	// fired, never more than it paid (both barrels: up to 6 of 8 shells under the Choir). The starburst's ring is
+	// offspring, which the Hymn leaves be.
 	hymnNow = -1;
-	if (Sings(kLitHymn) && mouth == kMouthHellmouth)
+	if (Sings(kLitHymn) && mouth == kMouthHellmouth && !starburst)
 	{
 		if (hymnPulls.Size() >= 32) hymnPulls.Delete(0);
 		hymnNow = hymnNextId++;
-		hymnPulls.Push({ hymnNow, std::max(std::min(r.drink, roundsPaid) - 1, 0), v.ammo, PlayClock });
+		hymnPulls.Push({ hymnNow, std::max(std::min(owed, roundsPaid) - units, 0), v.ammo, PlayClock });
 	}
 	forgeBloodBoughtNow = bloodPaid;
+	forgeBurstNow = children;
 
 	int missiles = 0, vectors = 0;
 	forgeHits.Clear();
 	forgeEmitting = true;
-	for (auto& s : out)
+	for (unsigned i = 0; i < out.Size(); i++)
 	{
+		auto& s = out[i];
 		if (s.missile)
 		{
-			if (missiles++ >= kForgeMissiles) continue;
+			if (missiles++ >= capM) continue;
 			auto m = actFireMissile(pl, s.off, s.zoff, s.dv, s.type);
 			if (!m) continue;
 			m->modFlags |= kModForged | (bloodPaid ? kModBloodBought : 0);
@@ -3555,32 +3788,35 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 			m->spr.cstat &= ~CSTAT_SPRITE_BLOCK;
 			if (m->spr.type == kMissileButcherKnife) m->vel = s.dv.Unit() * ForgeSpeed(m->spr.type); // a forged cleaver flies faster
 			if (hymnNow >= 0) hymnShots.Push({ m, hymnNow });
-			if (target)
+			if (alt && m->spr.type == kMissileButcherKnife && Sings(kLitFetch)) NoteFetchAlt(m);
+			if (starburst)
 			{
-				m->SetTarget(target);
-				// The stock homing sets the full speed sideways and keeps vel.Z: give it the slope to the foe's middle.
-				DVector3 d = MiddleOf(target) - m->spr.pos;
-				double flat = d.XY().Length();
-				if (flat > 1) m->vel.Z = ForgeSpeed(m->spr.type) * d.Z / flat;
+				if (forgeBursts.Size() >= 32) forgeBursts.Delete(0);
+				forgeBursts.Push({ m, children });
 			}
+			if (prey.Size()) AimAt(m, prey[i % prey.Size()]);
 		}
 		else
 		{
-			if (vectors++ >= kForgeVectors) continue;
+			if (vectors++ >= capV) continue;
 			actFireVector(pl, s.off, s.zoff, s.dv, VECTOR_TYPE(s.type));
 		}
 	}
-	// The Censer: three spray-can flames along the leftmost, middle and rightmost pellets.
-	if (Sings(kLitCenser) && !mouth && vessel == kVesselShotgun && out.Size() >= 3)
+	// The Censer: three spray-can flames along the spread, its leftmost, middle and rightmost pellets; both barrels
+	// swing three a barrel, spaced evenly across it.
+	if (Sings(kLitCenser) && !mouth && vessel == kVesselShotgun)
 	{
 		DAngle aim = shots[0].dv.XY().Angle();
 		TArray<int> order;
 		for (unsigned i = 0; i < out.Size(); i++) if (!out[i].missile) order.Push(int(i));
-		if (order.Size() >= 3)
+		int flames = std::min(alt ? 3 * units : 3, int(order.Size()));
+		if (flames >= 3)
 		{
 			std::sort(order.begin(), order.end(), [&](int a, int b) { return deltaangle(aim, out[a].dv.XY().Angle()).Degrees() < deltaangle(aim, out[b].dv.XY().Angle()).Degrees(); });
-			for (int i : { order[0], order[order.Size() / 2], order[order.Size() - 1] })
+			int n = int(order.Size());
+			for (int j = 0; j < flames; j++)
 			{
+				int i = order[(j * (n - 1) + (flames - 1) / 2) / (flames - 1)]; // three: the first, the middle (n/2) and the last
 				auto m = actFireMissile(pl, out[i].off, out[i].zoff, out[i].dv, kMissileFlameSpray);
 				if (m) { m->modFlags |= kModForged; SetOffspring(m, 1); m->spr.cstat &= ~CSTAT_SPRITE_BLOCK; }
 			}
@@ -3590,6 +3826,7 @@ static void EmitForge(DBloodPlayer* p, const TArray<ForgeAim>& shots, int id, in
 	forgeEmitting = false;
 	hymnNow = -1;
 	forgeBloodBoughtNow = false;
+	forgeBurstNow = 0;
 	if (run.forge[kForgeWound] == kWoundPyre)
 		for (auto t : forgeHits) PyreLight(pl, t);
 	forgeHits.Clear();
@@ -3605,19 +3842,31 @@ void WeaponCallback(int nCallback, int id, void* data)
 		return;
 	}
 	int ammo = forgeVessels[v].ammo, before = p->ammoCount[ammo];
-	TArray<ForgeAim> shots;
-	if (!PrimaryCallback(p, v, nCallback))
+	int mode = FireMode(p, v, nCallback);
+	if (mode == kFireStock)
 	{
-		// Alt fire stays stock and needs ammo: dry (only the Blood Price lets it get this far), it does nothing at all
+		// Alt fire left stock needs ammo: dry (only the Blood Price lets it get this far), it does nothing at all
 		// (the tommy's spread would put the gun away).
 		if (before == 0 && BloodPriced() && !gInfiniteAmmo) return;
 		qavClientCallback[nCallback](id, data);
 		return;
 	}
-	forgeShots = &shots;
-	qavClientCallback[nCallback](id, data);
-	forgeShots = nullptr;
-	if (shots.Size()) EmitForge(p, shots, id, before - p->ammoCount[ammo]);
+	bool alt = mode == kFireAlt;
+	if (!alt || before > 0 || gInfiniteAmmo)
+	{
+		TArray<ForgeAim> shots;
+		forgeShots = &shots;
+		qavClientCallback[nCallback](id, data);
+		forgeShots = nullptr;
+		if (shots.Size()) EmitForge(p, shots, id, before - p->ammoCount[ammo], alt);
+	}
+	// An alt pull is never paid in blood: dry, it fires nothing. The tommy's sweep puts the gun away once dry, as the
+	// stock sweep does (its own check came before the Forge drank the rest of the step's rounds).
+	if (alt && v == kVesselTommy && !gInfiniteAmmo && p->ammoCount[ammo] == 0 && p->weaponState != -1)
+	{
+		WeaponLower(p);
+		p->weaponState = -1;
+	}
 }
 
 bool SwallowMissile(DBloodActor* shooter, double xyoff, double zoff, const DVector3& dv, int type)
@@ -3649,6 +3898,18 @@ bool ForgeLoadedWeapon(DBloodPlayer* pPlayer, int weapon)
 	return weapon == forgeVessels[v].weapon && pPlayer->hasWeapon[weapon] && pPlayer->ammoCount[forgeVessels[v].ammo] == 0 && CanPayInBlood(pPlayer);
 }
 
+// FlareBurst: a forged starburst's carrier (the flare's alt, offspring 0) throws its own ring, once (it then counts as
+// offspring); false leaves the stock burst.
+bool ForgeBurst(DBloodActor* carrier)
+{
+	if (!carrier || !run.active || run.over || !(carrier->modFlags & kModForged) || carrier->spr.type != kMissileFlareAlt || Offspring(carrier) != 0)
+		return false;
+	SetOffspring(carrier, 1);
+	int count = BurstCount(carrier);
+	if (carrier->insector()) ReleaseStarburst(carrier->spr.pos, carrier->sector(), carrier->vel, count);
+	return true;
+}
+
 ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit, int code, walltype* hitWall)
 {
 	if (!m || !run.active || run.over) return;
@@ -3670,6 +3931,40 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit, int code, walltype* h
 	bool bloodBought = (m->modFlags & kModBloodBought) || (emitted && forgeBloodBoughtNow);
 
 	if (liveHit) foe = hit;
+
+	// The forged starburst's carrier, struck before it burst (FlareBurst): it throws its ring from there, on the Forge's
+	// next tic (not from inside the missiles' move). Into a body it struck the ring goes on, from a little back along
+	// its flight, so it strikes it; off a wall, floor or ceiling it bounces away; into the sky it's lost, as the stock
+	// carrier is. Once: the carrier then counts as offspring, and its own stock blast is all the Grave gets of it.
+	bool carrier = type == kMissileFlareAlt && offspring == 0;
+	if (carrier)
+	{
+		SetOffspring(m, 1);
+		int count = BurstCount(m);
+		DVector3 v = m->vel;
+		if (!sky && m->insector() && v.XY().LengthSquared() > 0)
+		{
+			DVector3 pos = m->spr.pos;
+			auto sect = m->sector();
+			if (code == 0 || code == 4)
+			{
+				if (hitWall) // mirrored in the wall (the normal's side doesn't matter)
+				{
+					DVector2 n = hitWall->normalAngle().ToVector();
+					v.XY() -= n * (2 * v.XY().dot(n));
+				}
+			}
+			else if (code == 1 || code == 2) v.Z = -v.Z;
+			else if (code == 3)
+			{
+				DVector3 back = pos - v.Unit() * 16; // where it flew a moment ago
+				updatesector(back.XY(), &sect);
+				if (sect) pos = back;
+				else sect = m->sector();
+			}
+			if (starbursts.Size() < 16) starbursts.Push({ pos, sect, v, count });
+		}
+	}
 
 	// The cleaver's bite: the stock impact wounds the foe and then heals you 10; ScaleHealing makes that heal half the
 	// health the wound took from a live foe, and nothing at all when the cleaver struck no live foe. ScaleDamage makes
@@ -3739,7 +4034,7 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit, int code, walltype* h
 			bigger = true;
 		}
 	}
-	if (run.forge[kForgeWound] == kWoundGrave && m->insector() && !bigger)
+	if (run.forge[kForgeWound] == kWoundGrave && m->insector() && !bigger && !carrier)
 	{
 		bool flesh = hit && (hit->IsDudeActor() || hit->spr.statnum == kStatThing) && GetExtInfo(hit->spr.spritetexture()).surftype == kSurfFlesh;
 		bool candle = Sings(kLitCandle) && type == kMissileFlareRegular && flesh;
@@ -3848,7 +4143,7 @@ ForgeImpact::~ForgeImpact()
 	{
 		DVector3 back = missile->spr.pos;
 		if (missile->vel.LengthSquared() > 0) back -= missile->vel.Unit() * 4;
-		if (fetching.Size() < 8) fetching.Push({ back, missile->sector() });
+		if (fetching.Size() < 8) fetching.Push({ back, missile->sector(), FetchAlt(missile) });
 		seqKill(missile);
 		actPostSprite(missile, kStatFree);
 	}
@@ -3905,6 +4200,13 @@ static void ForgeTick()
 	if (!p || !p->GetActor()) return;
 	auto pl = p->GetActor();
 	if (run.forge[kForgeWound] == kWoundPyre) PyreTick(pl);
+	// The starburst's rings thrown by carriers that struck early (ForgeImpact).
+	if (starbursts.Size())
+	{
+		auto rings = std::move(starbursts);
+		starbursts.Clear();
+		for (auto& s : rings) ReleaseStarburst(s.pos, s.sect, s.vel, s.count);
+	}
 	if (!run.litanies)
 	{
 		actPostProcess(); // the flares put out
@@ -4022,6 +4324,7 @@ static void ForgeTick()
 			if (dir.LengthSquared() <= 1) continue;
 			auto twin = ForgeSpawnMissile(f.pos, f.sect, dir.Unit(), kMissileButcherKnife, 2);
 			if (!twin) continue;
+			if (f.alt) NoteFetchAlt(twin);
 			evPostActor(twin, 3 * kClock, kCallbackRemove);
 			twins++;
 			LitanyFired(kLitFetch);
@@ -4038,18 +4341,19 @@ static void ForgeTick()
 		}
 		// The Vessel's ammo back for what the caught cleavers cost (Rates: a round's drink buys perRound of them), so a
 		// flare gun firing five a flare gives one back for every five caught. A round a cleaver would let a flare shot
-		// at a wall bring five flares back.
+		// at a wall bring five flares back. An alt pull's cleaver cost a third less (kForgeAltBonus): it gives that
+		// much back. Counted in thirds of a drink.
 		auto r = Rates(run.forge);
 		int ammo = forgeVessels[run.forge[kForgeVessel]].ammo;
 		for (auto m : caught)
 		{
+			fetchCredit += (FetchAlt(m) ? 2 : 3) * r.drink;
 			evKillActor(m);
 			actPostSprite(m, kStatFree);
-			fetchCredit += r.drink;
 			bool refund = false;
-			while (r.perRound > 0 && fetchCredit >= r.perRound)
+			while (r.perRound > 0 && fetchCredit >= 3 * r.perRound)
 			{
-				fetchCredit -= r.perRound;
+				fetchCredit -= 3 * r.perRound;
 				p->ammoCount[ammo] = ClipHigh(p->ammoCount[ammo] + 1, gAmmoInfo[ammo].max);
 				refund = true;
 			}
