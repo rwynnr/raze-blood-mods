@@ -2190,6 +2190,7 @@ OptionMenu "RogueliteMenu" protected
 {
 	Title "Roguelite"
 	Option "Skill",							"rl_skill", "RogueliteSkills"
+	Option "Rifts: foes arrive through rifts (zombies, waves)",	"rl_rifts", "OnOff"
 	Submenu "The Armory: your starting kit",	"RogueliteArmory"
 	Submenu "The Covenant: harder runs, more ichor",	"RogueliteCovenant"
 	Option "Omens: the dead drop timed boons",	"rl_omens", "OnOff"

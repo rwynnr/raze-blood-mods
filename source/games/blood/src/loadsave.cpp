@@ -386,6 +386,7 @@ static AISTATE* const allAIStates[] =
 	&zombieFSearch,
 	&zombieFRecoil,
 	&zombieFTeslaRecoil,
+	&rogue::riftOpen, &rogue::riftSpark, &rogue::riftWait, &rogue::riftHold, &rogue::riftDone, // blood2d roguelite: rifts (rifts.cpp), appended: new states go after
 };
 
 //---------------------------------------------------------------------------
@@ -483,6 +484,7 @@ void DBloodActor::Serialize(FSerializer& arc)
 			("owneractor", ownerActor);
 		uint8_t noModFlags = 0;
 		arc("modflags", modFlags, &noModFlags); // blood2d mods: per-actor flags (written only when set)
+		uint16_t noRiftPlan = 0; arc("riftplan", riftPlan, &noRiftPlan); // blood2d roguelite: a zombie's planned rift (written only when set)
 
 	}
 

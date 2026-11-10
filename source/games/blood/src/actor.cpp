@@ -3749,6 +3749,7 @@ int actDamageSprite(DBloodActor* source, DBloodActor* actor, DAMAGE_TYPE damageT
 	damage = bmod::ScaleDamage(source, actor, damage);
 	int unscaled = damage;
 	damage = rogue::ScaleDamage(source, actor, damageType, damage); // blood2d roguelite: champions hit harder
+	damage = rogue::RiftDamage(actor, damageType, damage); // blood2d roguelite: a rift loses health but never its last point
 	if (unscaled > 0 && damage <= 0) return 0; // blood2d roguelite: a hit the run made harmless (your own Larder or Leap blast) isn't one: no pain sound
 
 	DBloodPlayer* pSourcePlayer = nullptr;
@@ -5543,6 +5544,7 @@ static void actCheckProximity()
 					auto nextdude = it1.Peek();
 
 					if (dudeactor->spr.flags & 32 || !dudeactor->hasX()) continue;
+					if (rogue::IsRift(dudeactor)) continue; // blood2d roguelite: a waiting rift sets off nothing (rifts.cpp)
 
 					if ((unsigned int)dudeactor->xspr.health > 0)
 					{
@@ -7035,6 +7037,7 @@ void MakeSplash(DBloodActor* actor)
 
 void actBurnSprite(DBloodActor* pSource, DBloodActor* pTarget, int nTime)
 {
+	if (rogue::RiftFireproof(pTarget)) return; // blood2d roguelite: a rift doesn't catch fire
 	pTarget->xspr.burnTime = ClipHigh(pTarget->xspr.burnTime + nTime, pTarget->spr.statnum == kStatDude ? 2400 : 1200);
 	pTarget->SetBurnSource(pSource);
 }

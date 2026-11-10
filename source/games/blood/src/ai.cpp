@@ -351,6 +351,7 @@ void aiMoveDodge(DBloodActor* actor)
 void aiActivateDude(DBloodActor* actor)
 {
 	assert(actor->spr.type >= kDudeBase && actor->spr.type < kDudeMax);
+	if (rogue::IsRift(actor)) return; // blood2d roguelite: a waiting rift wakes only as its foe arrives (rifts.cpp)
 	if (!actor->xspr.state)
 	{
 		aiChooseDirection(actor, (actor->xspr.TargetPos - actor->spr.pos).Angle());
@@ -616,14 +617,14 @@ void aiActivateDude(DBloodActor* actor)
 	{
 		DUDEEXTRA_STATS* pDudeExtraE = &actor->dudeExtra.stats;
 		pDudeExtraE->thinkTime = 1;
-		if (actor->xspr.aiState == &zombieEIdle) aiNewState(actor, &zombieEUp);
+		if (actor->xspr.aiState == &zombieEIdle && !rogue::RiftWake(actor)) aiNewState(actor, &zombieEUp); // blood2d roguelite: a rift opens instead (rl_rifts)
 		break;
 	}
 	case kDudeZombieAxeLaying:
 	{
 		DUDEEXTRA_STATS* pDudeExtraE = &actor->dudeExtra.stats;
 		pDudeExtraE->thinkTime = 1;
-		if (actor->xspr.aiState == &zombieSIdle) aiNewState(actor, &zombie13AC2C);
+		if (actor->xspr.aiState == &zombieSIdle && !rogue::RiftWake(actor)) aiNewState(actor, &zombie13AC2C); // blood2d roguelite: a rift opens instead (rl_rifts)
 		break;
 	}
 	case kDudeZombieButcher:
@@ -910,6 +911,7 @@ void aiSetTarget(DBloodActor* actor, const DVector3& pos)
 
 void aiSetTarget(DBloodActor* actor, DBloodActor* target)
 {
+	if (target && (rogue::IsRift(actor) || rogue::IsRift(target))) return; // blood2d roguelite: a waiting rift takes no foe, nor is one (rifts.cpp)
 	if (target == nullptr)
 	{
 		actor->SetTarget(nullptr);
@@ -939,6 +941,7 @@ int aiDamageSprite(DBloodActor* source, DBloodActor* actor, DAMAGE_TYPE nDmgType
 		return 0;
 	actor->xspr.health = ClipLow(actor->xspr.health - nDamage, 0);
 	actor->cumulDamage += nDamage;
+	if (rogue::RiftSteady(actor)) return source == actor ? 0 : nDamage; // blood2d roguelite: a hit on a rift, or its arrival's first 0.5 s, takes health only (no new foe, wake, dodge, chase)
 	DUDEINFO* pDudeInfo = getDudeInfo(actor->spr.type);
 
 	if (source)
@@ -1225,6 +1228,7 @@ int aiDamageSprite(DBloodActor* source, DBloodActor* actor, DAMAGE_TYPE nDmgType
 void RecoilDude(DBloodActor* actor)
 {
 	if (rogue::Unflinching(actor)) return; // blood2d roguelite: red champions don't flinch (nor stagger under tesla), but for a heavy hit
+	if (rogue::RiftSteady(actor)) return; // blood2d roguelite: a rift doesn't flinch, nor its arrival in its first 0.5 s
 	uint8_t v4 = Chance(0x8000);
 	DUDEEXTRA* pDudeExtra = &actor->dudeExtra;
 	if (actor->spr.statnum == kStatDude && (actor->spr.type >= kDudeBase && actor->spr.type < kDudeMax))

@@ -1340,6 +1340,7 @@ double RedSpeed(DBloodActor* a)
 void WaveSpawned(DBloodActor* spawned, DBloodActor* kind)
 {
 	if (spawned && run.active && !run.over) spawned->modFlags |= kModWave; // it counts half toward the momentum (below)
+	RiftWave(spawned); // rifts.cpp: a Horde or Hourglass enemy comes through a rift (rl_rifts; the same actor, its flags kept)
 	if (!spawned || !kind || !(kind->modFlags & kModChampion)) return;
 	spawned->spr.scale /= (kind->modFlags & kModRedChampion) ? kRedSize : kChampionSize;
 }
@@ -1443,6 +1444,7 @@ void SetupPressure()
 // Horde's waves (the rest of its enemies, a few at a time) and Hourglass's (every 30 s past the par time).
 void Pressure()
 {
+	RiftWaves riftWaves; // rifts.cpp: the waves spawned here come through rifts (chaos's, spawned elsewhere, don't)
 	if (run.extraEnemies > 0 && PlayClock >= run.nextWave)
 	{
 		TArray<DBloodActor*> kinds;
@@ -1622,7 +1624,10 @@ void CountAmmo(AmmoLedger& l, DBloodPlayer* p, bool carried)
 	while (auto a = it.Next())
 	{
 		if (a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !AllowedKillType(a)) continue;
-		AddEnemy(l, a->spr.type, a->xspr.health / 16.);
+		int type = a->spr.type;
+		double health = a->xspr.health / 16.;
+		RiftLedger(a, type, health); // rifts.cpp: a zombie a rift will replace counts as what comes through
+		AddEnemy(l, type, health);
 		AddDrops(l, a);
 	}
 	// The map's dude spawners (275 on the stock maps), each counted once.
@@ -2218,6 +2223,7 @@ void Remix()
 	double depth = run.maps.Size() > 1 ? double(run.index) / double(run.maps.Size() - 1) : 0.;
 	RemixEnemies(rng, depth);
 	CovenantEnemies();
+	PlanRifts(run.seed, run.index, depth); // rifts.cpp: which zombies come through rifts, as what (its own seeded stream)
 	bool owned[kWeapMax];
 	OwnedGuns(getPlayer(myconnectindex), owned);
 	RemixItems(rng, owned);
@@ -5479,7 +5485,7 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, DAMAGE_TYPE damageType
 OmenWound::OmenWound(DBloodActor* source, DBloodActor* target)
 {
 	if (!omens.Size() || !source || !target || target->IsPlayerActor() || !AllowedKillType(target) || !target->hasX()
-		|| target->xspr.health <= 0 || !BloodlustOn() || !ByYou(source))
+		|| target->xspr.health <= 0 || !BloodlustOn() || !ByYou(source) || IsRift(target)) // rifts.cpp: not a foe yet
 		return;
 	foe = target;
 	healthBefore = int(target->xspr.health);
@@ -5594,6 +5600,7 @@ static bool PayInBlood(DBloodPlayer* p)
 // frames lack that bit, and it's a foe all the same.
 static bool Dormant(DBloodActor* a)
 {
+	if (IsRift(a)) return true; // rifts.cpp: a rift still opening (its foe not yet through)
 	switch (a->spr.type)
 	{
 	case kDudeZombieAxeBuried: return a->xspr.aiState == &zombieEIdle;
@@ -5854,7 +5861,7 @@ static void PyreMark(DBloodActor* source, DBloodActor* t)
 // burning kinds a burn has already turned them into, are left alone, so nothing shows a fire that isn't there.
 static void PyreLight(DBloodActor* source, DBloodActor* t)
 {
-	if (!source || !t || !t->IsDudeActor() || t->IsPlayerActor() || !t->hasX() || t->xspr.health <= 0 || IsBurningDude(t)) return;
+	if (!source || !t || !t->IsDudeActor() || t->IsPlayerActor() || !t->hasX() || t->xspr.health <= 0 || IsBurningDude(t) || IsRift(t)) return; // rifts.cpp: not a waiting rift
 	if (!getDudeInfo(t->spr.type)->damageVal[kDamageBurn]) return;
 	bool was = t->xspr.burnTime > 0;
 	BurnTo(source, t, kPyreBurn);
@@ -6419,7 +6426,7 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit, int code, walltype* h
 		BloodStatIterator it(kStatDude);
 		while (auto d = it.Next())
 		{
-			if (d == hit || !d->hasX() || d->xspr.health <= 0 || (d->spr.pos.XY() - hit->spr.pos.XY()).Length() > 128) continue;
+			if (d == hit || !d->hasX() || d->xspr.health <= 0 || IsRift(d) || (d->spr.pos.XY() - hit->spr.pos.XY()).Length() > 128) continue; // rifts.cpp: not a waiting rift
 			if (!cansee(MiddleOf(hit), hit->sector(), MiddleOf(d), d->sector())) continue;
 			BurnTo(owner, d, kWitchfireBurn);
 		}
@@ -6730,7 +6737,7 @@ static void ForgeTick()
 			BloodStatIterator di(kStatDude);
 			while (auto d = di.Next())
 			{
-				if (d->IsPlayerActor() || !d->hasX() || d->xspr.health <= 0) continue;
+				if (d->IsPlayerActor() || !d->hasX() || d->xspr.health <= 0 || IsRift(d)) continue; // rifts.cpp: not a waiting rift
 				if ((d->spr.pos.XY() - k->spr.pos.XY()).Length() > 64 || std::abs(d->spr.pos.Z - k->spr.pos.Z) > 64) continue;
 				if (!cansee(k->spr.pos, k->sector(), MiddleOf(d), d->sector())) continue;
 				blown.Push(k);
@@ -6899,6 +6906,21 @@ void KitChanged()
 	UpdateMenus();
 }
 void CovenantChanged() { UpdateMenus(); }
+
+// The run's side of the rifts (rifts.h): rifts.cpp reads the run only through these.
+bool RiftRunLive() { return run.active && !run.over && !crypt.in; }
+RiftRules RiftRunRules(double depth)
+{
+	RiftRules r;
+	r.blueChance = (kChampionFirst + (kChampionLast - kChampionFirst) * depth) * (1 + run.cov[kChampions]); // as RemixEnemies rolls
+	r.flesh = 1. + 0.15 * run.cov[kFlesh]; // as CovenantEnemies gives it
+	r.championHealth = kChampionHealth;
+	r.redHealth = kRedHealth;
+	r.championSize = kChampionSize;
+	return r;
+}
+void RiftMakeChampion(DBloodActor* a, bool red) { MakeChampion(a, true, red); }
+int RiftThreatCost(int type) { return KindCost(type); }
 
 void TintSprite(DBloodActor* owner, tspritetype* tspr)
 {
