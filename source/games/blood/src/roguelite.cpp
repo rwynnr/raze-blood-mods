@@ -2593,8 +2593,11 @@ constexpr int kReliquaryTouchHint = kClock / 2;      // walked into, it names it
 constexpr double kReliquaryLook = 1.5;               // it's drawn this much bigger than the stock chest (repeat 60)
 constexpr double kReliquaryClear = 24;               // and so lies this far from walls and solid sprites (kSpotClear: 16)
 constexpr double kReliquaryHaloZ = 32;               // its motes circle a point this high above its floor
-// It falls with BELL: no stock code rings 270, and no stock map's ambient or sector sound uses it. (Eleven of the maps'
-// sound generators do, on E1M4, E1M8, E4M9, E6M1 and two BloodBath maps: each off until the map's wiring turns it on.)
+// It falls with BELL: no stock code or SEQ rings 270, and no stock map's ambient or sector sound uses it. But eleven of
+// the maps' sound generators (708) do, five on maps a run plays: four on E1M4, one on E6M1 (the rest are on E1M8, E4M9
+// and two BloodBath maps). Each is off until the map's wiring turns it on (on E1M4, its carnival games, after the
+// player's own action), then rings this bell again and again until its waitTime turns it off. So the bell alone may be
+// the map's: the bell together with the purple "A cursed reliquary falls" is the cue that means a drop.
 constexpr int kReliquaryBell = 270;
 constexpr int kLustPerSecond = 15 << 4;              // Bloodlust heals at most this a second (health is in sixteenths)
 constexpr int kLustTop = 100 << 4;                   // and never above this
@@ -2893,6 +2896,19 @@ bool IsReliquary(DBloodActor* a)
 	return IsOmenItem(a) && omenInfo[a->xspr.data1].tier == kOmenGamble && !(a->spr.flags & 32) && a->insector();
 }
 
+// Use weighs a reliquary from your eye (where its scan starts) to the chest's middle.
+DVector3 ReliquaryEye(DBloodPlayer* p)
+{
+	return DVector3(p->GetActor()->spr.pos.XY(), p->zView);
+}
+
+DVector3 ReliquaryMid(DBloodActor* a)
+{
+	double top, bottom;
+	GetActorExtents(a, &top, &bottom);
+	return DVector3(a->spr.pos.XY(), (top + bottom) / 2);
+}
+
 // The cursed reliquary you face, in sight; the nearest that can take hold now (CanGrant). *blocked: the nearest you face
 // that can't, so the hint can say why. Facing one to take it (Use): within kReliquaryRange of your eye and
 // kReliquaryCone of your view (where Use's own scan aims, its pitch too: one at your feet you look down at). Facing one
@@ -2903,7 +2919,7 @@ DBloodActor* NearReliquary(DBloodPlayer* p, DBloodActor** blocked = nullptr, boo
 	if (blocked) *blocked = nullptr;
 	auto pl = p ? p->GetActor() : nullptr;
 	if (!pl || !pl->insector()) return nullptr;
-	DVector3 eye(pl->spr.pos.XY(), p->zView);
+	DVector3 eye = ReliquaryEye(p);
 	DVector3 view = DVector3(pl->spr.Angles.Yaw.ToVector(), p->slope).Unit(); // as ActionScan aims
 	DVector2 facing = pl->spr.Angles.Yaw.ToVector();
 	double range = naming ? kReliquaryNameRange : kReliquaryRange;
@@ -2914,9 +2930,7 @@ DBloodActor* NearReliquary(DBloodPlayer* p, DBloodActor** blocked = nullptr, boo
 	while (auto a = it.Next())
 	{
 		if (!IsReliquary(a)) continue;
-		double top, bottom;
-		GetActorExtents(a, &top, &bottom);
-		DVector3 mid(a->spr.pos.XY(), (top + bottom) / 2);
+		DVector3 mid = ReliquaryMid(a);
 		DVector3 d = mid - eye;
 		double dist = naming ? d.XY().Length() : d.Length();
 		double ahead = naming ? (d.XY() | facing) : (d | view);
@@ -3013,8 +3027,12 @@ void OmenTick()
 	{
 		int id = rel->xspr.data1;
 		auto& o = omenInfo[id];
+		// Out of Use's reach: near enough (to the eye) that facing it will do, or further, where Use can't reach it from
+		// here whatever your pitch (a chest 96 from your eye lies only about 84 off along the floor).
 		FString tail = !CanGrant(id) ? FStringf("It can't take hold %s.", HoldBar(id).GetChars())
-			: FString(inReach ? "Use to take." : "Look down at it and Use to take.");
+			: FString(inReach ? "Use to take."
+				: (ReliquaryMid(rel) - ReliquaryEye(p)).Length() < kReliquaryRange ? "Look down at it and Use to take."
+				: "Go up to it, look down and Use to take.");
 		reliquaryHint.Format("Cursed reliquary: %s: %s, %d s. %s", o.name, o.sentence, o.seconds, tail.GetChars());
 	}
 }
