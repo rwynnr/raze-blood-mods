@@ -2193,6 +2193,7 @@ OptionMenu "RogueliteMenu" protected
 	Submenu "The Armory: your starting kit",	"RogueliteArmory"
 	Submenu "The Covenant: harder runs, more ichor",	"RogueliteCovenant"
 	Option "Omens: the dead drop timed boons",	"rl_omens", "OnOff"
+	Option "Reliquaries: champions leave gambles",	"rl_reliquaries", "OnOff"
 	Option "Kill weights: big kills, more boon time",	"rl_omen_weights", "OnOff"
 	Option "Bloodrush: a meter your kills fill",	"rl_rush", "OnOff"
 	Option "Fever: three boons at once",	"rl_fever", "OnOff"

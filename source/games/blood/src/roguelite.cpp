@@ -52,7 +52,13 @@
 // are Blood's own powerups on short timers. A gamble never drops on its own: a
 // champion sometimes leaves a cursed reliquary (it falls with a bell, and
 // Blood's atom motes circle it), which names both its halves when you come
-// near or walk into it, and is taken with Use. A kill of yours while a boon runs
+// near or walk into it, and is taken with Use (rl_reliquaries 0: none fall).
+// The gambles are paid off by killing: The Hunger (every boon to its cap and a
+// rare Omen, then a kill every 10 s or lose 25 health, until 12 kills),
+// Rampage (20 s: each kill +0.5x damage and +1 s; 3 s without one, back to 1x
+// and 10 health lost) and Corpse Fire (20 health, then 20 s of your kills
+// bursting in blasts that spare you). The Omens' damage bonuses add, up to
+// 6x (Fury's +1, each Rampage stack's +0.5). A kill of yours while a boon runs
 // adds time to it (the momentum, below); taking one again adds its whole
 // time (up to three times). They show in the shared chip row, the soonest to
 // end first (five, then "+k"), a boon's filling toward its kill cap, with a
@@ -112,7 +118,8 @@
 //   openmenu RogueliteMenu               the Roguelite menu (it is also on the main menu)
 // CVARs: rl_skill (0-4, set by the menu), rl_elite_pal (the champions' tint, a palette lookup number:
 // 0-14 in Blood, 0 = none), rl_ammo_target (the supplies' target, percent; 0 = no supplies), rl_omens (0: no Omens),
-// rl_omen_weights, rl_rush, rl_fever, rl_cleared and rl_resupply (the momentum's parts), rl_stats (the stats line),
+// rl_reliquaries (0: no cursed reliquaries roll), rl_omen_weights, rl_rush, rl_fever, rl_cleared and rl_resupply (the
+// momentum's parts), rl_stats (the stats line),
 // and the meta progress, kept in the config: rl_progress (per game, since
 // Blood and Cryptic Passage share a config: episodes unlocked, the gauntlet won, the run whose saves can
 // still be continued) and, shared by both, rl_ichor, rl_runs, rl_wins.
@@ -169,6 +176,7 @@ CVARD(Int, rl_elite_pal, 10, CVAR_ARCHIVE, "roguelite: palette lookup that tints
 CVARD(Int, rl_elite_red_pal, 2, CVAR_ARCHIVE, "roguelite: palette lookup that tints red champions (0 = none; 2 red)")
 CVARD(Int, rl_ammo_target, 150, CVAR_ARCHIVE, "roguelite: each map's pickups hold this percent of the ammo your guns need for its enemies (150 = 1.5x; 0 = stock amounts)")
 CVARD(Bool, rl_omens, true, CVAR_ARCHIVE, "roguelite: the dead drop Omens (timed boons) and champions cursed reliquaries (0 = none)")
+CVARD(Bool, rl_reliquaries, true, CVAR_ARCHIVE, "roguelite: champions sometimes leave a cursed reliquary, a gamble taken with Use: The Hunger, Rampage, Corpse Fire (0 = none roll)")
 // The momentum (docs/roguelite.md, "Momentum and rifts"): each part has its own switch, and 0 leaves it as before.
 CVARD(Bool, rl_omen_weights, true, CVAR_ARCHIVE, "roguelite: a kill adds boon time by the foe's size, champion tier and streak, up to 5 s, and Death's Grin and Bottomless never gain from kills (0 = 1 s a kill, up to 2x)")
 CVARD(Bool, rl_rush, true, CVAR_ARCHIVE, "roguelite: Bloodrush, a meter your kills fill and fights drain, with tiers Blooded, Savage and Ravening (0 = none)")
@@ -2596,10 +2604,11 @@ struct OmenInfo
 {
 	const char* name;
 	int tier;
-	int seconds;
+	int seconds;          // its time (The Hunger's: its hunger clock)
 	int powerup;          // the stock powerup it runs on (its pwUpTime), -1: none
 	const char* effect;   // the base effect it runs, or null
-	int deal;             // your hits on foes deal this many times their damage (1: as ever)
+	int deal;             // your hits on foes deal this many times their damage (1: as ever); the Omens' bonuses
+	                      // (deal - 1) add, not multiply (OmenDeal)
 	bool bloodlust;       // your hits heal you
 	int look;             // the stock item it's drawn as (its picture and size), in its tier's palette
 	const char* sentence; // what it does
@@ -2621,12 +2630,17 @@ const OmenInfo omenInfo[] =
 	// Mirror Skin stops at 1.5x: against cultists, hitscan immunity is most of Death's Grin. Kills never feed Death's Grin.
 	{ "Mirror Skin", kOmenRelic, 10, kPwUpReflectShots, nullptr, 1, false, kItemReflectShots, "reflective shots: a foe's bullets hit the foe", 1.5 },
 	{ "Death's Grin", kOmenRelic, 4, kPwUpDeathMask, nullptr, 1, false, kItemDeathMask, "invulnerable", 0 },
-	// The gambles, only ever in a cursed reliquary: both halves run together for the time. Frenzy's 3x is the run's own.
-	{ "Glass Cannon", kOmenGamble, 20, -1, "glasscannon", 1, false, 137, "deal 4x, take 2x" },
-	{ "Frenzy", kOmenGamble, 15, -1, "fast", 3, false, 137, "enemies twice as fast, you deal 3x" },
-	{ "Powder Keg", kOmenGamble, 20, -1, "bigboom", 1, false, 137, "every blast, yours and theirs, twice as big" },
+	// The gambles, only ever in a cursed reliquary, which kills pay off (their rules are their own section's, after the
+	// momentum's). They took the places of Glass Cannon, Frenzy and Powder Keg (a save running one of those drops it).
+	{ "The Hunger", kOmenGamble, 10, -1, nullptr, 1, false, 137,
+		"boons to cap, a rare Omen; then kill every 10 s (champion 15) or lose 25 health, until 12 kills" },
+	{ "Rampage", kOmenGamble, 20, -1, nullptr, 1, false, 137,
+		"each kill +0.5x damage, +1 s; 3 s without one: back to 1x, lose 10 health" },
+	{ "Corpse Fire", kOmenGamble, 20, -1, nullptr, 1, false, 137,
+		"lose 20 health now; your kills burst in blasts that spare you, +1 s each" },
 };
 constexpr int kNumOmens = int(countof(omenInfo));
+enum { kOmenHunger = 9, kOmenRampage, kOmenCorpseFire }; // the gambles, by their place in the table
 
 // The drops. A champion always drops an Omen, a plain enemy one time in 25; a champion's cursed reliquary comes besides.
 constexpr double kOmenPlain = 1. / 25;
@@ -2691,6 +2705,17 @@ void RunDown(RunningOmen& r, DBloodPlayer* p, bool fever);
 double PlainOmenChance();
 void StatsOmen(int id, bool taken); // the stats line: an Omen or reliquary dropped, or taken
 PalEntry BoonChip();
+// The gambles' own rules (their section follows the stats line's): a gamble taken (its clock, its prize or its price),
+// its clock run out, each tic (Rampage's lapse, Corpse Fire's bursts), a kill of yours, Rampage's damage bonus, how
+// the prompts name one, and their state as a map starts and as a save is loaded.
+bool BeginGamble(RunningOmen& r, int clocks);
+void GambleRanOut(int id);
+void GambleTick(DBloodPlayer* p);
+void GambleKill(DBloodActor* victim);
+double GambleBonus();
+FString GambleHead(int id, int clocks);
+void GamblesReset();
+void GamblesLoaded();
 
 RunningOmen* RunningOf(int id)
 {
@@ -2711,12 +2736,16 @@ bool ByYou(DBloodActor* a)
 	return a && p && a == p->GetActor();
 }
 
-// Fury's and Frenzy's factor on your hits on foes (together, they multiply).
-int OmenDeal()
+// The Omens' factor on your hits on foes (the damage rule): their bonuses add, not multiply. Fury's is +1 (its deal, 2,
+// less 1) and each of Rampage's stacks +0.5 (GambleBonus), and the total is at most 6x. The Forge's and the Covenant's
+// factors, and the base's damage scale (a curse's or chaos's Glass Cannon), stack on it as before (ScaleDamage).
+constexpr double kOmenDealMax = 6;
+double OmenDeal()
 {
-	int deal = 1;
-	if (OmensLive()) for (auto& r : omens) deal *= omenInfo[r.id].deal;
-	return deal;
+	if (!OmensLive()) return 1;
+	double deal = 1 + GambleBonus();
+	for (auto& r : omens) deal += omenInfo[r.id].deal - 1;
+	return std::min(deal, kOmenDealMax);
 }
 
 bool BloodlustOn()
@@ -2779,11 +2808,12 @@ void ResetOmens()
 	lustSecond = -1;
 	lustSoundAt = INT_MIN / 2;
 	omenPowerItem = nullptr;
+	GamblesReset();
 }
 
-// An Omen can begin now (one running can always take more time): not when its base effect can't run (Dread and Frenzy
-// need enemies left), nor when starting it would end another Omen's (Dread's slow and Frenzy's speed are rivals: the one
-// running stays, and the newcomer waits on the floor). *rival: that Omen, else -1.
+// An Omen can begin now (one running can always take more time): not when its base effect can't run (Dread needs
+// enemies left), nor when starting it would end another Omen's (rival effects: the one running stays, and the newcomer
+// waits on the floor; no two Omens are rivals since Frenzy went, but the check stays). *rival: that Omen, else -1.
 bool CanGrant(int id, int* rival = nullptr)
 {
 	if (rival) *rival = -1;
@@ -2802,7 +2832,7 @@ bool CanGrant(int id, int* rival = nullptr)
 
 // An Omen begins, or one running gets more time: clocks of it, up to 3x its time. False: it can't take hold now
 // (CanGrant), and its pickup stays. A base effect the curse or chaos runs already does: the Omen rides it, and leaves it
-// running as it ends.
+// running as it ends. A gamble's clock and its other half are its own (BeginGamble).
 bool GrantOmen(int id, int clocks, bool* chimed = nullptr)
 {
 	auto p = getPlayer(myconnectindex);
@@ -2818,6 +2848,8 @@ bool GrantOmen(int id, int clocks, bool* chimed = nullptr)
 		r = &omens.Last();
 	}
 	r->base = std::max(r->base, clocks);
+	if (chimed) *chimed = false;
+	if (o.tier == kOmenGamble) return BeginGamble(*r, clocks);
 	int left = std::max(std::min(r->left + clocks, 3 * r->base), r->left);
 	bool fresh = AddPowerTime(p, o.powerup, left - r->left);
 	r->left = left;
@@ -2912,9 +2944,10 @@ int PickOmen(std::mt19937& rng, int tier)
 
 // As an enemy dies in a run (outside the Crypt): a champion's Omen (a blue one's common 65% or rare, a red one's rare
 // 75% or a relic), a plain enemy's one time in 25 (common 70%, rare 25%, relic 5%); and besides, a red champion's
-// cursed reliquary one time in 3, a blue one's one time in 10, a random gamble in it. The rolls are the run's (its seed
-// and the deaths rolled so far, which a save keeps), so a reload rolls the same. A reliquary falls with a bell at the
-// chest and a message (an Omen falls silent: walking into it takes it).
+// cursed reliquary one time in 3, a blue one's one time in 10, a random gamble in it (rl_reliquaries 0: never; that
+// roll is the last, so the Omens roll as with it on). The rolls are the run's (its seed and the deaths rolled so far,
+// which a save keeps), so a reload rolls the same. A reliquary falls with a bell at the chest and a message (an Omen
+// falls silent: walking into it takes it).
 void DropOmens(DBloodActor* victim, bool champion, bool red)
 {
 	if (!rl_omens || !victim || !victim->insector()) return;
@@ -2930,7 +2963,7 @@ void DropOmens(DBloodActor* victim, bool champion, bool red)
 		tier = t < kOmenPlainRelic ? kOmenRelic : t < kOmenPlainRelic + kOmenPlainRare ? kOmenRare : kOmenCommon;
 	}
 	int omen = tier >= 0 ? PickOmen(rng, tier) : -1;
-	double reliquary = red ? kReliquaryRed : champion ? kReliquaryBlue : 0;
+	double reliquary = !rl_reliquaries ? 0 : red ? kReliquaryRed : champion ? kReliquaryBlue : 0;
 	int gamble = reliquary > 0 && Rand01(rng) < reliquary ? PickOmen(rng, kOmenGamble) : -1;
 	for (int id : { omen, gamble })
 	{
@@ -3001,7 +3034,8 @@ DBloodActor* NearReliquary(DBloodPlayer* p, DBloodActor** blocked = nullptr, boo
 	return best;
 }
 
-// Why a gamble can't take hold now (CanGrant false): "while Dread runs", or "here now" (no enemies left for Frenzy).
+// Why an Omen can't take hold now (CanGrant false): "while <its rival> runs", or "here now" (its effect can't run). The
+// gambles run no base effect, so a reliquary always can.
 FString HoldBar(int id)
 {
 	int rival;
@@ -3029,7 +3063,8 @@ bool TakeReliquary(DBloodPlayer* p)
 	StatsOmen(id, true);
 	sfxPlay3DSound(p->GetActor(), 463, -1, 0); // the voodoo doll's laugh
 	p->pickupEffect = 30;
-	viewSetMessage(FStringf("Cursed reliquary: %s, %d s: %s", o.name, bmod::SecondsLeft(RunningOf(id)->left), o.sentence).GetChars(),
+	auto r = RunningOf(id);
+	viewSetMessage(FStringf("Cursed reliquary: %s: %s", GambleHead(id, r ? r->left : 0).GetChars(), o.sentence).GetChars(),
 		nullptr, MESSAGE_PRIORITY_PICKUP);
 	actPostSprite(a, kStatFree);
 	reliquaryHint = "";
@@ -3038,8 +3073,9 @@ bool TakeReliquary(DBloodPlayer* p)
 
 // Each tic: the Omens' time runs down, and one whose base effect or stock powerup was ended by another (chaos starting a
 // rival, a powerup cleared) is dropped; one riding an effect another ran takes it over as that one stops on its own (not
-// when a rival replaced it: restarting would end the newcomer). Then a reliquary near you is named, with how to take it
-// or why it can't take hold now. Not live (rl_omens off, the run over, the Crypt): everything ends.
+// when a rival replaced it: restarting would end the newcomer). The gambles' own tic follows. Then a reliquary near you
+// is named, with how to take it or why it can't take hold now. Not live (rl_omens off, the run over, the Crypt):
+// everything ends.
 void OmenTick()
 {
 	if (!OmensLive())
@@ -3063,8 +3099,10 @@ void OmenTick()
 			if (r.owns || RivalActive(e) || !bmod::CanStart(e) || !bmod::StartEffect(e)) lost = true;
 			else r.owns = true;
 		}
+		if (!lost && r.left <= 0) GambleRanOut(r.id); // The Hunger's clock run out: its price
 		if (lost || r.left <= 0) EndOmen(i, false);
 	}
+	GambleTick(p); // Rampage's lapse, Corpse Fire's bursts
 	// The hint: the reliquary Use would act on; else one you walked into just now; else one you face further off.
 	DBloodActor* blocked;
 	auto rel = NearReliquary(p, &blocked);
@@ -3092,7 +3130,7 @@ void OmenTick()
 			: FString(inReach ? "Use to take."
 				: (ReliquaryMid(rel) - ReliquaryEye(p)).Length() < kReliquaryRange ? "Look down at it and Use to take."
 				: "Go up to it, look down and Use to take.");
-		reliquaryHint.Format("Cursed reliquary: %s: %s, %d s. %s", o.name, o.sentence, o.seconds, tail.GetChars());
+		reliquaryHint.Format("Cursed reliquary: %s: %s. %s", GambleHead(id, o.seconds * kClock).GetChars(), o.sentence, tail.GetChars());
 	}
 }
 
@@ -3105,6 +3143,7 @@ void OmensLoaded()
 	lustSecond = -1;
 	lustSoundAt = INT_MIN / 2;
 	omenPowerItem = nullptr;
+	GamblesLoaded();
 	if (!OmensLive())
 	{
 		EndOmens(true);
@@ -3232,6 +3271,7 @@ const int resupplyAmmo[kAmmoTypes] = { 0, kItemAmmoFlares, kItemAmmoSawedoffFew,
 // said once at the console, and the game goes on.
 constexpr const char* kStatsFile = "rl_stats.csv";
 constexpr int kStatsPairs = 3;                       // the boons that ran together longest: this many pairs
+enum { kStatSated, kStatStarved, kStatLapses, kStatStacks, kStatBursts, kStatPaid, kNumGambleStats }; // MapStats::gamble
 
 // The momentum's part of the run: saved (SerializeMomentum), and started afresh with each new run (Mo).
 struct Momentum
@@ -3611,6 +3651,7 @@ void YourKill(DBloodActor* victim)
 	int added = AddKillTime(KillTime(victim, multi), &clipped);
 	StatsKill(victim, added, clipped); // rl_stats
 	Resupply(victim);                  // rl_resupply
+	GambleKill(victim);                // the gambles: The Hunger fed, Rampage's stack, Corpse Fire's burst
 	if (!RushLive()) return;
 	auto& m = Mo();
 	m.rush = std::min(m.rush + RushFill(victim, multi), kRushMax);
@@ -3950,6 +3991,8 @@ struct MapStats
 	int reliqDropped = 0, reliqTaken = 0; // cursed reliquaries
 	int damage = 0;                       // health you lost, in sixteenths
 	int resupply[3] = {};                 // Life Essences dropped, armour given, ammo dropped
+	int gamble[kNumGambleStats] = {};     // the gambles: The Hunger sated, starved; Rampage's lapses, its most stacks;
+	                                      // Corpse Fire's bursts; the health they took (sixteenths)
 	int pairs[kNumOmens][kNumOmens] = {}; // tics two boons ran together: [the lower id][the higher]
 	bool lined = false;                   // its line was given (not saved)
 };
@@ -4001,6 +4044,14 @@ void StatsCleared()
 void StatsResupply(int kind)
 {
 	if (StatsLive() && kind >= 0 && kind < 3) mapStats.resupply[kind]++;
+}
+
+// A gamble's count (kStatSated...) goes up by n; kStatStacks keeps the most.
+void StatsGamble(int kind, int n = 1)
+{
+	if (!StatsLive() || kind < 0 || kind >= kNumGambleStats) return;
+	int& s = mapStats.gamble[kind];
+	s = kind == kStatStacks ? std::max(s, n) : s + n;
 }
 
 // The health you lost since the last tic (none if you healed: a tic of both counts the difference).
@@ -4100,12 +4151,17 @@ void StatsLine(const char* how)
 		line.AppendFormat("%s %s+%s %.0fs", i ? "," : "", omenInfo[pairs[i].a].name, omenInfo[pairs[i].b].name, ticSecs(pairs[i].tics));
 	if (!pairs.Size()) line += " none";
 	line.AppendFormat("; damage %d; resupply %d essences, %d armour, %d ammo", (s.damage + 8) >> 4, s.resupply[0], s.resupply[1], s.resupply[2]);
+	auto& g = s.gamble;
+	if (s.reliqTaken > 0 || g[kStatPaid] > 0 || g[kStatBursts] > 0) // a gamble ran on this map
+		line.AppendFormat("; gambles: Hunger sated %d, starved %d; Rampage lapses %d, most %d stacks; Corpse Fire bursts %d;"
+			" health paid %d", g[kStatSated], g[kStatStarved], g[kStatLapses], g[kStatStacks], g[kStatBursts], (g[kStatPaid] + 8) >> 4);
 	Printf(PRINT_HIGH | PRINT_NONOTIFY, "%s\n", line.GetChars());
 
 	static const char* const header = "when,run,seed,skill,map,index,maps,how,time_s,omens,weights,rush,fever,cleared,resupply,"
 		"start,kills,wave_kills,dead,cleared_s,boons_most,boons2_s,boons3_s,fever_s,blooded_s,savage_s,ravening_s,meter,"
 		"killtime_s,clipped_s,omens_dropped,omens_taken,omens_left,reliq_dropped,reliq_taken,reliq_left,"
-		"pair1,pair1_s,pair2,pair2_s,pair3,pair3_s,damage,essences,armour,ammo\n";
+		"pair1,pair1_s,pair2,pair2_s,pair3,pair3_s,damage,essences,armour,ammo,"
+		"reliquaries,hunger_sated,hunger_starved,rampage_lapses,rampage_stacks,corpse_bursts,gamble_health\n";
 	FString row;
 	row.Format("%s,%d,%u,%d,%s,%d,%d,%s,%.1f,%d,%d,%d,%d,%d,%d,", when, run.id, run.seed, run.skill, currentLevel->labelName.GetChars(),
 		run.index + 1, int(run.maps.Size()), how, mapTime, (int)rl_omens, (int)rl_omen_weights, (int)rl_rush, (int)rl_fever,
@@ -4120,7 +4176,9 @@ void StatsLine(const char* how)
 	for (int i = 0; i < kStatsPairs; i++)
 		row += i < int(pairs.Size()) ? FStringf("%s+%s,%.1f,", omenInfo[pairs[i].a].name, omenInfo[pairs[i].b].name, ticSecs(pairs[i].tics))
 			: FString(",,");
-	row.AppendFormat("%d,%d,%d,%d\n", (s.damage + 8) >> 4, s.resupply[0], s.resupply[1], s.resupply[2]);
+	row.AppendFormat("%d,%d,%d,%d,", (s.damage + 8) >> 4, s.resupply[0], s.resupply[1], s.resupply[2]);
+	row.AppendFormat("%d,%d,%d,%d,%d,%d,%d\n", (int)rl_reliquaries, g[kStatSated], g[kStatStarved], g[kStatLapses], g[kStatStacks],
+		g[kStatBursts], (g[kStatPaid] + 8) >> 4);
 	AppendStats(header, row);
 }
 
@@ -4147,6 +4205,7 @@ void SerializeStats(FSerializer& arc, MapStats& s)
 		("damage", s.damage);
 	arc.Array("tiertics", s.tierTics, kNumTiers);
 	arc.Array("resupply", s.resupply, 3);
+	arc.Array("gamble", s.gamble, kNumGambleStats); // an older save has none: 0s
 	TArray<int> pairs;
 	if (arc.isWriting())
 		for (int a = 0; a < kNumOmens; a++)
@@ -4170,6 +4229,281 @@ void StatsFromSave(const MapStats& s)
 {
 	mapStats = s;
 	mapStats.lined = false;
+}
+
+//---------------------------------------------------------------------------
+//
+// the gambles (docs/roguelite.md, "Momentum and rifts"): the cursed
+// reliquaries' three, each paid off by killing. A gamble's clock is its
+// Omen's time (RunningOmen::left), which runs down at full speed (Fever slows
+// boons only) and which kills never feed the boons' way (BoonCap: none);
+// each says both its halves in its prompts and on its purple chip. All of
+// it only while the Omens are live (OmensLive: rl_omens, a run, not the
+// Crypt); rl_reliquaries 0 keeps any from rolling (DropOmens).
+//
+//---------------------------------------------------------------------------
+
+// The Hunger: every boon running jumps to its cap (ExtendToCap: never Death's Grin or Bottomless) and a rare Omen
+// drops at your feet (as Cleared's does). Then its clock runs, 10 s (its time), and each kill of yours sets it back to
+// 10 s at least, 15 s for a champion (1.5x its time). Run out, it takes 25 health and ends; 12 kills end it, sated.
+// Rampage, 20 s: each kill of yours is a stack, +0.5x damage (OmenDeal, inside its 6x) and +1 s (up to 3x its time, the
+// ceiling every Omen's time has). 3 s without a kill, from its take or your last kill, is a lapse: the stacks go and
+// it takes 10 health, once, until your next kill starts the 3 s again. It runs on to its end.
+// Corpse Fire: taking it takes 20 health. For 20 s each kill of yours bursts where the body fell: a TNT stick's blast
+// to see and hear, its size (explodeInfo's radius, 75), forged and marked kModSpareYou as the Larder's are (so it
+// spares you, ScaleDamage; Brimstone Leap throws you, as any forged blast does), dealing about 30 itself: 25 at the
+// edge to 35 at the heart, before each kind's own resistance, as any blast. The stick's own damage is turned off: its
+// concussion runs for the 15 tics its blast lasts, 65 health and more to a foe at its edge. Each kill adds 1 s, up to
+// 2x its time. A burst's kills are yours: they burst in turn, a tic later.
+// A price in health is taken straight from it (armour can't pay), never below 1 (Blood's player lives on 16
+// sixteenths, playerDamageSprite), with Blood's own hurt: the red flash, and Caleb's pain grunt as a hit of 10 or more
+// gives it (PLAY1106, 731, damageInfo in player.cpp: stock code plays it only as Caleb's pain; no SEQ, QAV or map
+// sound does, nor the mode, chaos or the rifts). A gamble the map's end (or rl_omens going off) cuts short asks no price.
+constexpr int kHungerKills = 12;
+constexpr int kHungerPrice = 25, kRampagePrice = 10, kCorpseFirePrice = 20; // health
+constexpr int kRampageLapse = 3 * kClock;
+constexpr double kRampageStep = 0.5;
+constexpr int kRampageStacks = 10;                   // +5x, the 6x ceiling on its own: more add only time
+constexpr int kGambleKillTime = kClock;              // Rampage's and Corpse Fire's second a kill
+constexpr int kRampageCap = 3, kCorpseFireCap = 2;   // their time's ceiling, times their time
+constexpr int kBurstEdge = 25, kBurstHeart = 10;     // actRadiusDamage's base and distance damage: 25 at the edge, 35 at the heart
+constexpr int kGamblePain = 731;
+constexpr int kGambleVersion = 2;                    // the gambles in their places (a save without the key: Glass Cannon,
+                                                     // Frenzy, Powder Keg)
+
+// The gambles' part of the run: saved (SerializeGambles), and started afresh as each map starts (GamblesReset).
+struct Gambles
+{
+	int version = 0;     // read from a save: its gambles' kGambleVersion (0: from before the key)
+	int hungerKills = 0; // The Hunger: your kills since it was taken
+	int stacks = 0;      // Rampage: its stacks
+	bool armed = false;  // Rampage: a lapse comes at lapseAt unless you kill first
+	int lapseAt = 0;     // Rampage: PlayClock as it comes
+};
+Gambles gambles;
+// Not saved: Corpse Fire's bursts to come (a kill of this tic, or of the last tic's bursts), where the body fell.
+// Emptied as a level starts and as a save loads (their sectors are the map's).
+struct GambleBurst { DVector3 pos; sectortype* sect; int at; };
+TArray<GambleBurst> gambleBursts;
+
+void GamblesReset()
+{
+	gambles = Gambles();
+	gambleBursts.Clear();
+}
+
+void GamblesLoaded() { gambleBursts.Clear(); }
+
+// How a gamble's prompts name it: with its time (clocks), but The Hunger, whose clock is its price (its sentence says).
+FString GambleHead(int id, int clocks)
+{
+	if (id == kOmenHunger) return FString(omenInfo[id].name);
+	return FStringf("%s, %d s", omenInfo[id].name, bmod::SecondsLeft(clocks));
+}
+
+// Rampage's damage bonus (OmenDeal adds it to the Omens' others).
+double GambleBonus() { return RunningOf(kOmenRampage) ? kRampageStep * gambles.stacks : 0.; }
+
+// A gamble's price: points of health, taken straight, never below 1; none in god mode. Returns what it took
+// (sixteenths).
+int GamblePrice(DBloodPlayer* p, int points)
+{
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !pl->hasX() || pl->xspr.health <= 0 || p->godMode) return 0;
+	int health = int(pl->xspr.health);
+	int took = std::min(points << 4, health - (1 << 4));
+	if (took <= 0) return 0;
+	pl->xspr.health = unsigned(health - took);
+	p->painEffect = ClipHigh(p->painEffect + (took >> 3), 600); // the red flash, as playerDamageSprite gives a hit's
+	sfxPlay3DSound(pl, kGamblePain, 0, 6);                       // Caleb's pain, on his voice's channel, as stock plays it
+	StatsGamble(kStatPaid, took);
+	return took;
+}
+
+// A gamble taken (from GrantOmen: its RunningOmen, its time in clocks): its clock, and the half that comes now. Taken
+// again while it runs: The Hunger's prize again and a fresh 12 kills (its clock no shorter); Rampage's time again (up to
+// 3x, its stacks kept); Corpse Fire's price again and its time.
+bool BeginGamble(RunningOmen& r, int clocks)
+{
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	bool fresh = r.left <= 0;
+	r.left = r.id == kOmenHunger ? std::max(r.left, clocks) : std::max(std::min(r.left + clocks, 3 * r.base), r.left);
+	r.peak = std::max(r.peak, r.left);
+	switch (r.id)
+	{
+	case kOmenHunger:
+	{
+		gambles.hungerKills = 0;
+		ExtendToCap(-1);
+		// The run's roll (its seed and its kills so far), so a reload rolls the same.
+		std::mt19937 rng(run.seed ^ (0x9E3779B9u * uint32_t(run.kills + 1)) ^ 0x510E527Fu);
+		int id = PickOmen(rng, kOmenRare);
+		if (id >= 0 && pl && pl->insector()) SpawnOmenItem(pl->sector(), pl->spr.pos.XY(), id);
+		break;
+	}
+	case kOmenRampage:
+		if (fresh) gambles.stacks = 0;
+		gambles.armed = true;
+		gambles.lapseAt = PlayClock + kRampageLapse;
+		break;
+	case kOmenCorpseFire:
+		GamblePrice(p, kCorpseFirePrice);
+		break;
+	default:
+		break;
+	}
+	return true;
+}
+
+// A gamble's clock ran out (OmenTick, as it ends): The Hunger's price.
+void GambleRanOut(int id)
+{
+	if (id != kOmenHunger) return;
+	int took = GamblePrice(getPlayer(myconnectindex), kHungerPrice);
+	StatsGamble(kStatStarved);
+	FString text = took > 0 ? FStringf("The Hunger starves you: %d health", (took + 8) >> 4) : FString("The Hunger starves you");
+	viewSetMessage(text.GetChars(), TEXTCOLOR_PURPLE); // the gambles' colour
+}
+
+// A Corpse Fire burst: the TNT stick's blast spawned and set off as ForgeBlast does it, its own damage spent (its flash,
+// shake and wall impacts stay), and the burst's damage dealt by the blast while ScaleDamage knows it for a forged one
+// that spares you (ForgeExplosion, as actCheckExplosion has it).
+void CorpseBurst(DBloodPlayer* p, const GambleBurst& b)
+{
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !b.sect) return;
+	auto t = actSpawnThing(b.sect, b.pos, kThingArmedTNTStick);
+	if (!t) return;
+	t->SetOwner(pl);
+	t->modFlags |= kModForged | kModSpareYou;
+	actExplodeSprite(t);
+	if (!t->hasX() || t->spr.type != kExplosionSmall) return;
+	t->xspr.data1 = 0;
+	ForgeExplosion spare(t);
+	actRadiusDamage(t, b.pos, b.sect, explodeInfo[kExplosionSmall].radius, kBurstEdge, kBurstHeart, kDamageExplode, 2, 0);
+	StatsGamble(kStatBursts);
+}
+
+// Each tic (from OmenTick, after the clocks): Rampage's lapse, then Corpse Fire's bursts from the kills since (one
+// older, left from a time the Omens weren't live, goes unburst). A burst's own kills burst on the next tic.
+void GambleTick(DBloodPlayer* p)
+{
+	if (RunningOf(kOmenRampage) && gambles.armed && PlayClock >= gambles.lapseAt)
+	{
+		gambles.armed = false;
+		gambles.stacks = 0;
+		int took = GamblePrice(p, kRampagePrice);
+		StatsGamble(kStatLapses);
+		FString text = took > 0 ? FStringf("Rampage lapses: back to 1x, %d health", (took + 8) >> 4) : FString("Rampage lapses: back to 1x");
+		viewSetMessage(text.GetChars(), TEXTCOLOR_PURPLE);
+	}
+	if (!gambleBursts.Size()) return;
+	auto due = std::move(gambleBursts);
+	gambleBursts.Clear();
+	for (auto& b : due)
+		if (PlayClock - b.at >= 0 && PlayClock - b.at <= kTicsPerFrame) CorpseBurst(p, b);
+}
+
+// A kill of yours (from YourKill): Rampage's stack and second, Corpse Fire's second and burst to come, and The Hunger's
+// clock set back (12 kills sate it, and it ends).
+void GambleKill(DBloodActor* victim)
+{
+	auto p = getPlayer(myconnectindex);
+	if (!OmensLive() || !victim || !p || !p->GetActor()) return;
+	if (auto r = RunningOf(kOmenRampage))
+	{
+		gambles.stacks = std::min(gambles.stacks + 1, kRampageStacks);
+		gambles.armed = true;
+		gambles.lapseAt = PlayClock + kRampageLapse;
+		ExtendBoon(*r, p, kGambleKillTime, kRampageCap * r->base);
+		StatsGamble(kStatStacks, gambles.stacks);
+	}
+	if (auto r = RunningOf(kOmenCorpseFire))
+	{
+		ExtendBoon(*r, p, kGambleKillTime, kCorpseFireCap * r->base);
+		if (victim->insector())
+		{
+			auto s = victim->sector();
+			auto pos = victim->spr.pos;
+			updatesector(pos, &s);
+			if (!s) s = victim->sector(); // blasted outside every sector (as actSpawnFloor has it)
+			gambleBursts.Push({ pos, s, PlayClock });
+		}
+	}
+	if (auto r = RunningOf(kOmenHunger))
+	{
+		int back = (victim->modFlags & kModChampion) ? r->base * 3 / 2 : r->base;
+		r->left = std::max(r->left, back / kTicsPerFrame * kTicsPerFrame);
+		r->peak = std::max(r->peak, r->left);
+		if (++gambles.hungerKills >= kHungerKills)
+		{
+			for (unsigned i = 0; i < omens.Size(); i++)
+				if (omens[i].id == kOmenHunger)
+				{
+					EndOmen(i, false);
+					break;
+				}
+			StatsGamble(kStatSated);
+			viewSetMessage("The Hunger is sated", TEXTCOLOR_PURPLE);
+		}
+	}
+}
+
+// A gamble's chip: its own clock and what it counts ("Hunger 7s 5/12", "Rampage 14s x2.5", "Corpse Fire 18s"). The
+// fill: The Hunger's drains over its last 10 s; Rampage's is the 3 s before a lapse (empty once lapsed); Corpse Fire's
+// measures toward its 2x, as a boon's toward its cap.
+void GambleChip(const RunningOmen& r, bmod::Chip& c)
+{
+	int s = bmod::SecondsLeft(r.left);
+	switch (r.id)
+	{
+	case kOmenHunger:
+		c.text.Format("Hunger %ds %d/%d", s, gambles.hungerKills, kHungerKills);
+		c.frac = double(r.left) / std::max({ r.left, r.base, 1 });
+		break;
+	case kOmenRampage:
+		c.text.Format("Rampage %ds x%g", s, std::min(1 + kRampageStep * gambles.stacks, kOmenDealMax));
+		c.frac = gambles.armed ? std::clamp(double(gambles.lapseAt - PlayClock) / kRampageLapse, 0., 1.) : 0.;
+		break;
+	case kOmenCorpseFire:
+		c.text.Format("Corpse Fire %ds", s);
+		c.frac = double(r.left) / std::max({ r.left, kCorpseFireCap * r.base, 1 });
+		break;
+	default:
+		break;
+	}
+}
+
+// The gambles' keys, under "gambles" in the run's save block, written and read alike. The version says which gambles
+// the save's are.
+void SerializeGambles(FSerializer& arc, Gambles& g)
+{
+	if (!arc.BeginObject("gambles")) return;
+	if (arc.isWriting()) g.version = kGambleVersion;
+	arc("version", g.version)
+		("hungerkills", g.hungerKills)
+		("rampagestacks", g.stacks)
+		("rampagearmed", g.armed)
+		("rampagelapseat", g.lapseAt);
+	arc.EndObject();
+}
+
+// A loaded save's gambles, once its Omens are read. A save from before these gambles (no version) ran others in their
+// places: a gamble it runs is dropped, cleanly (none asks a price as it ends), and its state starts afresh. Its cursed
+// reliquaries still on the floor are these gambles now.
+void GamblesFromSave(const Gambles& g)
+{
+	gambles = g;
+	gambleBursts.Clear();
+	if (g.version != kGambleVersion)
+	{
+		for (int i = int(omens.Size()) - 1; i >= 0; i--)
+			if (omenInfo[omens[i].id].tier == kOmenGamble) omens.Delete(i);
+		gambles = Gambles();
+	}
+	gambles.hungerKills = std::clamp(gambles.hungerKills, 0, kHungerKills - 1);
+	gambles.stacks = std::clamp(gambles.stacks, 0, kRampageStacks);
 }
 
 //---------------------------------------------------------------------------
@@ -4364,22 +4698,6 @@ void DrawLitanyTitle()
 		DTA_Alpha, alpha, TAG_DONE);
 }
 
-// The damage the Omens give your hits on foes: Fury's and Frenzy's factor (OmenDeal), and Glass Cannon's, which is its
-// base effect's (bmod::mods.damageDealtScale while it runs).
-double OmenDamage()
-{
-	double f = OmenDeal();
-	if (!OmensLive()) return f;
-	auto glass = bmod::FindEffect("glasscannon");
-	for (auto& r : omens)
-		if (glass && OmenEffect(r.id) == glass && bmod::IsActive(glass))
-		{
-			f *= bmod::mods.damageDealtScale;
-			break;
-		}
-	return f;
-}
-
 // A boon's chip fills toward its kill cap (full: kills add no more); one kills never feed (Death's Grin, Bottomless, a
 // gamble) by the most time it has had.
 double OmenFill(const RunningOmen& r)
@@ -4416,7 +4734,7 @@ void DrawOmens()
 		c.color = PalEntry(kCurseChip);
 		bmod::AddChip(c);
 	}
-	double damage = OmenDamage();
+	double damage = OmenDeal(); // the Omens' damage rule (a curse's or chaos's Glass Cannon isn't the Omens')
 	if (OmensLive() && damage != 1)
 	{
 		bmod::Chip c;
@@ -4437,6 +4755,7 @@ void DrawOmens()
 		c.text.Format("%s %ds", o.name, bmod::SecondsLeft(r.left));
 		c.color = o.tier == kOmenGamble ? PalEntry(kGambleChip) : BoonChip(); // a boon's gold, orange in Fever
 		c.frac = OmenFill(r);
+		if (o.tier == kOmenGamble) GambleChip(r, c); // its own clock, and what it counts
 		c.alpha = r.left <= kBoonWarning && (PlayClock / 15) % 2 ? 0.3 : 1.;
 		bmod::AddChip(c);
 	}
@@ -5136,10 +5455,11 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, DAMAGE_TYPE damageType
 		forgeScent = s; // Blood Feud's quarry
 		forgeScentAt = PlayClock;
 	}
-	// Fury and Frenzy (Omens): your hits on foes, times their factor, on top of the Forge's bite and the base's Glass
-	// Cannon (applied before this), as those stack already. A red champion's flinch counts the hit as dealt.
+	// The Omens (Fury, Rampage: OmenDeal, their bonuses added, at most 6x): your hits on foes, times their factor, on top
+	// of the Forge's bite and the base's damage scale (a curse's or chaos's Glass Cannon, applied before this), as those
+	// stack already. A red champion's flinch counts the hit as dealt.
 	if (s && s != target && s->IsPlayerActor() && target->IsDudeActor() && !target->IsPlayerActor())
-		if (int deal = OmenDeal(); deal != 1) damage *= deal;
+		if (double deal = OmenDeal(); deal != 1) damage = int(damage * deal);
 	// Your hit on a red champion, as dealt (before its own armour: its type's and the skill's), for its flinch.
 	if (s && s != target && s->IsPlayerActor() && (target->modFlags & kModRedChampion) && target->spr.statnum == kStatDude)
 		StaggerHit(target, damage);
@@ -6675,6 +6995,7 @@ void Serialize(FSerializer& arc)
 			arc("omens", running);
 			SerializeMomentum(arc, Mo()); // the momentum's keys (Bloodrush)
 			if (rl_stats) SerializeStats(arc, mapStats); // the stats line's counts so far
+			SerializeGambles(arc, gambles); // the gambles' state, and which gambles these are
 			arc.EndObject();
 		}
 		return;
@@ -6689,6 +7010,7 @@ void Serialize(FSerializer& arc)
 	TArray<int> running;
 	Momentum loadedMomentum;
 	MapStats loadedStats;
+	Gambles loadedGambles;
 	bool has = false;
 	if (arc.BeginObject("roguelite"))
 	{
@@ -6720,6 +7042,7 @@ void Serialize(FSerializer& arc)
 		arc("omens", running);
 		SerializeMomentum(arc, loadedMomentum);
 		SerializeStats(arc, loadedStats);
+		SerializeGambles(arc, loadedGambles);
 		arc.EndObject();
 		has = true;
 	}
@@ -6739,6 +7062,7 @@ void Serialize(FSerializer& arc)
 	for (unsigned i = 0; i + 3 < running.Size(); i += 4) // the save's Omens (OmensLoaded starts their effects)
 		if (running[i] >= 0 && running[i] < kNumOmens && running[i + 1] > 0 && running[i + 2] > 0 && !RunningOf(running[i]))
 			omens.Push({ running[i], running[i + 1], running[i + 2], std::max(running[i + 3], running[i + 1]), false });
+	GamblesFromSave(loadedGambles); // a save of the old gambles drops the one it runs
 	bmod::modeEnemyTimeScale = run.over ? 1. : 1. + 0.15 * run.cov[kHaste];
 }
 
@@ -7093,7 +7417,8 @@ CCMD(rl_kit)
 }
 
 // The Omens, for testing every one without a run of luck. An Omen is named by its number in "rl_omen list", by its name
-// without spaces or capitals ("twinvessel", "deathsgrin"), or by the start of that ("twin").
+// without spaces or capitals ("twinvessel", "deathsgrin"; a leading "The" may go: "hunger"), or by the start of that
+// ("twin", "corpse").
 static int FindOmen(const char* arg)
 {
 	auto squash = [](const char* s)
@@ -7102,13 +7427,16 @@ static int FindOmen(const char* arg)
 		for (; *s; s++) if (isalnum((unsigned char)*s)) out += char(tolower((unsigned char)*s));
 		return out;
 	};
+	auto bare = [](const char* s) { return strnicmp(s, "the ", 4) ? s : s + 4; }; // "The Hunger": "Hunger"
 	char* end;
 	long n = strtol(arg, &end, 10);
 	if (*arg && !*end) return n >= 1 && n <= kNumOmens ? int(n) - 1 : -1;
 	FString want = squash(arg);
 	if (want.IsEmpty()) return -1;
-	for (int i = 0; i < kNumOmens; i++) if (squash(omenInfo[i].name).Compare(want) == 0) return i;
-	for (int i = 0; i < kNumOmens; i++) if (squash(omenInfo[i].name).IndexOf(want) == 0) return i;
+	for (int i = 0; i < kNumOmens; i++)
+		if (squash(omenInfo[i].name).Compare(want) == 0 || squash(bare(omenInfo[i].name)).Compare(want) == 0) return i;
+	for (int i = 0; i < kNumOmens; i++)
+		if (squash(omenInfo[i].name).IndexOf(want) == 0 || squash(bare(omenInfo[i].name)).IndexOf(want) == 0) return i;
 	return -1;
 }
 
@@ -7162,10 +7490,11 @@ CCMD(rl_omen)
 				r ? FStringf("  (running: %d s left)", bmod::SecondsLeft(r->left)).GetChars() : "");
 		}
 		Printf("Drops: every champion (blue: common %d%%, rare %d%%; red: rare %d%%, relic %d%%), a plain enemy 1 in %d (common %d%%,"
-			" rare %d%%, relic %d%%). Cursed reliquaries (the gambles, taken with Use): red champions 1 in %d, blue 1 in %d. rl_omens %d\n",
+			" rare %d%%, relic %d%%). Cursed reliquaries (the gambles, taken with Use): red champions 1 in %d, blue 1 in %d. rl_omens %d,"
+			" rl_reliquaries %d\n",
 			int(100 * (1 - kOmenBlueRare) + 0.5), int(100 * kOmenBlueRare + 0.5), int(100 * (1 - kOmenRedRelic) + 0.5), int(100 * kOmenRedRelic + 0.5),
 			int(1 / kOmenPlain + 0.5), int(100 * (1 - kOmenPlainRare - kOmenPlainRelic) + 0.5), int(100 * kOmenPlainRare + 0.5),
-			int(100 * kOmenPlainRelic + 0.5), int(1 / kReliquaryRed + 0.5), int(1 / kReliquaryBlue + 0.5), (int)rl_omens);
+			int(100 * kOmenPlainRelic + 0.5), int(1 / kReliquaryRed + 0.5), int(1 / kReliquaryBlue + 0.5), (int)rl_omens, (int)rl_reliquaries);
 		return;
 	}
 	int id = FindOmen(argv[1]);
@@ -7181,7 +7510,10 @@ CCMD(rl_omen)
 		Printf("rl_omen: %s can't take hold %s\n", omenInfo[id].name, HoldBar(id).GetChars());
 		return;
 	}
-	Printf(PRINT_NOTIFY, "Omen: %s, %d s: %s\n", omenInfo[id].name, bmod::SecondsLeft(RunningOf(id)->left), omenInfo[id].sentence);
+	auto r = RunningOf(id);
+	if (omenInfo[id].tier == kOmenGamble)
+		Printf(PRINT_NOTIFY, "Gamble: %s: %s\n", GambleHead(id, r ? r->left : 0).GetChars(), omenInfo[id].sentence);
+	else Printf(PRINT_NOTIFY, "Omen: %s, %d s: %s\n", omenInfo[id].name, bmod::SecondsLeft(r ? r->left : 0), omenInfo[id].sentence);
 }
 
 CCMD(rl_omen_drop)
@@ -7200,7 +7532,7 @@ CCMD(rl_reliquary)
 	int id = argv.argc() > 1 ? FindOmen(argv[1]) : -1;
 	if (id < 0 || omenInfo[id].tier != kOmenGamble)
 	{
-		Printf("usage: rl_reliquary <name|number>   (a gamble: Glass Cannon, Frenzy, Powder Keg; rl_omen list)\n");
+		Printf("usage: rl_reliquary <name|number>   (a gamble: The Hunger, Rampage, Corpse Fire; rl_omen list)\n");
 		return;
 	}
 	if (OmenReady("rl_reliquary")) SpawnOmenAhead("rl_reliquary", id);
