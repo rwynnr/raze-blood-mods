@@ -129,6 +129,7 @@ void tchernobogBurnSeqCallback2(int, DBloodActor* actor)
 	BloodStatIterator it(kStatDude);
 	while (auto actor2 = it.Next())
 	{
+		if (rogue::IsRift(actor2)) continue; // blood2d roguelite: Tchernobog's aim never bends to a waiting rift (rifts.cpp)
 		auto pos2 = actor2->spr.pos;
 		double nDist = (pos2 - pos).Length();
 		if (nDist == 0 || nDist > 0x280)

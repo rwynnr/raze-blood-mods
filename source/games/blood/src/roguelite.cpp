@@ -50,11 +50,45 @@
 // one (a blue champion a common or rare one, a red one a rare or relic), a
 // plain enemy one time in 25; they lie where it fell until the map ends. Most
 // are Blood's own powerups on short timers. A gamble never drops on its own: a
-// champion sometimes leaves a cursed reliquary, which names both its halves
-// when you come near and is taken with Use. A kill of yours while a boon runs
-// adds a second to it (up to twice its time); taking one again adds its whole
-// time (up to three times). They show in the shared chip row, last through a
-// save and load, and end with the map.
+// champion sometimes leaves a cursed reliquary (it falls with a bell, and
+// Blood's atom motes circle it), which names both its halves when you come
+// near or walk into it, and is taken with Use (rl_reliquaries 0: none fall).
+// The gambles are paid off by killing: The Hunger (every boon to its cap and a
+// rare Omen, then a kill every 10 s or lose 25 health, until 12 kills),
+// Rampage (20 s: each kill +0.5x damage and +1 s; 3 s without one, back to 1x
+// and 10 health lost) and Corpse Fire (20 health, then 20 s of your kills
+// bursting in blasts that spare you). The Omens' damage bonuses add, up to
+// 6x (Fury's +1, each Rampage stack's +0.5). A kill of yours while a boon runs
+// adds time to it (the momentum, below); taking one again adds its whole
+// time (up to three times). They show in the shared chip row, the soonest to
+// end first (five, then "+k"), a boon's filling toward its kill cap, with a
+// quiet beep as one's last 3 s begin, Bloodrush's chip in front and "DMG xN"
+// while their damage factor isn't 1; they last through a save and load, and
+// end with the map. With them on, the centre slot under the map's name shows
+// one line at a time: the curse's title, CLEARED, a tier reached, a Litany.
+//
+// The momentum (rl_omen_weights, rl_rush, rl_fever, rl_cleared, rl_resupply; each 0 leaves its
+// part as before). A kill of yours adds boon time by the foe's size (its start health),
+// its champion tier, Bloodrush's tier, Fever and a multi-kill, at most 5 s, a
+// wave enemy half; Death's Grin and Bottomless never gain from kills, Mirror
+// Skin stops at 1.5x its time and the rest at 2x (without rl_omen_weights:
+// 1 s a kill times Bloodrush's and Fever's factors, up to 2x). Bloodrush is a
+// meter, 0-100, that your kills fill: it drains while an enemy is alerted to
+// you (faster at higher tiers) and otherwise holds at its tier's floor;
+// Blooded (25) makes kills add 1.5x the time, Savage (50) has plain enemies
+// drop Omens 1 in 12, Ravening (75) raises the 2x caps to 3x. Half of it goes
+// on to the next map, held until an enemy there is alerted to you. Fever, 3
+// boons running at once (4 from a run's halfway map), doubles kill time, runs
+// the boons 25% slower and turns their chips orange. Cleared, once a map when
+// 90% of the enemies it started with are dead (waves and spawns don't count),
+// gives every boon 5 s (up to its cap), slides the floor's Omens to you and
+// drops a rare one at your feet. Kill resupply (rl_resupply): a kill of yours
+// within 96 units of a foe that isn't fodder drops a Life Essence (one drop
+// every 2 s at most; two under 40 health), a burning one gives 5 body and 5
+// fire armour, and two or more in one tic drop a pickup of the ammo your gun
+// fires, at the last body. The stats line (rl_stats): at each map's exit, or
+// a death, one line of what the map's play measured, at the console and
+// appended to rl_stats.csv next to raze.exe.
 //
 // Dying ends the run: a "Run over" screen, then the main menu (no reload).
 // Finishing the last map wins it: "Run complete" at the menu, and the next
@@ -66,6 +100,8 @@
 //
 // Console:
 //   rl_newrun <episode|gauntlet> [seed]  start a run (episode = 1..N in the game's own list) at rl_skill
+//   rl_startat <map> [seed] [episode|gauntlet]  a run from map N of its order, with the kit only (testing a late map;
+//                                        the episode: the run in progress's, else the first)
 //   rl_status                            the run in progress and the meta progress
 //   rl_clearmap                          end the run's current map as cleared, as if its exit was used
 //   rl_ammo                              this map's ammo: what its enemies take, what you have, the supplies
@@ -75,11 +111,16 @@
 //   rl_omen list                         the Omens and the gambles, numbered, with what runs now and the drop odds
 //   rl_omen <name|number> [seconds]      grant an Omen (or a gamble) at once, e.g. "rl_omen twin", "rl_omen 9 30" (testing)
 //   rl_omen_drop / rl_reliquary <name|number>  an Omen's pickup / a gamble's cursed reliquary in front of you (testing)
+//   rl_rush [0|1]                        Bloodrush's meter, tier, drain and enemies alerted, Fever and Cleared (an argument sets rl_rush)
+//   rl_rush_set <0-100>                  set Bloodrush's meter (testing)
 //   rl_unlock <count|all>                set how many of this game's episodes are unlocked (testing)
 //   rl_resetprogress                     lock this game's episodes again; empty the ichor bank and the wins
 //   openmenu RogueliteMenu               the Roguelite menu (it is also on the main menu)
 // CVARs: rl_skill (0-4, set by the menu), rl_elite_pal (the champions' tint, a palette lookup number:
-// 0-14 in Blood, 0 = none), rl_ammo_target (the supplies' target, percent; 0 = no supplies), rl_omens (0: no Omens), and the meta progress, kept in the config: rl_progress (per game, since
+// 0-14 in Blood, 0 = none), rl_ammo_target (the supplies' target, percent; 0 = no supplies), rl_omens (0: no Omens),
+// rl_reliquaries (0: no cursed reliquaries roll), rl_omen_weights, rl_rush, rl_fever, rl_cleared and rl_resupply (the
+// momentum's parts), rl_stats (the stats line),
+// and the meta progress, kept in the config: rl_progress (per game, since
 // Blood and Cryptic Passage share a config: episodes unlocked, the gauntlet won, the run whose saves can
 // still be continued) and, shared by both, rl_ichor, rl_runs, rl_wins.
 //
@@ -97,10 +138,13 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <cstdio>
+#include <ctime>
 #include <random>
 #include "build.h"
 #include "blood.h"
 #include "c_bind.h"
+#include "cmdlib.h"
 #include "c_cvars.h"
 #include "c_dispatch.h"
 #include "gamecontrol.h"
@@ -132,6 +176,14 @@ CVARD(Int, rl_elite_pal, 10, CVAR_ARCHIVE, "roguelite: palette lookup that tints
 CVARD(Int, rl_elite_red_pal, 2, CVAR_ARCHIVE, "roguelite: palette lookup that tints red champions (0 = none; 2 red)")
 CVARD(Int, rl_ammo_target, 150, CVAR_ARCHIVE, "roguelite: each map's pickups hold this percent of the ammo your guns need for its enemies (150 = 1.5x; 0 = stock amounts)")
 CVARD(Bool, rl_omens, true, CVAR_ARCHIVE, "roguelite: the dead drop Omens (timed boons) and champions cursed reliquaries (0 = none)")
+CVARD(Bool, rl_reliquaries, true, CVAR_ARCHIVE, "roguelite: champions sometimes leave a cursed reliquary, a gamble taken with Use: The Hunger, Rampage, Corpse Fire (0 = none roll)")
+// The momentum (docs/roguelite.md, "Momentum and rifts"): each part has its own switch, and 0 leaves it as before.
+CVARD(Bool, rl_omen_weights, true, CVAR_ARCHIVE, "roguelite: a kill adds boon time by the foe's size, champion tier and streak, up to 5 s, and Death's Grin and Bottomless never gain from kills (0 = 1 s a kill, up to 2x)")
+CVARD(Bool, rl_rush, true, CVAR_ARCHIVE, "roguelite: Bloodrush, a meter your kills fill and fights drain, with tiers Blooded, Savage and Ravening (0 = none)")
+CVARD(Bool, rl_fever, true, CVAR_ARCHIVE, "roguelite: Fever with 3 boons running (4 late in a run): kills add double time and boons run down slower (0 = none)")
+CVARD(Bool, rl_cleared, true, CVAR_ARCHIVE, "roguelite: Cleared, 90% of a map's starting enemies dead: 5 s more on every boon, the floor's Omens slide to you, a rare one drops (0 = none)")
+CVARD(Bool, rl_resupply, true, CVAR_ARCHIVE, "roguelite: kill resupply: a point-blank kill drops a Life Essence, a burning kill gives armour, a multi-kill in one tic drops ammo (0 = none)")
+CVARD(Bool, rl_stats, true, CVAR_ARCHIVE, "roguelite: at each map's exit (or a death) one stats line to the console and to rl_stats.csv next to raze.exe (0 = none)")
 
 // Meta progress, kept across runs. Blood and Cryptic Passage share a config, so what belongs to one game's episodes
 // is kept per game in rl_progress; the ichor bank and the run counts are shared.
@@ -199,6 +251,10 @@ CVARD(Bool, rl_forge_alt, true, CVAR_ARCHIVE, "roguelite Forge: the forged gun's
 CVARD(String, rl_litanies, "", CVAR_ARCHIVE, "roguelite Forge: the Litanies found (ids), kept across runs")
 
 BEGIN_BLD_NS
+
+// animatesprite.cpp's view effects, for a cursed reliquary's (OmenItemSprite).
+tspritetype* viewInsertTSprite(tspriteArray& tsprites, sectortype* pSector, int nStatnum, tspritetype const* const parentTSprite);
+extern DAngle random_angles[16][3]; // filled by viewInit
 
 namespace rogue
 {
@@ -1283,6 +1339,8 @@ double RedSpeed(DBloodActor* a)
 // the copy keeps the stock look.
 void WaveSpawned(DBloodActor* spawned, DBloodActor* kind)
 {
+	if (spawned && run.active && !run.over) spawned->modFlags |= kModWave; // it counts half toward the momentum (below)
+	RiftWave(spawned); // rifts.cpp: a Horde or Hourglass enemy comes through a rift (rl_rifts; the same actor, its flags kept)
 	if (!spawned || !kind || !(kind->modFlags & kModChampion)) return;
 	spawned->spr.scale /= (kind->modFlags & kModRedChampion) ? kRedSize : kChampionSize;
 }
@@ -1386,6 +1444,7 @@ void SetupPressure()
 // Horde's waves (the rest of its enemies, a few at a time) and Hourglass's (every 30 s past the par time).
 void Pressure()
 {
+	RiftWaves riftWaves; // rifts.cpp: the waves spawned here come through rifts (chaos's, spawned elsewhere, don't)
 	if (run.extraEnemies > 0 && PlayClock >= run.nextWave)
 	{
 		TArray<DBloodActor*> kinds;
@@ -1509,11 +1568,12 @@ double AmmoToKill(const AmmoProfile& p, int type, double health)
 	return health * p.perShot / (std::min(shot, health) * p.hit * p.targets); // a shot can't do more than kill
 }
 
-// The guns the player has; on the run's first map, the kit's too (it's handed over after the remix).
+// The guns the player has; on the run's first map (rl_startat: the map it starts on), the kit's too (it's handed over
+// after the remix).
 void OwnedGuns(DBloodPlayer* p, bool* owned)
 {
 	for (int w = 0; w < kWeapMax; w++) owned[w] = p && p->hasWeapon[w];
-	if (run.index == 0 && !run.kitGiven)
+	if (run.active && !run.kitGiven)
 		for (int i = 0; i < kNumKit; i++)
 			if (run.kit[i] > 0 && WeaponOf(kitItems[i].item)) owned[WeaponOf(kitItems[i].item)] = true;
 }
@@ -1564,7 +1624,10 @@ void CountAmmo(AmmoLedger& l, DBloodPlayer* p, bool carried)
 	while (auto a = it.Next())
 	{
 		if (a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !AllowedKillType(a)) continue;
-		AddEnemy(l, a->spr.type, a->xspr.health / 16.);
+		int type = a->spr.type;
+		double health = a->xspr.health / 16.;
+		RiftLedger(a, type, health); // rifts.cpp: a zombie a rift will replace counts as what comes through
+		AddEnemy(l, type, health);
 		AddDrops(l, a);
 	}
 	// The map's dude spawners (275 on the stock maps), each counted once.
@@ -1695,9 +1758,10 @@ bool SpotSectorOk(sectortype* s, double minHeight = 40)
 
 // A spot for a pickup: inside a good sector, at about the anchor's floor height, clear of walls and ledges, and not
 // on another pickup, a thing or an enemy. Loose (a secret's cache): a niche 24 high will do, nearer walls and items.
-bool SpotOk(sectortype* s, const DVector2& p, double anchorZ, const TArray<DVector2>& taken, bool loose = false)
+// minClear: at least this clear of walls and solid sprites, loose or not (a big pickup: a cursed reliquary).
+bool SpotOk(sectortype* s, const DVector2& p, double anchorZ, const TArray<DVector2>& taken, bool loose = false, double minClear = 0)
 {
-	const double clear = loose ? 8 : kSpotClear, spacing = loose ? 12 : kSpotSpacing;
+	const double clear = std::max(loose ? 8 : kSpotClear, minClear), spacing = loose ? 12 : kSpotSpacing;
 	if (!SpotSectorOk(s, loose ? 24 : 40) || !inside(p.X, p.Y, s)) return false;
 	double fz = getflorzofslopeptr(s, p.X, p.Y);
 	if (std::abs(fz - anchorZ) > kSpotStepZ) return false;
@@ -1720,9 +1784,9 @@ bool SpotOk(sectortype* s, const DVector2& p, double anchorZ, const TArray<DVect
 }
 
 // A spot minD-maxD from an anchor (on its floor), in sight of it, so the pickup isn't through a wall; with only, in
-// that sector (a secret's cache stays in the secret).
+// that sector (a secret's cache stays in the secret). minClear: as SpotOk's.
 bool FindItemSpot(std::mt19937& rng, sectortype* aSect, const DVector3& anchor, double minD, double maxD,
-	const TArray<DVector2>& taken, DVector2& out, sectortype*& outSect, sectortype* only = nullptr, int tries = 16)
+	const TArray<DVector2>& taken, DVector2& out, sectortype*& outSect, sectortype* only = nullptr, int tries = 16, double minClear = 0)
 {
 	DVector3 eye(anchor.XY(), anchor.Z - 16);
 	for (int k = 0; k < tries; k++)
@@ -1732,7 +1796,7 @@ bool FindItemSpot(std::mt19937& rng, sectortype* aSect, const DVector3& anchor, 
 		updatesector(p, &s);
 		if (!s || (only && s != only)) continue;
 		if (!cansee(eye, aSect, DVector3(p, getflorzofslopeptr(s, p.X, p.Y) - 16), s)) continue;
-		if (!SpotOk(s, p, anchor.Z, taken, only != nullptr)) continue;
+		if (!SpotOk(s, p, anchor.Z, taken, only != nullptr, minClear)) continue;
 		out = p;
 		outSect = s;
 		return true;
@@ -2159,6 +2223,7 @@ void Remix()
 	double depth = run.maps.Size() > 1 ? double(run.index) / double(run.maps.Size() - 1) : 0.;
 	RemixEnemies(rng, depth);
 	CovenantEnemies();
+	PlanRifts(run.seed, run.index, depth); // rifts.cpp: which zombies come through rifts, as what (its own seeded stream)
 	bool owned[kWeapMax];
 	OwnedGuns(getPlayer(myconnectindex), owned);
 	RemixItems(rng, owned);
@@ -2170,7 +2235,7 @@ void Remix()
 		CountAmmo(ledger, p, false); // the map's own ammo, after the remix and Horde's count (what's carried isn't counted)
 		PlaceAmmo(rng, owned);
 	}
-	if (run.index == 0)
+	if (run.index == 0 || !run.kitGiven) // the run's first map (rl_startat: the map it starts on)
 	{
 		if (!run.kitGiven) GiveKit();
 		run.kitGiven = true;
@@ -2270,12 +2335,19 @@ void RunWon()
 	run = Run();
 }
 
-bool StartRun(int episode, uint32_t seed)
+// start: the map of the order it begins on (rl_startat, testing a late map: the kit is handed over there, and that map
+// has no reward choice), 0 as ever.
+bool StartRun(int episode, uint32_t seed, int start = 0)
 {
 	std::mt19937 rng(seed);
 	TArray<FString> order;
 	BuildOrder(episode, rng, order);
-	auto first = order.Size() ? FindMapByName(order[0].GetChars()) : nullptr;
+	if (start < 0 || (start > 0 && start >= int(order.Size())))
+	{
+		Printf("rl_startat: this run has %d maps\n", int(order.Size()));
+		return false;
+	}
+	auto first = order.Size() ? FindMapByName(order[start].GetChars()) : nullptr;
 	if (!first)
 	{
 		Printf("rl_newrun: no maps found for this run\n");
@@ -2305,7 +2377,7 @@ bool StartRun(int episode, uint32_t seed)
 	run.skill = rl_skill;
 	run.episode = episode;
 	run.maps = std::move(order);
-	run.pending = 0;
+	run.pending = start;
 	for (int i = 0; i < kNumKit; i++) run.kit[i] = *kitItems[i].cvar;
 	for (int c = 0; c < kNumConditions; c++) run.cov[c] = *conditions[c].cvar;
 	ForgeRecipe(run.forge);
@@ -2314,6 +2386,7 @@ bool StartRun(int episode, uint32_t seed)
 	startingRun = true;
 	saveConfig = true;
 	Printf(PRINT_NOTIFY, "Roguelite: %s, %d maps (run %d, seed %u)\n", RunName(episode).GetChars(), int(run.maps.Size()), run.id, seed);
+	if (start > 0) Printf(PRINT_NOTIFY, "Roguelite: starting at map %d, %s, with the kit only\n", start + 1, run.maps[start].GetChars());
 	M_ClearMenus();
 	DeferredStartGame(first, run.skill);
 	return true;
@@ -2490,18 +2563,11 @@ void LayDrop(DBloodActor* item, sectortype* sect, const DVector2& spot)
 	viewBackupSpriteLoc(item);
 }
 
-// A red champion drops body armour, a champion basic armour one time in four: the armour that stops bullets (fire and
-// spirit armour stop none), as on the hardest settings the champions' hitscan is what kills you. The roll is the
-// run's (its seed and the champion's number in the run), so a reload rolls the same. A dropped item has no xsprite
-// or mark, so the ammo ledger (counted as the map starts), the remix (the same) and the big pickups (marked, with an
-// xsprite) never take it for theirs. It lies where the champion fell if a pickup can lie there; else on a spot in
-// sight of that one, or else near you (a flyer shot over lava or a pit, a foe in a door or on a lift); if none
-// will do, where it fell, as a stock drop would (in water, say, where you can swim to it).
-void DropChampionArmour(DBloodActor* victim, bool red)
+// A dropped item (actDropObject's, at the body) stays where it fell if a pickup can lie there; else it goes to a spot in
+// sight of that one, or else near you (a flyer shot over lava or a pit, a foe in a door or on a lift); if none will do,
+// it stays where it fell, as a stock drop would (in water, say, where you can swim to it).
+void SettleDrop(DBloodActor* item, std::mt19937& rng)
 {
-	std::mt19937 rng(run.seed ^ (0x9E3779B9u * uint32_t(run.champions)) ^ 0x2545F491u);
-	if (!red && Rand01(rng) >= kChampionArmourChance) return;
-	auto item = actDropObject(victim, red ? kItemArmorBody : kItemArmorBasic);
 	if (!item || !item->insector() || SpotSectorOk(item->sector())) return;
 	TArray<DVector2> taken;
 	DVector2 spot;
@@ -2512,6 +2578,19 @@ void DropChampionArmour(DBloodActor* victim, bool red)
 	if (!found && pl && pl->insector()) found = FindItemSpot(rng, pl->sector(), FloorAt(pl), 24, 80, taken, spot, sect);
 	if (!found || !sect) return;
 	LayDrop(item, sect, spot);
+}
+
+// A red champion drops body armour, a champion basic armour one time in four: the armour that stops bullets (fire and
+// spirit armour stop none), as on the hardest settings the champions' hitscan is what kills you. The roll is the
+// run's (its seed and the champion's number in the run), so a reload rolls the same. A dropped item has no xsprite
+// or mark, so the ammo ledger (counted as the map starts), the remix (the same) and the big pickups (marked, with an
+// xsprite) never take it for theirs. It lies where the champion fell if a pickup can lie there, else nearby
+// (SettleDrop).
+void DropChampionArmour(DBloodActor* victim, bool red)
+{
+	std::mt19937 rng(run.seed ^ (0x9E3779B9u * uint32_t(run.champions)) ^ 0x2545F491u);
+	if (!red && Rand01(rng) >= kChampionArmourChance) return;
+	SettleDrop(actDropObject(victim, red ? kItemArmorBody : kItemArmorBasic), rng);
 }
 
 //---------------------------------------------------------------------------
@@ -2531,13 +2610,16 @@ struct OmenInfo
 {
 	const char* name;
 	int tier;
-	int seconds;
+	int seconds;          // its time (The Hunger's: its hunger clock)
 	int powerup;          // the stock powerup it runs on (its pwUpTime), -1: none
 	const char* effect;   // the base effect it runs, or null
-	int deal;             // your hits on foes deal this many times their damage (1: as ever)
+	int deal;             // your hits on foes deal this many times their damage (1: as ever); the Omens' bonuses
+	                      // (deal - 1) add, not multiply (OmenDeal)
 	bool bloodlust;       // your hits heal you
 	int look;             // the stock item it's drawn as (its picture and size), in its tier's palette
 	const char* sentence; // what it does
+	double killCap = 2;   // kills (and "to cap" effects) extend it up to this many times its time, with the brakes on
+	                      // (rl_omen_weights; 0: never); Bloodrush's Ravening raises a 2 to 3 (the momentum, BoonCap)
 };
 
 // The pool: mostly Blood's own powerups on short timers. Hollow Bones is drawn as the feather fall, Bottomless as the
@@ -2545,20 +2627,26 @@ struct OmenInfo
 const OmenInfo omenInfo[] =
 {
 	{ "Hollow Bones", kOmenCommon, 20, -1, "lowgrav", 1, false, kItemFeatherFall, "low gravity" },
-	{ "Bottomless", kOmenCommon, 10, -1, "infammo", 1, false, 133, "infinite ammo" },
+	{ "Bottomless", kOmenCommon, 10, -1, "infammo", 1, false, 133, "infinite ammo", 0 }, // kills never feed it (the brakes)
 	{ "Dread", kOmenCommon, 10, -1, "slowmo", 1, false, 136, "enemies at half speed" },
 	{ "Shroud", kOmenCommon, 12, kPwUpShadowCloak, nullptr, 1, false, kItemShadowCloak, "a shadow cloak: enemies can't see you" },
 	{ "Twin Vessel", kOmenRare, 15, kPwUpTwoGuns, nullptr, 1, false, kItemTwoGuns, "guns akimbo, the forged gun too" },
 	{ "Bloodlust", kOmenRare, 15, -1, nullptr, 1, true, 134, "your hits heal you" },
 	{ "Fury", kOmenRare, 10, -1, nullptr, 2, false, 127, "you deal 2x" },
-	{ "Mirror Skin", kOmenRelic, 10, kPwUpReflectShots, nullptr, 1, false, kItemReflectShots, "reflective shots: a foe's bullets hit the foe" },
-	{ "Death's Grin", kOmenRelic, 4, kPwUpDeathMask, nullptr, 1, false, kItemDeathMask, "invulnerable" },
-	// The gambles, only ever in a cursed reliquary: both halves run together for the time. Frenzy's 3x is the run's own.
-	{ "Glass Cannon", kOmenGamble, 20, -1, "glasscannon", 1, false, 137, "deal 4x, take 2x" },
-	{ "Frenzy", kOmenGamble, 15, -1, "fast", 3, false, 137, "enemies twice as fast, you deal 3x" },
-	{ "Powder Keg", kOmenGamble, 20, -1, "bigboom", 1, false, 137, "every blast, yours and theirs, twice as big" },
+	// Mirror Skin stops at 1.5x: against cultists, hitscan immunity is most of Death's Grin. Kills never feed Death's Grin.
+	{ "Mirror Skin", kOmenRelic, 10, kPwUpReflectShots, nullptr, 1, false, kItemReflectShots, "reflective shots: a foe's bullets hit the foe", 1.5 },
+	{ "Death's Grin", kOmenRelic, 4, kPwUpDeathMask, nullptr, 1, false, kItemDeathMask, "invulnerable", 0 },
+	// The gambles, only ever in a cursed reliquary, which kills pay off (their rules are their own section's, after the
+	// momentum's). They took the places of Glass Cannon, Frenzy and Powder Keg (a save running one of those drops it).
+	{ "The Hunger", kOmenGamble, 10, -1, nullptr, 1, false, 137,
+		"boons to cap, a rare Omen; then kill every 10 s (champion 15) or lose 25 health, until 12 kills" },
+	{ "Rampage", kOmenGamble, 20, -1, nullptr, 1, false, 137,
+		"each kill +0.5x damage, +1 s; 3 s without one: back to 1x, lose 10 health" },
+	{ "Corpse Fire", kOmenGamble, 20, -1, nullptr, 1, false, 137,
+		"lose 20 health now; your kills burst in blasts that spare you, +1 s each" },
 };
 constexpr int kNumOmens = int(countof(omenInfo));
+enum { kOmenHunger = 9, kOmenRampage, kOmenCorpseFire }; // the gambles, by their place in the table
 
 // The drops. A champion always drops an Omen, a plain enemy one time in 25; a champion's cursed reliquary comes besides.
 constexpr double kOmenPlain = 1. / 25;
@@ -2570,13 +2658,30 @@ constexpr double kReliquaryBlue = 1. / 10, kReliquaryRed = 1. / 3; // plain enem
 // should any reach its pickup) drawn as the Omen's look. Common ones keep Blood's colours, rare ones take the blue
 // champions' COLD, relics the red champions' BEAST. A reliquary takes FLAME: no stock lookup turns a whole sprite purple,
 // and FLAME turns over a third of the black chest violet and the rest red, the nearest they come. All are lit like
-// Blood's keys, so a drop shows in the dark and isn't taken for a map's own item.
+// Blood's keys, so a drop shows in the dark and isn't taken for a map's own item. Each keeps its palette on a floor with
+// its own (OmenItemSprite), as stock items take the floor's.
+// A reliquary, a choice rather than a pickup walked into, is made hard to miss: it falls with a bell and a message, it's
+// drawn half as big again, and Blood's own atom motes circle it (OmenItemSprite). It names itself from further off than
+// Use takes it (Use stays tight: a press at a bare wall, hunting a secret, never takes a gamble), and when walked into.
 constexpr int kOmenItem = 132;
 constexpr int omenPal[] = { 0, 10, 2, 9 };
 constexpr int kOmenShade = -128;
 constexpr int kOmenKillTime = kClock;                // a kill of yours adds this to each boon running, up to 2x its time
-constexpr double kReliquaryRange = 96;               // a reliquary names itself, and Use takes it, this near (to the eye)
+                                                     // (without rl_omen_weights: KillTime, below)
+constexpr double kReliquaryRange = 96;               // Use takes a reliquary this near (to the eye)
 constexpr double kReliquaryCone = 25;                // and this close to where you look, up and down too (degrees)
+constexpr double kReliquaryNameRange = 160;          // it names itself this near (along the floor)
+constexpr double kReliquaryNameCone = 30;            // and this close to where you face (left and right only: degrees)
+constexpr int kReliquaryTouchHint = kClock / 2;      // walked into, it names itself until this long after
+constexpr double kReliquaryLook = 1.5;               // it's drawn this much bigger than the stock chest (repeat 60)
+constexpr double kReliquaryClear = 24;               // and so lies this far from walls and solid sprites (kSpotClear: 16)
+constexpr double kReliquaryHaloZ = 32;               // its motes circle a point this high above its floor
+// It falls with BELL: no stock code or SEQ rings 270, and no stock map's ambient or sector sound uses it. But eleven of
+// the maps' sound generators (708) do, five on maps a run plays: four on E1M4, one on E6M1 (the rest are on E1M8, E4M9
+// and two BloodBath maps). Each is off until the map's wiring turns it on (on E1M4, its carnival games, after the
+// player's own action), then rings this bell again and again until its waitTime turns it off. So the bell alone may be
+// the map's: the bell together with the purple "A cursed reliquary falls" is the cue that means a drop.
+constexpr int kReliquaryBell = 270;
 constexpr int kLustPerSecond = 15 << 4;              // Bloodlust heals at most this a second (health is in sixteenths)
 constexpr int kLustTop = 100 << 4;                   // and never above this
 // The chips' gold (chaos's twist gold), purple, and the map curse's red (chaos's nasty red).
@@ -2592,12 +2697,31 @@ struct RunningOmen
 };
 TArray<RunningOmen> omens;  // oldest first: the chips' order
 FString reliquaryHint;      // the cursed reliquary you face, named (the drawer shows it)
+DBloodActor* reliquaryTouched; // the reliquary you last walked into (compared, never followed)
+int reliquaryTouchedAt = INT_MIN / 2;
 int lustSecond = -1, lustHealed, lustSoundAt = INT_MIN / 2;
 DBloodActor* omenPowerItem; // a map's powerup being picked up while an Omen runs on its timer (compared, never followed)
 int omenPowerBefore;        // that timer as the pickup began
 
 bool OmensLive() { return rl_omens && run.active && !run.over && !crypt.in; }
 const bmod::Effect* OmenEffect(int id) { return omenInfo[id].effect ? bmod::FindEffect(omenInfo[id].effect) : nullptr; }
+// The momentum's say on the Omens (its section follows theirs): Fever, an Omen's clock each tic, Savage's drops.
+bool FeverOn();
+void RunDown(RunningOmen& r, DBloodPlayer* p, bool fever);
+double PlainOmenChance();
+void StatsOmen(int id, bool taken); // the stats line: an Omen or reliquary dropped, or taken
+PalEntry BoonChip();
+// The gambles' own rules (their section follows the stats line's): a gamble taken (its clock, its prize or its price),
+// its clock run out, each tic (Rampage's lapse, Corpse Fire's bursts), a kill of yours, Rampage's damage bonus, how
+// the prompts name one, and their state as a map starts and as a save is loaded.
+bool BeginGamble(RunningOmen& r, int clocks);
+void GambleRanOut(int id);
+void GambleTick(DBloodPlayer* p);
+void GambleKill(DBloodActor* victim);
+double GambleBonus();
+FString GambleHead(int id, int clocks);
+void GamblesReset();
+void GamblesLoaded();
 
 RunningOmen* RunningOf(int id)
 {
@@ -2618,12 +2742,16 @@ bool ByYou(DBloodActor* a)
 	return a && p && a == p->GetActor();
 }
 
-// Fury's and Frenzy's factor on your hits on foes (together, they multiply).
-int OmenDeal()
+// The Omens' factor on your hits on foes (the damage rule): their bonuses add, not multiply. Fury's is +1 (its deal, 2,
+// less 1) and each of Rampage's stacks +0.5 (GambleBonus), and the total is at most 6x. The Forge's and the Covenant's
+// factors, and the base's damage scale (a curse's or chaos's Glass Cannon), stack on it as before (ScaleDamage).
+constexpr double kOmenDealMax = 6;
+double OmenDeal()
 {
-	int deal = 1;
-	if (OmensLive()) for (auto& r : omens) deal *= omenInfo[r.id].deal;
-	return deal;
+	if (!OmensLive()) return 1;
+	double deal = 1 + GambleBonus();
+	for (auto& r : omens) deal += omenInfo[r.id].deal - 1;
+	return std::min(deal, kOmenDealMax);
 }
 
 bool BloodlustOn()
@@ -2682,14 +2810,16 @@ void ResetOmens()
 {
 	omens.Clear();
 	reliquaryHint = "";
+	reliquaryTouched = nullptr;
 	lustSecond = -1;
 	lustSoundAt = INT_MIN / 2;
 	omenPowerItem = nullptr;
+	GamblesReset();
 }
 
-// An Omen can begin now (one running can always take more time): not when its base effect can't run (Dread and Frenzy
-// need enemies left), nor when starting it would end another Omen's (Dread's slow and Frenzy's speed are rivals: the one
-// running stays, and the newcomer waits on the floor). *rival: that Omen, else -1.
+// An Omen can begin now (one running can always take more time): not when its base effect can't run (Dread needs
+// enemies left), nor when starting it would end another Omen's (rival effects: the one running stays, and the newcomer
+// waits on the floor; no two Omens are rivals since Frenzy went, but the check stays). *rival: that Omen, else -1.
 bool CanGrant(int id, int* rival = nullptr)
 {
 	if (rival) *rival = -1;
@@ -2708,7 +2838,7 @@ bool CanGrant(int id, int* rival = nullptr)
 
 // An Omen begins, or one running gets more time: clocks of it, up to 3x its time. False: it can't take hold now
 // (CanGrant), and its pickup stays. A base effect the curse or chaos runs already does: the Omen rides it, and leaves it
-// running as it ends.
+// running as it ends. A gamble's clock and its other half are its own (BeginGamble).
 bool GrantOmen(int id, int clocks, bool* chimed = nullptr)
 {
 	auto p = getPlayer(myconnectindex);
@@ -2724,6 +2854,8 @@ bool GrantOmen(int id, int clocks, bool* chimed = nullptr)
 		r = &omens.Last();
 	}
 	r->base = std::max(r->base, clocks);
+	if (chimed) *chimed = false;
+	if (o.tier == kOmenGamble) return BeginGamble(*r, clocks);
 	int left = std::max(std::min(r->left + clocks, 3 * r->base), r->left);
 	bool fresh = AddPowerTime(p, o.powerup, left - r->left);
 	r->left = left;
@@ -2732,20 +2864,7 @@ bool GrantOmen(int id, int clocks, bool* chimed = nullptr)
 	return true;
 }
 
-// A kill of yours: a second more on each boon running, up to twice its time. A gamble's time stays as it said.
-void ExtendOmens()
-{
-	auto p = getPlayer(myconnectindex);
-	if (!p || !OmensLive()) return;
-	for (auto& r : omens)
-	{
-		if (omenInfo[r.id].tier == kOmenGamble || r.left >= 2 * r.base) continue;
-		int left = std::min(r.left + kOmenKillTime, 2 * r.base);
-		AddPowerTime(p, omenInfo[r.id].powerup, left - r.left);
-		r.left = left;
-		r.peak = std::max(r.peak, left);
-	}
-}
+// A kill of yours adds time to each boon running: the momentum's AddKillTime (below).
 
 // Bloodlust: a quarter of the health your hit took from a live foe (taken, so none past its death), at most 15 health a
 // second and never above 100, and less under the Covenant's Famine. Its cap is its own, apart from the cleavers'. The
@@ -2773,12 +2892,13 @@ void BloodlustHeal(int lost)
 }
 
 // An Omen's pickup or a cursed reliquary lying on the floor at p: an inert item drawn as its look, in its tier's
-// palette, lit; with an xsprite, so its mark and its Omen (data1) are saved with it.
+// palette, lit (a reliquary half as big again); with an xsprite, so its mark and its Omen (data1) are saved with it.
 DBloodActor* SpawnOmenItem(sectortype* s, const DVector2& p, int id)
 {
 	auto& o = omenInfo[id];
 	auto& d = gItemData[o.look - kItemBase];
 	if (!s || !d.textureID().isValid()) return nullptr;
+	double look = o.tier == kOmenGamble ? kReliquaryLook : 1;
 	double fz = getflorzofslopeptr(s, p.X, p.Y);
 	auto a = actSpawnSprite(s, DVector3(p, fz), kStatItem, true);
 	if (!a) return nullptr;
@@ -2787,7 +2907,7 @@ DBloodActor* SpawnOmenItem(sectortype* s, const DVector2& p, int id)
 	a->spr.setspritetexture(d.textureID());
 	a->spr.shade = kOmenShade;
 	a->spr.pal = omenPal[o.tier];
-	a->spr.scale = DVector2(d.xrepeat * REPEAT_SCALE, d.yrepeat * REPEAT_SCALE);
+	a->spr.scale = DVector2(d.xrepeat * look * REPEAT_SCALE, d.yrepeat * look * REPEAT_SCALE);
 	a->modFlags |= kModOmen;
 	a->xspr.data1 = int16_t(id);
 	double top, bottom;
@@ -2796,23 +2916,26 @@ DBloodActor* SpawnOmenItem(sectortype* s, const DVector2& p, int id)
 	a->basePoint = a->spr.pos;
 	a->interpolated = false;
 	viewBackupSpriteLoc(a);
+	StatsOmen(id, false);
 	return a;
 }
 
 // A drop lies beside where the enemy fell, in sight of the spot (not on its armour or its stock drop); with no room
 // there, on the spot itself if a pickup can lie there; else as a champion's armour goes (near it, or else near you).
+// A reliquary, drawn big, keeps further from walls.
 void PlaceOmenItem(DBloodActor* item, std::mt19937& rng)
 {
 	if (!item->insector()) return;
 	TArray<DVector2> taken;
 	DVector2 spot;
 	sectortype* sect = nullptr;
-	bool found = FindItemSpot(rng, item->sector(), FloorAt(item), 24, 64, taken, spot, sect);
+	double clear = omenInfo[item->xspr.data1].tier == kOmenGamble ? kReliquaryClear : 0;
+	bool found = FindItemSpot(rng, item->sector(), FloorAt(item), 24, 64, taken, spot, sect, nullptr, 16, clear);
 	if (!found && SpotSectorOk(item->sector())) return;
-	if (!found) found = FindItemSpot(rng, item->sector(), FloorAt(item), 16, 96, taken, spot, sect);
+	if (!found) found = FindItemSpot(rng, item->sector(), FloorAt(item), 16, 96, taken, spot, sect, nullptr, 16, clear);
 	auto p = getPlayer(myconnectindex);
 	auto pl = p ? p->GetActor() : nullptr;
-	if (!found && pl && pl->insector()) found = FindItemSpot(rng, pl->sector(), FloorAt(pl), 24, 80, taken, spot, sect);
+	if (!found && pl && pl->insector()) found = FindItemSpot(rng, pl->sector(), FloorAt(pl), 24, 80, taken, spot, sect, nullptr, 16, clear);
 	if (!found || !sect) return;
 	LayDrop(item, sect, spot);
 	item->basePoint = item->spr.pos;
@@ -2827,8 +2950,10 @@ int PickOmen(std::mt19937& rng, int tier)
 
 // As an enemy dies in a run (outside the Crypt): a champion's Omen (a blue one's common 65% or rare, a red one's rare
 // 75% or a relic), a plain enemy's one time in 25 (common 70%, rare 25%, relic 5%); and besides, a red champion's
-// cursed reliquary one time in 3, a blue one's one time in 10, a random gamble in it. The rolls are the run's (its seed
-// and the deaths rolled so far, which a save keeps), so a reload rolls the same.
+// cursed reliquary one time in 3, a blue one's one time in 10, a random gamble in it (rl_reliquaries 0: never; that
+// roll is the last, so the Omens roll as with it on). The rolls are the run's (its seed and the deaths rolled so far,
+// which a save keeps), so a reload rolls the same. A reliquary falls with a bell at the chest and a message (an Omen
+// falls silent: walking into it takes it).
 void DropOmens(DBloodActor* victim, bool champion, bool red)
 {
 	if (!rl_omens || !victim || !victim->insector()) return;
@@ -2838,13 +2963,13 @@ void DropOmens(DBloodActor* victim, bool champion, bool red)
 	double r = Rand01(rng);
 	if (red) tier = r < kOmenRedRelic ? kOmenRelic : kOmenRare;
 	else if (champion) tier = r < kOmenBlueRare ? kOmenRare : kOmenCommon;
-	else if (r < kOmenPlain)
+	else if (r < PlainOmenChance()) // 1 in 25, 1 in 12 at Bloodrush's Savage
 	{
 		double t = Rand01(rng);
 		tier = t < kOmenPlainRelic ? kOmenRelic : t < kOmenPlainRelic + kOmenPlainRare ? kOmenRare : kOmenCommon;
 	}
 	int omen = tier >= 0 ? PickOmen(rng, tier) : -1;
-	double reliquary = red ? kReliquaryRed : champion ? kReliquaryBlue : 0;
+	double reliquary = !rl_reliquaries ? 0 : red ? kReliquaryRed : champion ? kReliquaryBlue : 0;
 	int gamble = reliquary > 0 && Rand01(rng) < reliquary ? PickOmen(rng, kOmenGamble) : -1;
 	for (int id : { omen, gamble })
 	{
@@ -2853,33 +2978,59 @@ void DropOmens(DBloodActor* victim, bool champion, bool red)
 		auto pos = victim->spr.pos;
 		updatesector(pos, &s);
 		if (!s) s = victim->sector(); // blasted outside every sector (as actSpawnFloor has it)
-		if (auto item = SpawnOmenItem(s, pos.XY(), id)) PlaceOmenItem(item, rng);
+		auto item = SpawnOmenItem(s, pos.XY(), id);
+		if (!item) continue;
+		PlaceOmenItem(item, rng);
+		if (id != gamble) continue;
+		sfxPlay3DSound(item->spr.pos, kReliquaryBell, item->sector()); // unattached: it rings on if the chest is taken at once
+		viewSetMessage("A cursed reliquary falls", TEXTCOLOR_PURPLE); // the gambles' colour (the hint, the chip)
 	}
 }
 
-// The cursed reliquary you face: within kReliquaryRange of your eye and kReliquaryCone of your view (where Use's own scan
-// aims, its pitch too: one at your feet you look down at), in sight; the nearest that can take hold now (CanGrant).
-// *blocked: the nearest you face that can't, so the hint can say why.
-DBloodActor* NearReliquary(DBloodPlayer* p, DBloodActor** blocked = nullptr)
+bool IsReliquary(DBloodActor* a)
+{
+	return IsOmenItem(a) && omenInfo[a->xspr.data1].tier == kOmenGamble && !(a->spr.flags & 32) && a->insector();
+}
+
+// Use weighs a reliquary from your eye (where its scan starts) to the chest's middle.
+DVector3 ReliquaryEye(DBloodPlayer* p)
+{
+	return DVector3(p->GetActor()->spr.pos.XY(), p->zView);
+}
+
+DVector3 ReliquaryMid(DBloodActor* a)
+{
+	double top, bottom;
+	GetActorExtents(a, &top, &bottom);
+	return DVector3(a->spr.pos.XY(), (top + bottom) / 2);
+}
+
+// The cursed reliquary you face, in sight; the nearest that can take hold now (CanGrant). *blocked: the nearest you face
+// that can't, so the hint can say why. Facing one to take it (Use): within kReliquaryRange of your eye and
+// kReliquaryCone of your view (where Use's own scan aims, its pitch too: one at your feet you look down at). Facing one
+// to name it (naming): within kReliquaryNameRange along the floor and kReliquaryNameCone of where you face, your pitch
+// aside, as one lying ahead is below your view until you're nearly on it.
+DBloodActor* NearReliquary(DBloodPlayer* p, DBloodActor** blocked = nullptr, bool naming = false)
 {
 	if (blocked) *blocked = nullptr;
 	auto pl = p ? p->GetActor() : nullptr;
 	if (!pl || !pl->insector()) return nullptr;
-	DVector3 eye(pl->spr.pos.XY(), p->zView);
+	DVector3 eye = ReliquaryEye(p);
 	DVector3 view = DVector3(pl->spr.Angles.Yaw.ToVector(), p->slope).Unit(); // as ActionScan aims
-	double cone = DAngle::fromDeg(kReliquaryCone).Cos();
+	DVector2 facing = pl->spr.Angles.Yaw.ToVector();
+	double range = naming ? kReliquaryNameRange : kReliquaryRange;
+	double cone = DAngle::fromDeg(naming ? kReliquaryNameCone : kReliquaryCone).Cos();
 	DBloodActor* best = nullptr;
-	double bestDist = kReliquaryRange, blockedDist = kReliquaryRange;
+	double bestDist = range, blockedDist = range;
 	BloodStatIterator it(kStatItem);
 	while (auto a = it.Next())
 	{
-		if (!IsOmenItem(a) || omenInfo[a->xspr.data1].tier != kOmenGamble || (a->spr.flags & 32) || !a->insector()) continue;
-		double top, bottom;
-		GetActorExtents(a, &top, &bottom);
-		DVector3 mid(a->spr.pos.XY(), (top + bottom) / 2);
+		if (!IsReliquary(a)) continue;
+		DVector3 mid = ReliquaryMid(a);
 		DVector3 d = mid - eye;
-		double dist = d.Length();
-		if (dist >= kReliquaryRange || (d | view) < dist * cone) continue;
+		double dist = naming ? d.XY().Length() : d.Length();
+		double ahead = naming ? (d.XY() | facing) : (d | view);
+		if (dist >= range || ahead < dist * cone) continue;
 		bool takes = CanGrant(a->xspr.data1);
 		double& nearest = takes ? bestDist : blockedDist;
 		if ((!takes && !blocked) || dist >= nearest || !cansee(eye, pl->sector(), mid, a->sector())) continue;
@@ -2889,7 +3040,8 @@ DBloodActor* NearReliquary(DBloodPlayer* p, DBloodActor** blocked = nullptr)
 	return best;
 }
 
-// Why a gamble can't take hold now (CanGrant false): "while Dread runs", or "here now" (no enemies left for Frenzy).
+// Why an Omen can't take hold now (CanGrant false): "while <its rival> runs", or "here now" (its effect can't run). The
+// gambles run no base effect, so a reliquary always can.
 FString HoldBar(int id)
 {
 	int rival;
@@ -2914,9 +3066,11 @@ bool TakeReliquary(DBloodPlayer* p)
 	int id = a->xspr.data1;
 	auto& o = omenInfo[id];
 	if (!GrantOmen(id, o.seconds * kClock)) return false; // CanGrant said it could: it can't fail
+	StatsOmen(id, true);
 	sfxPlay3DSound(p->GetActor(), 463, -1, 0); // the voodoo doll's laugh
 	p->pickupEffect = 30;
-	viewSetMessage(FStringf("Cursed reliquary: %s, %d s: %s", o.name, bmod::SecondsLeft(RunningOf(id)->left), o.sentence).GetChars(),
+	auto r = RunningOf(id);
+	viewSetMessage(FStringf("Cursed reliquary: %s: %s", GambleHead(id, r ? r->left : 0).GetChars(), o.sentence).GetChars(),
 		nullptr, MESSAGE_PRIORITY_PICKUP);
 	actPostSprite(a, kStatFree);
 	reliquaryHint = "";
@@ -2925,8 +3079,9 @@ bool TakeReliquary(DBloodPlayer* p)
 
 // Each tic: the Omens' time runs down, and one whose base effect or stock powerup was ended by another (chaos starting a
 // rival, a powerup cleared) is dropped; one riding an effect another ran takes it over as that one stops on its own (not
-// when a rival replaced it: restarting would end the newcomer). Then the reliquary you face is named, or why it can't
-// take hold now. Not live (rl_omens off, the run over, the Crypt): everything ends.
+// when a rival replaced it: restarting would end the newcomer). The gambles' own tic follows. Then a reliquary near you
+// is named, with how to take it or why it can't take hold now. Not live (rl_omens off, the run over, the Crypt):
+// everything ends.
 void OmenTick()
 {
 	if (!OmensLive())
@@ -2937,11 +3092,12 @@ void OmenTick()
 	}
 	auto p = getPlayer(myconnectindex);
 	if (!p || !p->GetActor()) return;
+	bool fever = FeverOn(); // as the tic began: the boons' clocks run slower in it
 	for (int i = int(omens.Size()) - 1; i >= 0; i--)
 	{
 		auto& r = omens[i];
 		auto& o = omenInfo[r.id];
-		r.left -= kTicsPerFrame;
+		RunDown(r, p, fever);
 		bool lost = o.powerup >= 0 && p->pwUpTime[o.powerup] <= 0;
 		auto e = OmenEffect(r.id);
 		if (e && !bmod::IsActive(e))
@@ -2949,17 +3105,38 @@ void OmenTick()
 			if (r.owns || RivalActive(e) || !bmod::CanStart(e) || !bmod::StartEffect(e)) lost = true;
 			else r.owns = true;
 		}
+		if (!lost && r.left <= 0) GambleRanOut(r.id); // The Hunger's clock run out: its price
 		if (lost || r.left <= 0) EndOmen(i, false);
 	}
+	GambleTick(p); // Rampage's lapse, Corpse Fire's bursts
+	// The hint: the reliquary Use would act on; else one you walked into just now; else one you face further off.
 	DBloodActor* blocked;
 	auto rel = NearReliquary(p, &blocked);
 	if (!rel) rel = blocked;
+	bool inReach = rel != nullptr;
+	if (!rel && PlayClock - reliquaryTouchedAt >= 0 && PlayClock - reliquaryTouchedAt < kReliquaryTouchHint)
+	{
+		BloodStatIterator it(kStatItem);
+		while (auto a = it.Next())
+			if (a == reliquaryTouched && IsReliquary(a)) rel = a;
+	}
+	if (!rel)
+	{
+		rel = NearReliquary(p, &blocked, true);
+		if (!rel) rel = blocked;
+	}
 	if (!rel) reliquaryHint = "";
 	else
 	{
-		auto& o = omenInfo[rel->xspr.data1];
-		FString tail = rel == blocked ? FStringf("It can't take hold %s.", HoldBar(rel->xspr.data1).GetChars()) : FString("Use to take.");
-		reliquaryHint.Format("Cursed reliquary: %s: %s, %d s. %s", o.name, o.sentence, o.seconds, tail.GetChars());
+		int id = rel->xspr.data1;
+		auto& o = omenInfo[id];
+		// Out of Use's reach: near enough (to the eye) that facing it will do, or further, where Use can't reach it from
+		// here whatever your pitch (a chest 96 from your eye lies only about 84 off along the floor).
+		FString tail = !CanGrant(id) ? FStringf("It can't take hold %s.", HoldBar(id).GetChars())
+			: FString(inReach ? "Use to take."
+				: (ReliquaryMid(rel) - ReliquaryEye(p)).Length() < kReliquaryRange ? "Look down at it and Use to take."
+				: "Go up to it, look down and Use to take.");
+		reliquaryHint.Format("Cursed reliquary: %s: %s. %s", GambleHead(id, o.seconds * kClock).GetChars(), o.sentence, tail.GetChars());
 	}
 }
 
@@ -2968,9 +3145,11 @@ void OmenTick()
 void OmensLoaded()
 {
 	reliquaryHint = "";
+	reliquaryTouched = nullptr;
 	lustSecond = -1;
 	lustSoundAt = INT_MIN / 2;
 	omenPowerItem = nullptr;
+	GamblesLoaded();
 	if (!OmensLive())
 	{
 		EndOmens(true);
@@ -2996,6 +3175,1351 @@ void StackPowerPickup(DBloodActor* item)
 
 //---------------------------------------------------------------------------
 //
+// the momentum (docs/roguelite.md, "Momentum and rifts"): what a kill of
+// yours is worth to the boons running (rl_omen_weights), Bloodrush, a meter
+// your kills fill and fights drain (rl_rush), Fever, three boons running
+// at once (rl_fever), and Cleared, 90% of the enemies a map started with dead
+// (rl_cleared). Each has its own switch, and off it is as before. All of it
+// only in a live run, outside the Crypt. The centre slot's queue, the boons'
+// warning and the chips' order are the Omens' (rl_omens). Kill resupply
+// (rl_resupply) and the stats line (rl_stats) have their own section after.
+//
+//---------------------------------------------------------------------------
+
+// Kill time (rl_omen_weights): 1 s x the kind's weight x the champion's factor (blue 3, red 5) x Bloodrush's (1.5 from
+// Blooded) x Fever's (2), +0.5 s for each body after the first in a multi-kill (your kills 1.5 s or less apart), at most
+// 5 s; a wave enemy's is half. A kind's weight is the square root of its start health (dudeInfo) over a cultist's 40, at
+// most 2.5; a kind of 25 health or less is fodder (0); a champion weighs at least 1.
+constexpr double kKillSeconds = 1, kKillCeiling = 5, kMultiKillSeconds = 0.5;
+constexpr double kBlueFactor = 3, kRedFactor = 5, kBloodedFactor = 1.5, kFeverFactor = 2, kWaveShare = 0.5;
+constexpr int kMultiKillWindow = kClock * 3 / 2;
+constexpr double kWeightHealth = 40, kWeightMax = 2.5;
+constexpr int kFodderHealth = 25;
+constexpr double kRavenCap = 3;                      // Ravening: a boon that stops at 2x stops at 3x
+// Bloodrush (rl_rush): 0-100, its tiers every 25. It fills with your kills only: 6 x the kind's weight, rounded (fodder
+// 1), a blue champion 15 and a red one 30 whatever its kind, +4 for each body after the first in a multi-kill, a wave
+// enemy's half. It drains 2.5 a second while an enemy is alerted to you, times the tier's rate; with none, at 2.5 a
+// second down to its tier's floor. Getting hit costs nothing. Half of it goes on to the next map, held as it is until an
+// enemy there is alerted to you.
+enum { kTierNone, kTierBlooded, kTierSavage, kTierRavening, kNumTiers };
+const char* const rushTierNames[kNumTiers] = { "no tier", "Blooded", "Savage", "Ravening" };
+constexpr double kRushMax = 100, kRushTierStep = 25;
+constexpr double kRushPerWeight = 6, kRushFodder = 1, kRushBlue = 15, kRushRed = 30, kRushMulti = 4;
+constexpr double kRushDrain = 2.5;
+const double rushRate[kNumTiers] = { 1, 1.25, 1.5, 2 };
+constexpr double kRushCarry = 0.5;
+constexpr double kSavageOmen = 1. / 12;              // Savage: a plain enemy drops an Omen this often (else kOmenPlain)
+// Alerted to you: an enemy alive and after you (its target), in sight of you or this near (world units, along the
+// floor). Scanned every 8 tics. Critters and innocents, which aren't kills, don't count.
+constexpr double kAlertRange = 1024;
+constexpr int kAlertScanTics = 8;
+// The cue as a tier is reached: Tchernobog's second laugh (TBLAUGH2, 2.1 s). No stock code, SEQ, QAV or map-placed sound
+// plays it (his own lines are 2350-2356 and his pains 2370-2371, ai.cpp; of his laughs only TBLAUGH4, 2363, is on a
+// map: one sound generator on E4M8, his own map), and nothing else in the mode does. Ravening's word shows with it in
+// the centre slot. A tier reached again within kRushCueGap of its last cue stays quiet: in a fight the meter crosses a
+// tier's floor back and forth.
+constexpr int kRushTierSound = 2361;
+constexpr int kRushCueGap = 5 * kClock;
+// Fever (rl_fever): 3 boons running at once, 4 from a run's halfway map on (gambles don't count). Kills add 2x the time
+// (above), and the boons' clocks run 25% slower: 3 of a tic's 4. Its chips turn from gold to a hotter orange. Entering
+// it plays BST_FLSH (745, 2.1 s), which no stock code, SEQ, QAV or map-placed sound plays, nor the mode, with one of
+// Caleb's kill lines (actor.cpp's gPlayerGibThingComments, as he says them gibbing a body). No screen shake.
+constexpr int kFeverNeed = 3, kFeverNeedLate = 4;
+constexpr double kFeverLate = 0.5;
+constexpr int kFeverStep = kTicsPerFrame * 3 / 4;
+constexpr uint32_t kFeverChip = 0xffff7a1e;
+constexpr int kFeverSound = 745;
+const int calebKillLines[] = { 734, 735, 736, 737, 738, 739, 740, 741, 3038, 3049 };
+// Cleared (rl_cleared): once a map, when 90% of the enemies it started with are dead (every live enemy as the level
+// starts, after the remix, marked kModOrigin; wave, Dare and spawner enemies come later, and count toward neither the
+// total nor the dead). Every boon running gets 5 s, up to its cap (ToCap: never Death's Grin or Bottomless); every Omen
+// on the floor slides to you (the reliquaries stay); a rare Omen drops at your feet; and "CLEARED" shows in gold in the
+// centre slot, with Tchernobog's third pain cry (TBPAIN3, 2372, 1.35 s, deep): stock code plays only his first two
+// (2370 + Random(2), ai.cpp), and no SEQ, QAV or map-placed sound plays it, nor the mode or chaos. His flock is dead.
+constexpr int kClearedPercent = 90;
+constexpr int kClearedTime = 5 * kClock;
+constexpr int kClearedSound = 2372;
+constexpr double kSlideSpeed = 1024;                 // world units a second: an Omen's slide takes kSlideMin to kSlideMax
+constexpr int kSlideMin = kClock / 4, kSlideMax = kClock;
+// The chips (rl_omens): the Omens' soonest to end first, at most kChipLimit of them, then a "+k" chip; Bloodrush's chip
+// at the front (its tier, the meter its fill; dimmed while held), and "DMG xN" while the Omens' damage factor isn't 1,
+// both outside the limit. A boon's fill measures toward its kill cap (full: kills add nothing more). 3 s before a boon
+// ends, as its chip starts to blink, a quiet PING (284, 1.0 s: a bright beep that dies away), which no stock code, SEQ,
+// QAV or map-placed sound plays, nor the mode or chaos; once a tic at most, and half a second apart.
+constexpr int kChipLimit = 5;
+constexpr uint32_t kRushChip = 0xffd4202c, kDamageChip = 0xffe8e8e8;
+constexpr double kRushHeldAlpha = 0.6;
+constexpr int kBoonWarning = 3 * kClock;             // as the chip's blink
+constexpr int kBoonWarnSound = 284, kBoonWarnVolume = 40; // Blood's volume scale (80 a sound's usual; PING's own is 150)
+constexpr int kBoonWarnGap = kClock / 2;
+// Kill resupply (rl_resupply): your kills only.
+// - Point blank: a foe within kPointBlank of you (feet to feet), not fodder (KillWeight: a champion of a fodder kind
+//   counts), drops Blood's own Life Essence. Its stock pickup heals 20 up to 100 (gPowerUpInfo, through actHealDude,
+//   so the Covenant's Famine heals less), with the heal sound (780). At most one drop every 2 s; under 40 health the
+//   drop is two Life Essences.
+// - Burning: a foe of a burning kind, or with burn time left as it dies, gives 5 body armour (armor[0], which bullets
+//   wear down) and 5 fire armour (armor[1], burns and blasts; spirit armour is armor[2]: damageInfo, player.cpp), each
+//   as the stock body and fire armour pickups add theirs (only below their 100, and up to it), with the pickup flash and
+//   the stock armour pickup's own sound (PICKARMR, 779, which nothing else plays) when either grew.
+// - Two kills or more in one tic (a blast, both barrels): a stock pickup of the ammo the gun in your hand fires, the
+//   smallest one of that ammo (resupplyAmmo), at the last body: it moves on to each further body that tic. None for a
+//   gun without ammo (the pitchfork).
+constexpr double kPointBlank = 96;
+constexpr int kEssenceGap = 2 * kClock;
+constexpr int kEssenceLow = 40 << 4;                 // health is in sixteenths
+constexpr int kBurnArmour = 5 << 4;                  // armour too
+constexpr int kArmourSound = 779;
+const int resupplyAmmo[kAmmoTypes] = { 0, kItemAmmoFlares, kItemAmmoSawedoffFew, kItemAmmoTommygunFew, kItemAmmoGasolineCan,
+	kItemAmmoTNTBundle, kItemAmmoSprayCan, kItemAmmoTeslaCharge, kItemAmmoTrappedSoul, kItemAmmoVoodooDoll,
+	kItemAmmoProxBombBundle, kItemAmmoRemoteBombBundle }; // by ammo type (gAmmoItemData's type)
+// The stats line (rl_stats): one line per map at its exit (or your death), to the console and appended to kStatsFile
+// in raze.exe's folder (progdir), with a header when the file is new. Writing it can fail (a read-only folder): it is
+// said once at the console, and the game goes on.
+constexpr const char* kStatsFile = "rl_stats.csv";
+constexpr int kStatsPairs = 3;                       // the boons that ran together longest: this many pairs
+enum { kStatSated, kStatStarved, kStatLapses, kStatStacks, kStatBursts, kStatPaid, kNumGambleStats }; // MapStats::gamble
+
+// The momentum's part of the run: saved (SerializeMomentum), and started afresh with each new run (Mo).
+struct Momentum
+{
+	int runId = 0;     // the run it belongs to
+	double rush = 0;   // Bloodrush, 0-100
+	bool held = false; // carried from the last map: held as it is until an enemy there is alerted to you
+	int clearStart = 0;     // Cleared: the enemies this map started with (kModOrigin), 0: none counted (it can't come)
+	bool clearDone = false; // Cleared came on this map
+};
+Momentum mo;
+// Not saved: a level start and a load set them afresh.
+int lastKillAt = INT_MIN / 2; // PlayClock of your last kill (it starts again each level)
+int alerted;                  // enemies alerted to you at the last scan
+int alertScanIn;              // tics to the next scan
+int rushTier;                 // the meter's tier as last seen (a rise is cued)
+int rushCuedAt[kNumTiers] = { INT_MIN / 2, INT_MIN / 2, INT_MIN / 2, INT_MIN / 2 };
+bool feverWas;                // Fever ran as the last tic ended
+
+// Kill resupply and the stats line (their section follows the momentum's).
+void Resupply(DBloodActor* victim);
+void StatsKill(DBloodActor* victim, int added, int clipped);
+void StatsCleared();
+void StatsTick();
+void ResupplyRestart();
+
+Momentum& Mo()
+{
+	if (mo.runId != run.id)
+	{
+		mo = Momentum();
+		mo.runId = run.id;
+	}
+	return mo;
+}
+
+bool MomentumLive() { return run.active && !run.over && !crypt.in; }
+bool RushLive() { return rl_rush && MomentumLive(); }
+double RunDepth() { return run.maps.Size() > 1 ? double(run.index) / double(run.maps.Size() - 1) : 0.; } // as Remix has it
+
+// The centre slot, under the map's name, where the curse, CLEARED, a tier reached and the Litanies announce themselves.
+// With the Omens on (rl_omens: the chip fixes) one line shows at a time, by priority: the curse's title > CLEARED > a
+// tier reached > a Litany. A higher line replaces a lower one at once (the lower one is dropped); the others wait, at
+// most kCentreWaiting of them, each dropped once it has waited kCentreWait. With the Omens off it's as before: the
+// curse's and the Litany's titles in their own places (DrawCurseTitle, DrawLitanyTitle), and the momentum's newest line
+// (Ravening reached) where the curse's goes, giving way to it.
+enum { kCentreLitany, kCentreTier, kCentreCleared, kCentreCurse };
+constexpr int kCentreTime = 2 * kClock;              // as long as a Litany's title
+constexpr int kCentreWaiting = 2, kCentreWait = 3 * kClock;
+struct CentreLine
+{
+	FString text, sub;          // sub: a SmallFont line under it (the curse's "for the whole level")
+	int color = CR_GOLD;
+	bool big = true;            // BigFont, else SmallFont (a Litany)
+	int priority = kCentreLitany;
+	int at = INT_MIN / 2;       // PlayClock as it began to show, or (waiting) to wait
+	int length = kCentreTime;
+};
+CentreLine centreNow;              // the line showing (no text: none)
+TArray<CentreLine> centreWaiting;  // the highest priority first, and the oldest first within one
+CentreLine centreLast;             // the momentum's newest line, as it shows with the Omens off
+
+bool CentreQueued() { return OmensLive(); }
+
+// The line showing ends, and lines that have waited too long are dropped; then the next waiting one shows.
+void CentreAdvance()
+{
+	for (int i = int(centreWaiting.Size()) - 1; i >= 0; i--)
+	{
+		int waited = PlayClock - centreWaiting[i].at;
+		if (waited < 0 || waited >= kCentreWait) centreWaiting.Delete(i);
+	}
+	int age = PlayClock - centreNow.at;
+	if (centreNow.text.IsNotEmpty() && (age < 0 || age >= centreNow.length)) centreNow = CentreLine();
+	if (centreNow.text.IsEmpty() && centreWaiting.Size())
+	{
+		centreNow = centreWaiting[0];
+		centreNow.at = PlayClock;
+		centreWaiting.Delete(0);
+	}
+}
+
+void ShowCentre(int priority, const char* text, int color, bool big = true, int length = kCentreTime, const char* sub = nullptr)
+{
+	CentreLine line;
+	line.text = text;
+	if (sub) line.sub = sub;
+	line.color = color;
+	line.big = big;
+	line.priority = priority;
+	line.at = PlayClock;
+	line.length = length;
+	if (priority == kCentreTier || priority == kCentreCleared) centreLast = line;
+	CentreAdvance();
+	if (centreNow.text.IsEmpty() || priority > centreNow.priority)
+	{
+		centreNow = line;
+		return;
+	}
+	unsigned k = 0;
+	while (k < centreWaiting.Size() && centreWaiting[k].priority >= priority) k++;
+	centreWaiting.Insert(k, line);
+	if (centreWaiting.Size() > kCentreWaiting) centreWaiting.Delete(centreWaiting.Size() - 1); // the lowest, newest
+}
+
+bool CurseTitleShowing()
+{
+	int age = PlayClock - run.curseClock;
+	return CurseEffect() && age >= 0 && age < kCurseTitle;
+}
+
+// A level start or a load: the slot empties, and the curse's title as the map starts (a load doesn't announce it again)
+// takes it, for as long as DrawCurseTitle shows it.
+void CentreRestart()
+{
+	centreNow = CentreLine();
+	centreWaiting.Clear();
+	centreLast = CentreLine();
+	if (!CurseTitleShowing()) return;
+	ShowCentre(kCentreCurse, FStringf("Curse: %s", bmod::EffectTitle(CurseEffect())).GetChars(), CR_RED, true, kCurseTitle,
+		"for the whole level");
+	centreNow.at = run.curseClock;
+}
+
+// In the 320x200 space the map's name uses, just under it, where the curse's title goes, fading over its last half
+// second: the queue's line (BigFont, or a Litany's SmallFont), or with the Omens off the momentum's (BigFont).
+void DrawCentreLine()
+{
+	bool queued = CentreQueued();
+	const CentreLine& l = queued ? centreNow : centreLast;
+	int age = PlayClock - l.at;
+	if (l.text.IsEmpty() || age < 0 || age >= l.length || (!queued && CurseTitleShowing())) return;
+	double alpha = std::clamp((l.length - age) / (0.5 * kClock), 0., 1.);
+	FFont* font = l.big ? BigFont : SmallFont;
+	double w = font->StringWidth(l.text.GetChars());
+	double s = w > 300 ? 300 / w : 1.;
+	double y = 50 + BigFont->GetHeight() + 6;
+	DrawText(twod, font, l.color, 160 - w * s / 2, y, l.text.GetChars(), DTA_FullscreenScale, FSMode_Fit320x200,
+		DTA_ScaleX, s, DTA_ScaleY, s, DTA_Alpha, alpha, TAG_DONE);
+	if (l.sub.IsNotEmpty())
+		DrawText(twod, SmallFont, CR_GRAY, 160 - SmallFont->StringWidth(l.sub.GetChars()) / 2., y + font->GetHeight() * s + 3,
+			l.sub.GetChars(), DTA_FullscreenScale, FSMode_Fit320x200, DTA_Alpha, alpha, TAG_DONE);
+}
+
+// A prone or burning kind counts as the kind standing (every cultist burns as one kind; all weigh 40), a buried or laying
+// zombie as the axe zombie, a gargoyle statue as the gargoyle it wakes as.
+int StandingKind(int type)
+{
+	switch (type)
+	{
+	case kDudeCultistTommyProne: return kDudeCultistTommy;
+	case kDudeCultistShotgunProne: return kDudeCultistShotgun;
+	case kDudeBurningCultist: return kDudeCultistTommy;
+	case kDudeBurningZombieAxe: case kDudeZombieAxeBuried: case kDudeZombieAxeLaying: return kDudeZombieAxeNormal;
+	case kDudeBurningZombieButcher: return kDudeZombieButcher;
+	case kDudeBurningTinyCaleb: return kDudeTinyCaleb;
+	case kDudeBurningBeast: return kDudeBeast;
+	case kDudeBurningInnocent: return kDudeInnocent;
+	case kDudeGargoyleStatueFlesh: return kDudeGargoyleFlesh;
+	case kDudeGargoyleStatueStone: return kDudeGargoyleStone;
+	default: return type;
+	}
+}
+
+// A kind's weight (start health from dudeInfo): 0 for fodder; Cerberus and Tchernobog weigh the most.
+double KindWeight(int type)
+{
+	type = StandingKind(type);
+	if (type == kDudeCerberusTwoHead || type == kDudeCerberusOneHead || type == kDudeTchernobog) return kWeightMax;
+	if (type < kDudeBase || type >= kDudeMax || (type >= kDudePlayer1 && type <= kDudePlayer8)) return 0;
+	int health = getDudeInfo(type)->startHealth;
+	return health <= kFodderHealth ? 0 : std::min(sqrt(health / kWeightHealth), kWeightMax);
+}
+
+// A victim's weight: its kind's, at least 1 for a champion (a champion spider still pays).
+double KillWeight(DBloodActor* victim)
+{
+	double w = KindWeight(victim->spr.type);
+	return (victim->modFlags & kModChampion) ? std::max(w, 1.) : w;
+}
+
+// A wave enemy (Horde's, Hourglass's: SpawnWave's, marked by WaveSpawned) counts half.
+bool IsWaveEnemy(DBloodActor* a) { return a && (a->modFlags & kModWave); }
+
+int TierOf(double rush) { return std::clamp(int(rush / kRushTierStep), int(kTierNone), int(kTierRavening)); }
+int RushTier() { return RushLive() ? TierOf(Mo().rush) : kTierNone; } // the tier, for its effects (none with rl_rush off)
+double TierFactor() { return RushTier() >= kTierBlooded ? kBloodedFactor : 1.; }
+double PlainOmenChance() { return RushTier() >= kTierSavage ? kSavageOmen : kOmenPlain; }
+
+// The boons running (Fever counts them; gambles don't), and how many make Fever on this map.
+int BoonsRunning()
+{
+	int n = 0;
+	for (auto& r : omens) if (omenInfo[r.id].tier != kOmenGamble && r.left > 0) n++;
+	return n;
+}
+
+int FeverNeed() { return RunDepth() >= kFeverLate ? kFeverNeedLate : kFeverNeed; }
+bool FeverOn() { return rl_fever && OmensLive() && BoonsRunning() >= FeverNeed(); }
+PalEntry BoonChip() { return PalEntry(FeverOn() ? kFeverChip : kBoonChip); }
+
+// The most time kills give a boon, in PlayClock units (0: kills never feed it). With the brakes (rl_omen_weights) the
+// boon's own killCap: Death's Grin and Bottomless none, Mirror Skin 1.5x its time, the rest 2x; without, 2x for all, as
+// before. Bloodrush's Ravening raises every boon of a 2x killCap to 3x (never the braked three). A gamble: none (kills
+// don't extend it).
+int BoonCap(const RunningOmen& r, bool brakes)
+{
+	auto& o = omenInfo[r.id];
+	if (o.tier == kOmenGamble) return 0;
+	double times = brakes ? o.killCap : 2.;
+	if (o.killCap == 2. && RushTier() >= kTierRavening) times = kRavenCap;
+	return int(times * r.base) / kTicsPerFrame * kTicsPerFrame; // whole tics, so a stock powerup's timer keeps in step
+}
+
+int KillCap(const RunningOmen& r) { return BoonCap(r, rl_omen_weights); }
+// A "to cap" effect's (Cleared, The Hunger) cap: the brakes always hold for those, whatever rl_omen_weights says.
+int ToCap(const RunningOmen& r) { return BoonCap(r, true); }
+
+// A boon gets more time, up to cap (never less than it has: one taken again may hold more). Its stock powerup's timer
+// gets the same. Returns the time it got.
+int ExtendBoon(RunningOmen& r, DBloodPlayer* p, int clocks, int cap)
+{
+	int left = std::max(std::min(r.left + clocks, cap), r.left);
+	int add = left - r.left;
+	if (add <= 0) return 0;
+	AddPowerTime(p, omenInfo[r.id].powerup, add);
+	r.left = left;
+	r.peak = std::max(r.peak, left);
+	return add;
+}
+
+// Kill time on each boon running, each up to its kill cap (a gamble's time stays as it said). *clipped: the time the
+// caps cut off, over all the boons. Returns the time added over all of them.
+int AddKillTime(int clocks, int* clipped = nullptr)
+{
+	int added = 0, cut = 0;
+	auto p = getPlayer(myconnectindex);
+	if (p && OmensLive() && clocks > 0)
+		for (auto& r : omens)
+		{
+			if (omenInfo[r.id].tier == kOmenGamble) continue;
+			int add = ExtendBoon(r, p, clocks, KillCap(r));
+			added += add;
+			cut += clocks - add;
+		}
+	if (clipped) *clipped = cut;
+	return added;
+}
+
+// A "to cap" effect: each boon running gets clocks more (clocks < 0: all the way), up to ToCap; Death's Grin and
+// Bottomless get none. Returns the time added over all of them.
+int ExtendToCap(int clocks)
+{
+	int added = 0;
+	auto p = getPlayer(myconnectindex);
+	if (!p || !OmensLive() || clocks == 0) return 0;
+	for (auto& r : omens)
+	{
+		int cap = ToCap(r);
+		if (cap > 0) added += ExtendBoon(r, p, clocks < 0 ? cap : clocks, cap);
+	}
+	return added;
+}
+
+// What a kill of yours adds to each boon (before the caps), in whole tics. Bloodrush's and Fever's factors are their
+// own parts': without rl_omen_weights a kill adds 1 s times those two only (1 s as before, with them off too).
+int KillTime(DBloodActor* victim, bool multi)
+{
+	double s = kKillSeconds * TierFactor() * (FeverOn() ? kFeverFactor : 1.);
+	if (rl_omen_weights)
+	{
+		double champion = (victim->modFlags & kModRedChampion) ? kRedFactor : (victim->modFlags & kModChampion) ? kBlueFactor : 1.;
+		s = std::min(s * KillWeight(victim) * champion + (multi ? kMultiKillSeconds : 0.), kKillCeiling);
+		if (IsWaveEnemy(victim)) s *= kWaveShare;
+	}
+	return int(s * kClock / kTicsPerFrame + 0.5) * kTicsPerFrame;
+}
+
+// What a kill of yours puts in Bloodrush.
+double RushFill(DBloodActor* victim, bool multi)
+{
+	double pts;
+	if (victim->modFlags & kModRedChampion) pts = kRushRed;
+	else if (victim->modFlags & kModChampion) pts = kRushBlue;
+	else
+	{
+		double w = KindWeight(victim->spr.type);
+		pts = w > 0 ? std::round(kRushPerWeight * w) : kRushFodder;
+	}
+	if (multi) pts += kRushMulti;
+	return IsWaveEnemy(victim) ? pts * kWaveShare : pts;
+}
+
+// A tier reached: its cue (see kRushTierSound), unless it was cued just now; Ravening's word in the centre slot with it.
+void TierReached(int tier)
+{
+	if (tier <= kTierNone || tier >= kNumTiers) return;
+	if (PlayClock >= rushCuedAt[tier] && PlayClock - rushCuedAt[tier] < kRushCueGap) return;
+	rushCuedAt[tier] = PlayClock;
+	auto p = getPlayer(myconnectindex);
+	if (p && p->GetActor()) sfxPlay3DSound(p->GetActor(), kRushTierSound, -1, 0);
+	if (tier == kTierRavening) ShowCentre(kCentreTier, "RAVENING", CR_FIRE);
+}
+
+// The meter moved: a tier higher than it was is reached (a drop shows nothing).
+void RushChanged()
+{
+	int tier = TierOf(Mo().rush);
+	if (RushLive() && tier > rushTier) TierReached(tier);
+	rushTier = tier;
+}
+
+// Enemies alerted to you now (see kAlertRange).
+int CountAlerted()
+{
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !pl->hasX() || pl->xspr.health <= 0 || !pl->insector()) return 0;
+	int n = 0;
+	BloodStatIterator it(kStatDude);
+	while (auto a = it.Next())
+	{
+		if (a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || (a->spr.flags & 32) || a->GetTarget() != pl || !AllowedKillType(a))
+			continue;
+		if ((a->spr.pos.XY() - pl->spr.pos.XY()).Length() <= kAlertRange) n++;
+		else if (a->insector() && cansee(pl->spr.pos, pl->sector(), a->spr.pos.plusZ(-getDudeInfo(a->spr.type)->eyeHeight * a->spr.scale.Y), a->sector()))
+			n++; // in sight, from its eyes as the AI looks (aiThinkTarget)
+	}
+	return n;
+}
+
+// Fever begins: one sound and one of Caleb's kill lines (on his voice's channel, as stock plays them).
+void FeverEntered()
+{
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl) return;
+	sfxPlay3DSound(pl, kFeverSound, -1, 0);
+	sfxPlay3DSound(pl, calebKillLines[rand() % countof(calebKillLines)], 0, FX_SoundMatch);
+}
+
+// A boon's last 3 s begin (its chip blinks): the quiet warning (kBoonWarnSound), once a tic at most, half a second apart.
+int boonWarnedAt = INT_MIN / 2;
+
+void BoonWarning(DBloodPlayer* p)
+{
+	if (PlayClock >= boonWarnedAt && PlayClock - boonWarnedAt < kBoonWarnGap) return;
+	boonWarnedAt = PlayClock;
+	if (p && p->GetActor()) sfxPlay3DSoundVolume(p->GetActor(), kBoonWarnSound, -1, 0, -1, kBoonWarnVolume);
+}
+
+// An Omen's clock this tic (from OmenTick): a boon's runs 25% slower in Fever. Its stock powerup's timer, which Blood's
+// powerupProcess ran down by a whole tic just before, gets back what the Omen's own time didn't lose (on its last tic
+// too), so the two stay in step and a map's own powerup time on that timer never changes. Without Fever an Omen's time
+// stays whole tics (grants, kill time and the caps are), so nothing ever comes back, as before. A boon running down into
+// its last 3 s sounds the warning.
+void RunDown(RunningOmen& r, DBloodPlayer* p, bool fever)
+{
+	bool boon = omenInfo[r.id].tier != kOmenGamble;
+	int step = fever && boon ? kFeverStep : kTicsPerFrame;
+	int spent = std::clamp(r.left, 0, step);
+	bool warned = r.left <= kBoonWarning;
+	r.left -= step;
+	int n = omenInfo[r.id].powerup;
+	if (n >= 0 && spent < kTicsPerFrame && p->pwUpTime[n] > 0) p->pwUpTime[n] += kTicsPerFrame - spent;
+	if (boon && !warned && r.left <= kBoonWarning && r.left > 0) BoonWarning(p);
+}
+
+// A kill of yours (from the Kill event): time on the boons running, then Bloodrush's fill (so this kill's time has the
+// tier it was made in).
+void YourKill(DBloodActor* victim)
+{
+	if (!victim || !MomentumLive()) return;
+	bool multi = PlayClock >= lastKillAt && PlayClock - lastKillAt <= kMultiKillWindow;
+	lastKillAt = PlayClock;
+	int clipped = 0;
+	int added = AddKillTime(KillTime(victim, multi), &clipped);
+	StatsKill(victim, added, clipped); // rl_stats
+	Resupply(victim);                  // rl_resupply
+	GambleKill(victim);                // the gambles: The Hunger fed, Rampage's stack, Corpse Fire's burst
+	if (!RushLive()) return;
+	auto& m = Mo();
+	m.rush = std::min(m.rush + RushFill(victim, multi), kRushMax);
+	RushChanged();
+}
+
+// Cleared, as the level starts (after the remix): every live enemy is marked as the map's own, and counted.
+void ClearedStart()
+{
+	auto& m = Mo();
+	m.clearStart = 0;
+	m.clearDone = false;
+	if (!rl_cleared || !MomentumLive()) return;
+	BloodStatIterator it(kStatDude);
+	while (auto a = it.Next())
+	{
+		if (a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !AllowedKillType(a)) continue; // as the ammo ledger counts
+		a->modFlags |= kModOrigin;
+		m.clearStart++;
+	}
+}
+
+// The map's own enemies (kModOrigin) still alive: a burning one, a two-headed Cerberus losing a head (at 0 health until
+// it rises with one, in place: actProcessSprites), a zombie a rift is bringing through (retyped in place) are; one that
+// died (a thing now, or gone) isn't.
+int OriginAlive()
+{
+	int n = 0;
+	BloodStatIterator it(kStatDude);
+	while (auto a = it.Next())
+		if ((a->modFlags & kModOrigin) && !a->IsPlayerActor() && a->hasX() && (a->xspr.health > 0 || a->spr.type == kDudeCerberusTwoHead))
+			n++;
+	return n;
+}
+
+// The Omens Cleared pulls in, sliding along the floor (through walls too) to you in kSlideMin-kSlideMax, following you;
+// the stock pickup takes each as you meet (or it waits at your feet, as one does that can't take hold now). Not saved:
+// after a load an Omen lies where its slide had got to. Compared, never followed: matched each tic among the items.
+struct OmenSlide { DBloodActor* item; DVector2 from; int at, length; double lift; };
+TArray<OmenSlide> slides;
+
+void PullOmens(DBloodActor* pl)
+{
+	BloodStatIterator it(kStatItem);
+	while (auto a = it.Next())
+	{
+		if (!IsOmenItem(a) || omenInfo[a->xspr.data1].tier == kOmenGamble || (a->spr.flags & 32) || !a->insector()) continue;
+		double top, bottom;
+		GetActorExtents(a, &top, &bottom);
+		double dist = (a->spr.pos.XY() - pl->spr.pos.XY()).Length();
+		int length = std::clamp(int(dist / kSlideSpeed * kClock), kSlideMin, kSlideMax);
+		slides.Push({ a, a->spr.pos.XY(), PlayClock, length, a->spr.pos.Z - bottom });
+	}
+}
+
+void SlideTick()
+{
+	if (!slides.Size()) return;
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !pl->insector() || !OmensLive())
+	{
+		slides.Clear();
+		return;
+	}
+	TArray<DBloodActor*> live; // the slides' Omens still on the floor
+	BloodStatIterator it(kStatItem);
+	while (auto a = it.Next())
+		for (auto& s : slides)
+			if (s.item == a && IsOmenItem(a) && !(a->spr.flags & 32) && a->insector()) live.Push(a);
+	for (int i = int(slides.Size()) - 1; i >= 0; i--)
+	{
+		auto& s = slides[i];
+		auto item = s.item;
+		if (live.Find(item) >= live.Size())
+		{
+			slides.Delete(i); // taken, or gone
+			continue;
+		}
+		double t = std::clamp(double(PlayClock - s.at) / s.length, 0., 1.);
+		bool there = t >= 1;
+		t = t * t * (3 - 2 * t);
+		DVector2 xy = there ? pl->spr.pos.XY() : s.from + (pl->spr.pos.XY() - s.from) * t;
+		sectortype* sect = there ? pl->sector() : item->sector();
+		if (!there) updatesector(xy, &sect);
+		if (sect) // inside a wall (in no sector): it stays a tic, and catches up
+		{
+			viewBackupSpriteLoc(item);
+			if (sect != item->sector()) ChangeActorSect(item, sect);
+			item->spr.pos = DVector3(xy, getflorzofslopeptr(sect, xy.X, xy.Y) + s.lift);
+			item->basePoint = item->spr.pos;
+		}
+		if (there) slides.Delete(i);
+	}
+}
+
+// Cleared comes: time on the boons, the floor's Omens pulled in, a rare Omen at your feet (the run's roll: its seed and
+// the map, so a reload rolls the same), the word and its sound.
+void Cleared(DBloodPlayer* p)
+{
+	auto pl = p->GetActor();
+	ExtendToCap(kClearedTime);
+	PullOmens(pl);
+	std::mt19937 rng(run.seed ^ (0x9E3779B9u * uint32_t(run.index + 1)) ^ 0x3C6EF372u);
+	int id = PickOmen(rng, kOmenRare);
+	if (id >= 0) SpawnOmenItem(pl->sector(), pl->spr.pos.XY(), id);
+	sfxPlay3DSound(pl, kClearedSound, -1, 0);
+	ShowCentre(kCentreCleared, "CLEARED", CR_GOLD);
+	StatsCleared(); // rl_stats: when it came
+}
+
+// Each tic: the slides, then whether Cleared comes (once a map, with the Omens on).
+void ClearedTick()
+{
+	SlideTick();
+	auto& m = Mo();
+	if (!rl_cleared || !OmensLive() || m.clearDone || m.clearStart <= 0) return;
+	auto p = getPlayer(myconnectindex);
+	if (!p || !p->GetActor() || !p->GetActor()->insector() || p->GetActor()->xspr.health <= 0) return;
+	int dead = m.clearStart - OriginAlive();
+	if (dead * 100 < m.clearStart * kClearedPercent) return;
+	m.clearDone = true;
+	Cleared(p);
+}
+
+// Each tic, after the Omens': the alert scan and Bloodrush's drain, then Fever's entry, the centre slot, and Cleared.
+void MomentumTick()
+{
+	if (!MomentumLive()) return;
+	if (rl_rush)
+	{
+		auto& m = Mo();
+		if (--alertScanIn <= 0)
+		{
+			alerted = CountAlerted();
+			alertScanIn = kAlertScanTics;
+		}
+		if (m.held && alerted > 0) m.held = false;
+		if (!m.held)
+		{
+			int tier = TierOf(m.rush);
+			double drain = kRushDrain * kTicsPerFrame / kClock;
+			if (alerted > 0) m.rush = std::max(m.rush - drain * rushRate[tier], 0.);
+			else m.rush = std::max(m.rush - drain, tier * kRushTierStep);
+		}
+		RushChanged();
+	}
+	bool fever = FeverOn();
+	if (fever && !feverWas) FeverEntered();
+	feverWas = fever;
+	CentreAdvance();
+	ClearedTick();
+	StatsTick();
+}
+
+// A level start or a load: no kill is recent (PlayClock starts again, or is the save's), nothing is alerted until the
+// first scan, and the meter's tier and Fever stand as they are, uncued. The centre slot starts afresh (with the curse's
+// title as a map starts), no Omen slides, no boon has just been warned of, and resupply's clocks start afresh.
+void MomentumRestart()
+{
+	lastKillAt = INT_MIN / 2;
+	alerted = 0;
+	alertScanIn = 0;
+	for (auto& at : rushCuedAt) at = INT_MIN / 2;
+	CentreRestart();
+	slides.Clear();
+	boonWarnedAt = INT_MIN / 2;
+	rushTier = TierOf(Mo().rush);
+	feverWas = FeverOn();
+	ResupplyRestart();
+}
+
+// The map's exit taken (LevelEnd): half the meter goes on, held until an enemy on the next map is alerted to you.
+void MomentumLevelEnd()
+{
+	if (!run.active || run.over || !run.exiting) return;
+	auto& m = Mo();
+	m.rush *= kRushCarry;
+	m.held = m.rush > 0;
+}
+
+// The momentum's keys in the run's save block, written and read alike (an older save has none: the meter is empty, and
+// that map has no start count, so Cleared can't come on it).
+void SerializeMomentum(FSerializer& arc, Momentum& m)
+{
+	arc("rush", m.rush)
+		("rushheld", m.held)
+		("clearstart", m.clearStart)
+		("cleardone", m.clearDone);
+}
+
+// A loaded save's momentum, once its run is the run.
+void MomentumFromSave(const Momentum& m)
+{
+	mo = m;
+	mo.runId = run.id;
+	mo.rush = mo.rush >= 0 ? std::min(mo.rush, kRushMax) : 0; // not a number: 0 too
+	mo.clearStart = std::max(mo.clearStart, 0);
+}
+
+//---------------------------------------------------------------------------
+//
+// kill resupply (rl_resupply): a kill of yours that pays out at once (the
+// constants above say how), and the stats line (rl_stats): what a map's
+// play measured, for the momentum's verdict. Both only in a live run,
+// outside the Crypt.
+//
+//---------------------------------------------------------------------------
+
+// Not saved: a level start and a load set them afresh.
+int essenceAt = INT_MIN / 2;  // PlayClock of the last point-blank drop
+int ticKillsAt = INT_MIN / 2; // the tic (its PlayClock) of your last kills, and how many there were in it
+int ticKills;
+DBloodActor* ticDrop;         // the ammo that tic's kills dropped (compared, and followed only once found lying)
+void StatsResupply(int kind); // below: 0 a Life Essence, 1 armour, 2 ammo
+
+// The stock pickup of the ammo the gun in your hand fires (0: it fires none, as the pitchfork).
+int AmmoInHand(DBloodPlayer* p)
+{
+	int ammo = p->curWeapon > 0 ? p->weaponAmmo : -1;
+	return ammo > 0 && ammo < kAmmoTypes ? resupplyAmmo[ammo] : 0;
+}
+
+// A second drop beside the first, not on it (with no room there, on it).
+void BesideDrop(DBloodActor* item, DBloodActor* first, std::mt19937& rng)
+{
+	if (!item || !first || !first->insector()) return;
+	TArray<DVector2> taken;
+	taken.Push(first->spr.pos.XY());
+	DVector2 spot;
+	sectortype* sect = nullptr;
+	if (!FindItemSpot(rng, first->sector(), FloorAt(first), 24, 48, taken, spot, sect) || !sect)
+	{
+		spot = first->spr.pos.XY();
+		sect = first->sector();
+	}
+	LayDrop(item, sect, spot);
+}
+
+// A burning kill's armour, as the stock body and fire armour pickups add theirs (PickupItem: each only below its
+// pickup's cap, and up to it). True: either grew.
+bool BurnArmour(DBloodPlayer* p)
+{
+	auto& body = armorData[kItemArmorBody - kItemArmorBasic];
+	auto& fire = armorData[kItemArmorFire - kItemArmorBasic];
+	bool grew = false;
+	if (p->armor[0] < body.armor0max)
+	{
+		p->armor[0] = ClipHigh(p->armor[0] + kBurnArmour, body.armor0max);
+		grew = true;
+	}
+	if (p->armor[1] < fire.armor1max)
+	{
+		p->armor[1] = ClipHigh(p->armor[1] + kBurnArmour, fire.armor1max);
+		grew = true;
+	}
+	return grew;
+}
+
+// A kill of yours (from YourKill): the point-blank Life Essence, the burning kill's armour, and a tic's multi-kill ammo.
+// Drops come out of the stock actDropObject at the body, so they are stock items (no xsprite, no mark): the remix, the
+// ammo ledger, the big pickups and the secret caches (all as the map starts) and the Omens' claim and slide (marked
+// items only) never take them for theirs. Where one lies is the run's roll (its seed and the kills so far).
+void Resupply(DBloodActor* victim)
+{
+	if (!rl_resupply || !MomentumLive() || !victim || !victim->insector()) return;
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !pl->hasX() || pl->xspr.health <= 0 || !pl->insector()) return;
+	std::mt19937 rng(run.seed ^ (0x9E3779B9u * uint32_t(run.kills)) ^ 0x1F83D9ABu);
+	bool due = !(PlayClock >= essenceAt && PlayClock - essenceAt < kEssenceGap);
+	if (due && KillWeight(victim) > 0 && (victim->spr.pos - pl->spr.pos).Length() <= kPointBlank)
+	{
+		essenceAt = PlayClock;
+		int n = pl->xspr.health < unsigned(kEssenceLow) ? 2 : 1;
+		DBloodActor* first = nullptr;
+		for (int i = 0; i < n; i++)
+		{
+			auto item = actDropObject(victim, kItemHealthLifeEssense);
+			if (!item) continue;
+			if (first) BesideDrop(item, first, rng);
+			else SettleDrop(first = item, rng);
+			StatsResupply(0);
+		}
+	}
+	if ((IsBurningDude(victim) || (victim->hasX() && victim->xspr.burnTime > 0)) && BurnArmour(p))
+	{
+		p->pickupEffect = 30;                                   // Blood's pickup flash
+		sfxPlay3DSound(pl->spr.pos, kArmourSound, pl->sector()); // where you stand, as the stock pickup plays it
+		StatsResupply(1);
+	}
+	// Your kills in one tic share its PlayClock (whether a blast, a shot or the Forge made them).
+	if (PlayClock != ticKillsAt)
+	{
+		ticKillsAt = PlayClock;
+		ticKills = 0;
+		ticDrop = nullptr;
+	}
+	if (++ticKills < 2) return;
+	int type = AmmoInHand(p);
+	if (!type) return;
+	if (!ticDrop)
+	{
+		ticDrop = actDropObject(victim, type);
+		if (!ticDrop) return;
+		SettleDrop(ticDrop, rng);
+		StatsResupply(2);
+		return;
+	}
+	// A further body this tic: the drop goes on to it, if it still lies there (not taken this tic).
+	bool lying = false;
+	BloodStatIterator it(kStatItem);
+	while (auto a = it.Next())
+		if (a == ticDrop && a->spr.type == type && !(a->spr.flags & 32)) lying = true;
+	if (!lying) return;
+	auto s = victim->sector();
+	auto pos = victim->spr.pos;
+	updatesector(pos, &s);
+	if (!s) s = victim->sector(); // blasted outside every sector (as actSpawnFloor has it)
+	LayDrop(ticDrop, s, pos.XY());
+	SettleDrop(ticDrop, rng);
+}
+
+// The stats line's numbers for the map being played: saved with the run (SerializeStats), started afresh as each map
+// starts (StatsStart). Counted only with rl_stats on (StatsLive).
+struct MapStats
+{
+	int start = 0;                        // the enemies the map started with (as Cleared counts them, whatever rl_cleared says)
+	int kills = 0, waveKills = 0;         // your kills: wave enemies apart (the rest are the map's own and its spawners')
+	int clearedAt = -1;                   // PlayClock units into the map as Cleared came (-1: it didn't)
+	int boonsMost = 0;                    // the most boons running at once (gambles aren't boons)
+	int tics2 = 0, tics3 = 0;             // tics with 2 or more, and 3 or more, running
+	int feverTics = 0;
+	int tierTics[kNumTiers] = {};         // tics at each of Bloodrush's tiers (rl_rush on)
+	int added = 0, clipped = 0;           // kill time your kills put on the boons, and the caps cut off (PlayClock units, all boons)
+	int dropped = 0, taken = 0;           // Omens (boons): on the floor (a death's, Cleared's, the console's), and taken
+	int reliqDropped = 0, reliqTaken = 0; // cursed reliquaries
+	int damage = 0;                       // health you lost, in sixteenths
+	int resupply[3] = {};                 // Life Essences dropped, armour given, ammo dropped
+	int gamble[kNumGambleStats] = {};     // the gambles: The Hunger sated, starved; Rampage's lapses, its most stacks;
+	                                      // Corpse Fire's bursts; the health they took (sixteenths)
+	int pairs[kNumOmens][kNumOmens] = {}; // tics two boons ran together: [the lower id][the higher]
+	bool lined = false;                   // its line was given (not saved)
+};
+MapStats mapStats;
+int healthWas = -1;     // your health at the last tic (sixteenths; -1: not seen yet)
+bool statsUnwritten;    // writing rl_stats.csv failed once this session (and was said)
+
+bool StatsLive() { return rl_stats && MomentumLive(); }
+
+void ResupplyRestart()
+{
+	essenceAt = INT_MIN / 2;
+	ticKillsAt = INT_MIN / 2;
+	ticKills = 0;
+	ticDrop = nullptr;
+	healthWas = -1;
+}
+
+// As the level starts (after the remix): the counts start again, and the enemies the map starts with are counted.
+void StatsStart()
+{
+	mapStats = MapStats();
+	if (!MomentumLive()) return;
+	BloodStatIterator it(kStatDude);
+	while (auto a = it.Next())
+		if (!a->IsPlayerActor() && a->hasX() && a->xspr.health > 0 && AllowedKillType(a)) mapStats.start++; // as ClearedStart
+}
+
+void StatsKill(DBloodActor* victim, int added, int clipped)
+{
+	if (!StatsLive()) return;
+	(IsWaveEnemy(victim) ? mapStats.waveKills : mapStats.kills)++;
+	mapStats.added += added;
+	mapStats.clipped += clipped;
+}
+
+void StatsOmen(int id, bool taken)
+{
+	if (!StatsLive() || id < 0 || id >= kNumOmens) return;
+	bool reliquary = omenInfo[id].tier == kOmenGamble;
+	(reliquary ? (taken ? mapStats.reliqTaken : mapStats.reliqDropped) : (taken ? mapStats.taken : mapStats.dropped))++;
+}
+
+void StatsCleared()
+{
+	if (StatsLive()) mapStats.clearedAt = PlayClock - run.levelClock;
+}
+
+void StatsResupply(int kind)
+{
+	if (StatsLive() && kind >= 0 && kind < 3) mapStats.resupply[kind]++;
+}
+
+// A gamble's count (kStatSated...) goes up by n; kStatStacks keeps the most.
+void StatsGamble(int kind, int n = 1)
+{
+	if (!StatsLive() || kind < 0 || kind >= kNumGambleStats) return;
+	int& s = mapStats.gamble[kind];
+	s = kind == kStatStacks ? std::max(s, n) : s + n;
+}
+
+// The health you lost since the last tic (none if you healed: a tic of both counts the difference).
+void StatsHealth()
+{
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !pl->hasX()) return;
+	int h = int(pl->xspr.health);
+	if (healthWas >= 0 && h < healthWas) mapStats.damage += healthWas - h;
+	healthWas = h;
+}
+
+// Each tic (from MomentumTick, after the Omens' clocks): the boons running, together and in pairs, Fever, Bloodrush's
+// tier, and the health you lost.
+void StatsTick()
+{
+	if (!StatsLive()) return;
+	auto& s = mapStats;
+	int ids[kNumOmens], n = 0;
+	for (auto& r : omens)
+		if (omenInfo[r.id].tier != kOmenGamble && r.left > 0 && n < kNumOmens) ids[n++] = r.id;
+	s.boonsMost = std::max(s.boonsMost, n);
+	if (n >= 2) s.tics2++;
+	if (n >= 3) s.tics3++;
+	for (int i = 0; i < n; i++)
+		for (int j = i + 1; j < n; j++)
+			s.pairs[std::min(ids[i], ids[j])][std::max(ids[i], ids[j])]++;
+	if (FeverOn()) s.feverTics++;
+	if (RushLive()) s.tierTics[TierOf(Mo().rush)]++;
+	StatsHealth();
+}
+
+// The line appended to kStatsFile, with its header first when the file is new. A failure (no file, a full disk) is
+// said once a session, at the console; nothing else depends on it.
+void AppendStats(const char* header, const FString& row)
+{
+	FString path = progdir + kStatsFile;
+#ifdef _WIN32
+	FILE* f = _wfopen(path.WideString().c_str(), L"ab");
+#else
+	FILE* f = fopen(path.GetChars(), "ab");
+#endif
+	bool ok = f != nullptr;
+	if (f)
+	{
+		if (fseek(f, 0, SEEK_END) == 0 && ftell(f) == 0) ok = fputs(header, f) >= 0;
+		ok = fputs(row.GetChars(), f) >= 0 && ok;
+		ok = fclose(f) == 0 && ok;
+	}
+	if (!ok && !statsUnwritten)
+	{
+		statsUnwritten = true;
+		Printf("rl_stats: couldn't write %s (the line is at the console only)\n", path.GetChars());
+	}
+}
+
+// The map's stats line (rl_stats), once, as its exit is taken ("exit", from NextLevel: before the Omens end and half the
+// meter goes on) or as you die ("died"): to the console, and to kStatsFile.
+void StatsLine(const char* how)
+{
+	auto& s = mapStats;
+	if (!StatsLive() || !currentLevel || s.lined) return;
+	s.lined = true;
+	StatsHealth(); // this tic's too (a death comes before the ticker)
+	auto secs = [](int clocks) { return clocks / double(kClock); };
+	auto ticSecs = [](int tics) { return tics * double(kTicsPerFrame) / kClock; };
+	int lying[2] = {}; // Omens and reliquaries still on the floor
+	BloodStatIterator it(kStatItem);
+	while (auto a = it.Next())
+		if (IsOmenItem(a) && !(a->spr.flags & 32)) lying[omenInfo[a->xspr.data1].tier == kOmenGamble]++;
+	struct Pair { int a, b, tics; };
+	TArray<Pair> pairs;
+	for (int a = 0; a < kNumOmens; a++)
+		for (int b = a + 1; b < kNumOmens; b++)
+			if (s.pairs[a][b] > 0) pairs.Push({ a, b, s.pairs[a][b] });
+	std::stable_sort(pairs.begin(), pairs.end(), [](const Pair& x, const Pair& y) { return x.tics > y.tics; });
+	auto& m = Mo();
+	int dead = m.clearStart > 0 ? m.clearStart - OriginAlive() : -1; // Cleared's count (all deaths), when there is one
+	double mapTime = secs(PlayClock - run.levelClock), rush = rl_rush ? m.rush : 0.;
+	char when[32] = "";
+	time_t now = time(nullptr);
+	if (auto t = localtime(&now)) strftime(when, sizeof(when), "%Y-%m-%d %H:%M", t);
+
+	FString line;
+	line.Format("rl_stats %s (map %d of %d) %s at %.0fs: kills %d of %d (+%d wave)", currentLevel->labelName.GetChars(), run.index + 1,
+		int(run.maps.Size()), how, mapTime, s.kills, s.start, s.waveKills);
+	if (dead >= 0) line.AppendFormat(", %d dead", dead);
+	if (s.clearedAt >= 0) line.AppendFormat(", Cleared at %.0fs", secs(s.clearedAt));
+	line.AppendFormat("; boons: most %d, 2+ %.0fs, 3+ %.0fs; Fever %.0fs; Blooded %.0fs, Savage %.0fs, Ravening %.0fs; meter %.0f",
+		s.boonsMost, ticSecs(s.tics2), ticSecs(s.tics3), ticSecs(s.feverTics), ticSecs(s.tierTics[kTierBlooded]),
+		ticSecs(s.tierTics[kTierSavage]), ticSecs(s.tierTics[kTierRavening]), rush);
+	line.AppendFormat("; kill time +%.1fs, clipped %.1fs; Omens %d dropped, %d taken, %d left; reliquaries %d dropped, %d taken, %d left",
+		secs(s.added), secs(s.clipped), s.dropped, s.taken, lying[0], s.reliqDropped, s.reliqTaken, lying[1]);
+	line += "; pairs";
+	for (int i = 0; i < int(pairs.Size()) && i < kStatsPairs; i++)
+		line.AppendFormat("%s %s+%s %.0fs", i ? "," : "", omenInfo[pairs[i].a].name, omenInfo[pairs[i].b].name, ticSecs(pairs[i].tics));
+	if (!pairs.Size()) line += " none";
+	line.AppendFormat("; damage %d; resupply %d essences, %d armour, %d ammo", (s.damage + 8) >> 4, s.resupply[0], s.resupply[1], s.resupply[2]);
+	auto& g = s.gamble;
+	if (s.reliqTaken > 0 || g[kStatPaid] > 0 || g[kStatBursts] > 0) // a gamble ran on this map
+		line.AppendFormat("; gambles: Hunger sated %d, starved %d; Rampage lapses %d, most %d stacks; Corpse Fire bursts %d;"
+			" health paid %d", g[kStatSated], g[kStatStarved], g[kStatLapses], g[kStatStacks], g[kStatBursts], (g[kStatPaid] + 8) >> 4);
+	Printf(PRINT_HIGH | PRINT_NONOTIFY, "%s\n", line.GetChars());
+
+	static const char* const header = "when,run,seed,skill,map,index,maps,how,time_s,omens,weights,rush,fever,cleared,resupply,"
+		"start,kills,wave_kills,dead,cleared_s,boons_most,boons2_s,boons3_s,fever_s,blooded_s,savage_s,ravening_s,meter,"
+		"killtime_s,clipped_s,omens_dropped,omens_taken,omens_left,reliq_dropped,reliq_taken,reliq_left,"
+		"pair1,pair1_s,pair2,pair2_s,pair3,pair3_s,damage,essences,armour,ammo,"
+		"reliquaries,hunger_sated,hunger_starved,rampage_lapses,rampage_stacks,corpse_bursts,gamble_health\n";
+	FString row;
+	row.Format("%s,%d,%u,%d,%s,%d,%d,%s,%.1f,%d,%d,%d,%d,%d,%d,", when, run.id, run.seed, run.skill, currentLevel->labelName.GetChars(),
+		run.index + 1, int(run.maps.Size()), how, mapTime, (int)rl_omens, (int)rl_omen_weights, (int)rl_rush, (int)rl_fever,
+		(int)rl_cleared, (int)rl_resupply);
+	row.AppendFormat("%d,%d,%d,", s.start, s.kills, s.waveKills);
+	row += dead >= 0 ? FStringf("%d,", dead) : FString(",");
+	row += s.clearedAt >= 0 ? FStringf("%.1f,", secs(s.clearedAt)) : FString(",");
+	row.AppendFormat("%d,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,", s.boonsMost, ticSecs(s.tics2), ticSecs(s.tics3), ticSecs(s.feverTics),
+		ticSecs(s.tierTics[kTierBlooded]), ticSecs(s.tierTics[kTierSavage]), ticSecs(s.tierTics[kTierRavening]), rush);
+	row.AppendFormat("%.1f,%.1f,%d,%d,%d,%d,%d,%d,", secs(s.added), secs(s.clipped), s.dropped, s.taken, lying[0], s.reliqDropped,
+		s.reliqTaken, lying[1]);
+	for (int i = 0; i < kStatsPairs; i++)
+		row += i < int(pairs.Size()) ? FStringf("%s+%s,%.1f,", omenInfo[pairs[i].a].name, omenInfo[pairs[i].b].name, ticSecs(pairs[i].tics))
+			: FString(",,");
+	row.AppendFormat("%d,%d,%d,%d,", (s.damage + 8) >> 4, s.resupply[0], s.resupply[1], s.resupply[2]);
+	row.AppendFormat("%d,%d,%d,%d,%d,%d,%d\n", (int)rl_reliquaries, g[kStatSated], g[kStatStarved], g[kStatLapses], g[kStatStacks],
+		g[kStatBursts], (g[kStatPaid] + 8) >> 4);
+	AppendStats(header, row);
+}
+
+// The stats' keys, under "stats" in the run's save block, written and read alike (written with rl_stats on; a save
+// without them, older or made with it off, starts the map's counts from nothing). The pairs are three numbers each: the
+// two boons and their tics together.
+void SerializeStats(FSerializer& arc, MapStats& s)
+{
+	if (!arc.BeginObject("stats")) return;
+	arc("start", s.start)
+		("kills", s.kills)
+		("wavekills", s.waveKills)
+		("clearedat", s.clearedAt)
+		("boonsmost", s.boonsMost)
+		("tics2", s.tics2)
+		("tics3", s.tics3)
+		("fevertics", s.feverTics)
+		("added", s.added)
+		("clipped", s.clipped)
+		("dropped", s.dropped)
+		("taken", s.taken)
+		("reliqdropped", s.reliqDropped)
+		("reliqtaken", s.reliqTaken)
+		("damage", s.damage);
+	arc.Array("tiertics", s.tierTics, kNumTiers);
+	arc.Array("resupply", s.resupply, 3);
+	arc.Array("gamble", s.gamble, kNumGambleStats); // an older save has none: 0s
+	TArray<int> pairs;
+	if (arc.isWriting())
+		for (int a = 0; a < kNumOmens; a++)
+			for (int b = a + 1; b < kNumOmens; b++)
+				if (s.pairs[a][b] > 0)
+				{
+					pairs.Push(a);
+					pairs.Push(b);
+					pairs.Push(s.pairs[a][b]);
+				}
+	arc("pairs", pairs);
+	if (arc.isReading())
+		for (unsigned i = 0; i + 2 < pairs.Size(); i += 3)
+			if (pairs[i] >= 0 && pairs[i] < pairs[i + 1] && pairs[i + 1] < kNumOmens && pairs[i + 2] > 0)
+				s.pairs[pairs[i]][pairs[i + 1]] = pairs[i + 2];
+	arc.EndObject();
+}
+
+// A loaded save's stats, once its run is the run.
+void StatsFromSave(const MapStats& s)
+{
+	mapStats = s;
+	mapStats.lined = false;
+}
+
+//---------------------------------------------------------------------------
+//
+// the gambles (docs/roguelite.md, "Momentum and rifts"): the cursed
+// reliquaries' three, each paid off by killing. A gamble's clock is its
+// Omen's time (RunningOmen::left), which runs down at full speed (Fever slows
+// boons only) and which kills never feed the boons' way (BoonCap: none);
+// each says both its halves in its prompts and on its purple chip. All of
+// it only while the Omens are live (OmensLive: rl_omens, a run, not the
+// Crypt); rl_reliquaries 0 keeps any from rolling (DropOmens).
+//
+//---------------------------------------------------------------------------
+
+// The Hunger: every boon running jumps to its cap (ExtendToCap: never Death's Grin or Bottomless) and a rare Omen
+// drops at your feet (as Cleared's does). Then its clock runs, 10 s (its time), and each kill of yours sets it back to
+// 10 s at least, 15 s for a champion (1.5x its time). Run out, it takes 25 health and ends; 12 kills end it, sated.
+// Rampage, 20 s: each kill of yours is a stack, +0.5x damage (OmenDeal, inside its 6x) and +1 s (up to 3x its time, the
+// ceiling every Omen's time has). 3 s without a kill, from your last kill (or a take while it runs with a stack), is a
+// lapse: the stacks go and it takes 10 health, once, until your next kill starts the 3 s again. No kill since its take
+// or the last lapse: no stack to lose, no lapse. It runs on to its end.
+// Corpse Fire: taking it takes 20 health. For 20 s each kill of yours bursts where the body fell: a TNT stick's blast
+// to see and hear, its size (explodeInfo's radius, 75), forged and marked kModSpareYou as the Larder's are (so it
+// spares you, ScaleDamage; Brimstone Leap throws you, as any forged blast does), dealing about 30 itself: 25 at the
+// edge to 35 at the heart, before each kind's own resistance, as any blast. The stick's own damage is turned off: its
+// concussion runs for the 15 tics its blast lasts, 65 health and more to a foe at its edge. Each kill adds 1 s, up to
+// 2x its time. A burst's kills are yours: they burst in turn, a tic later.
+// A price in health is taken straight from it (armour can't pay), never below 1 (Blood's player lives on 16
+// sixteenths, playerDamageSprite), with Blood's own hurt: the red flash, and Caleb's pain grunt as a hit of 10 or more
+// gives it (PLAY1106, 731, damageInfo in player.cpp: stock code plays it only as Caleb's pain; no SEQ, QAV or map
+// sound does, nor the mode, chaos or the rifts). A gamble the map's end (or rl_omens going off) cuts short asks no price.
+constexpr int kHungerKills = 12;
+constexpr int kHungerPrice = 25, kRampagePrice = 10, kCorpseFirePrice = 20; // health
+constexpr int kRampageLapse = 3 * kClock;
+constexpr double kRampageStep = 0.5;
+constexpr int kRampageStacks = 10;                   // +5x, the 6x ceiling on its own: more add only time
+constexpr int kGambleKillTime = kClock;              // Rampage's and Corpse Fire's second a kill
+constexpr int kRampageCap = 3, kCorpseFireCap = 2;   // their time's ceiling, times their time
+constexpr int kBurstEdge = 25, kBurstHeart = 10;     // actRadiusDamage's base and distance damage: 25 at the edge, 35 at the heart
+constexpr int kGamblePain = 731;
+constexpr int kGambleVersion = 2;                    // the gambles in their places (a save without the key: Glass Cannon,
+                                                     // Frenzy, Powder Keg)
+
+// The gambles' part of the run: saved (SerializeGambles), and started afresh as each map starts (GamblesReset).
+struct Gambles
+{
+	int version = 0;     // read from a save: its gambles' kGambleVersion (0: from before the key)
+	int hungerKills = 0; // The Hunger: your kills since it was taken
+	int stacks = 0;      // Rampage: its stacks
+	bool armed = false;  // Rampage: a lapse comes at lapseAt unless you kill first
+	int lapseAt = 0;     // Rampage: PlayClock as it comes
+};
+Gambles gambles;
+// Not saved: Corpse Fire's bursts to come (a kill of this tic, or of the last tic's bursts), where the body fell.
+// Emptied as a level starts and as a save loads (their sectors are the map's).
+struct GambleBurst { DVector3 pos; sectortype* sect; int at; };
+TArray<GambleBurst> gambleBursts;
+
+void GamblesReset()
+{
+	gambles = Gambles();
+	gambleBursts.Clear();
+}
+
+void GamblesLoaded() { gambleBursts.Clear(); }
+
+// How a gamble's prompts name it: with its time (clocks), but The Hunger, whose clock is its price (its sentence says).
+FString GambleHead(int id, int clocks)
+{
+	if (id == kOmenHunger) return FString(omenInfo[id].name);
+	return FStringf("%s, %d s", omenInfo[id].name, bmod::SecondsLeft(clocks));
+}
+
+// Rampage's damage bonus (OmenDeal adds it to the Omens' others).
+double GambleBonus() { return RunningOf(kOmenRampage) ? kRampageStep * gambles.stacks : 0.; }
+
+// A gamble's price: points of health, taken straight, never below 1; none in god mode. Returns what it took
+// (sixteenths).
+int GamblePrice(DBloodPlayer* p, int points)
+{
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !pl->hasX() || pl->xspr.health <= 0 || p->godMode) return 0;
+	int health = int(pl->xspr.health);
+	int took = std::min(points << 4, health - (1 << 4));
+	if (took <= 0) return 0;
+	pl->xspr.health = unsigned(health - took);
+	p->painEffect = ClipHigh(p->painEffect + (took >> 3), 600); // the red flash, as playerDamageSprite gives a hit's
+	sfxPlay3DSound(pl, kGamblePain, 0, 6);                       // Caleb's pain, on his voice's channel, as stock plays it
+	StatsGamble(kStatPaid, took);
+	return took;
+}
+
+// A gamble taken (from GrantOmen: its RunningOmen, its time in clocks): its clock, and the half that comes now. Taken
+// again while it runs: The Hunger's prize again and a fresh 12 kills (its clock no shorter); Rampage's time again (up to
+// 3x, its stacks kept); Corpse Fire's price again and its time.
+bool BeginGamble(RunningOmen& r, int clocks)
+{
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	bool fresh = r.left <= 0;
+	r.left = r.id == kOmenHunger ? std::max(r.left, clocks) : std::max(std::min(r.left + clocks, 3 * r.base), r.left);
+	r.peak = std::max(r.peak, r.left);
+	switch (r.id)
+	{
+	case kOmenHunger:
+	{
+		gambles.hungerKills = 0;
+		ExtendToCap(-1);
+		// The run's roll (its seed and its kills so far), so a reload rolls the same.
+		std::mt19937 rng(run.seed ^ (0x9E3779B9u * uint32_t(run.kills + 1)) ^ 0x510E527Fu);
+		int id = PickOmen(rng, kOmenRare);
+		if (id >= 0 && pl && pl->insector()) SpawnOmenItem(pl->sector(), pl->spr.pos.XY(), id);
+		break;
+	}
+	case kOmenRampage:
+		// A lapse needs a stack to lose: from none, only a kill arms it (GambleKill). A fresh take also clears the flag an
+		// earlier Rampage, run out within 3 s of a kill, left set.
+		if (fresh) gambles.stacks = 0;
+		gambles.armed = gambles.stacks > 0;
+		if (gambles.armed) gambles.lapseAt = PlayClock + kRampageLapse;
+		break;
+	case kOmenCorpseFire:
+		GamblePrice(p, kCorpseFirePrice);
+		break;
+	default:
+		break;
+	}
+	return true;
+}
+
+// A gamble's clock ran out (OmenTick, as it ends): The Hunger's price.
+void GambleRanOut(int id)
+{
+	if (id != kOmenHunger) return;
+	int took = GamblePrice(getPlayer(myconnectindex), kHungerPrice);
+	StatsGamble(kStatStarved);
+	FString text = took > 0 ? FStringf("The Hunger starves you: %d health", (took + 8) >> 4) : FString("The Hunger starves you");
+	viewSetMessage(text.GetChars(), TEXTCOLOR_PURPLE); // the gambles' colour
+}
+
+// A Corpse Fire burst: the TNT stick's blast spawned and set off as ForgeBlast does it, its own damage spent (its flash,
+// shake and wall impacts stay), and the burst's damage dealt by the blast while ScaleDamage knows it for a forged one
+// that spares you (ForgeExplosion, as actCheckExplosion has it).
+void CorpseBurst(DBloodPlayer* p, const GambleBurst& b)
+{
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !b.sect) return;
+	auto t = actSpawnThing(b.sect, b.pos, kThingArmedTNTStick);
+	if (!t) return;
+	t->SetOwner(pl);
+	t->modFlags |= kModForged | kModSpareYou;
+	actExplodeSprite(t);
+	if (!t->hasX() || t->spr.type != kExplosionSmall) return;
+	t->xspr.data1 = 0;
+	ForgeExplosion spare(t);
+	actRadiusDamage(t, b.pos, b.sect, explodeInfo[kExplosionSmall].radius, kBurstEdge, kBurstHeart, kDamageExplode, 2, 0);
+	StatsGamble(kStatBursts);
+}
+
+// Each tic (from OmenTick, after the clocks): Rampage's lapse, then Corpse Fire's bursts from the kills since (one
+// older, left from a time the Omens weren't live, goes unburst). A burst's own kills burst on the next tic.
+void GambleTick(DBloodPlayer* p)
+{
+	if (RunningOf(kOmenRampage) && gambles.armed && PlayClock >= gambles.lapseAt)
+	{
+		gambles.armed = false;
+		if (gambles.stacks > 0) // nothing to lose (a save from before BeginGamble armed only with a stack): no lapse
+		{
+			gambles.stacks = 0;
+			int took = GamblePrice(p, kRampagePrice);
+			StatsGamble(kStatLapses);
+			FString text = took > 0 ? FStringf("Rampage lapses: back to 1x, %d health", (took + 8) >> 4) : FString("Rampage lapses: back to 1x");
+			viewSetMessage(text.GetChars(), TEXTCOLOR_PURPLE);
+		}
+	}
+	if (!gambleBursts.Size()) return;
+	auto due = std::move(gambleBursts);
+	gambleBursts.Clear();
+	for (auto& b : due)
+		if (PlayClock - b.at >= 0 && PlayClock - b.at <= kTicsPerFrame) CorpseBurst(p, b);
+}
+
+// A kill of yours (from YourKill): Rampage's stack and second, Corpse Fire's second and burst to come, and The Hunger's
+// clock set back (12 kills sate it, and it ends).
+void GambleKill(DBloodActor* victim)
+{
+	auto p = getPlayer(myconnectindex);
+	if (!OmensLive() || !victim || !p || !p->GetActor()) return;
+	if (auto r = RunningOf(kOmenRampage))
+	{
+		gambles.stacks = std::min(gambles.stacks + 1, kRampageStacks);
+		gambles.armed = true;
+		gambles.lapseAt = PlayClock + kRampageLapse;
+		ExtendBoon(*r, p, kGambleKillTime, kRampageCap * r->base);
+		StatsGamble(kStatStacks, gambles.stacks);
+	}
+	if (auto r = RunningOf(kOmenCorpseFire))
+	{
+		ExtendBoon(*r, p, kGambleKillTime, kCorpseFireCap * r->base);
+		if (victim->insector())
+		{
+			auto s = victim->sector();
+			auto pos = victim->spr.pos;
+			updatesector(pos, &s);
+			if (!s) s = victim->sector(); // blasted outside every sector (as actSpawnFloor has it)
+			gambleBursts.Push({ pos, s, PlayClock });
+		}
+	}
+	if (auto r = RunningOf(kOmenHunger))
+	{
+		int back = (victim->modFlags & kModChampion) ? r->base * 3 / 2 : r->base;
+		r->left = std::max(r->left, back / kTicsPerFrame * kTicsPerFrame);
+		r->peak = std::max(r->peak, r->left);
+		if (++gambles.hungerKills >= kHungerKills)
+		{
+			for (unsigned i = 0; i < omens.Size(); i++)
+				if (omens[i].id == kOmenHunger)
+				{
+					EndOmen(i, false);
+					break;
+				}
+			StatsGamble(kStatSated);
+			viewSetMessage("The Hunger is sated", TEXTCOLOR_PURPLE);
+		}
+	}
+}
+
+// A gamble's chip: its own clock and what it counts ("Hunger 7s 5/12", "Rampage 14s x2.5", "Corpse Fire 18s"). The
+// fill: The Hunger's drains over its last 10 s; Rampage's is the 3 s before a lapse (empty with no stack); Corpse Fire's
+// measures toward its 2x, as a boon's toward its cap.
+void GambleChip(const RunningOmen& r, bmod::Chip& c)
+{
+	int s = bmod::SecondsLeft(r.left);
+	switch (r.id)
+	{
+	case kOmenHunger:
+		c.text.Format("Hunger %ds %d/%d", s, gambles.hungerKills, kHungerKills);
+		c.frac = double(r.left) / std::max({ r.left, r.base, 1 });
+		break;
+	case kOmenRampage:
+		c.text.Format("Rampage %ds x%g", s, std::min(1 + kRampageStep * gambles.stacks, kOmenDealMax));
+		c.frac = gambles.armed ? std::clamp(double(gambles.lapseAt - PlayClock) / kRampageLapse, 0., 1.) : 0.;
+		break;
+	case kOmenCorpseFire:
+		c.text.Format("Corpse Fire %ds", s);
+		c.frac = double(r.left) / std::max({ r.left, kCorpseFireCap * r.base, 1 });
+		break;
+	default:
+		break;
+	}
+}
+
+// The gambles' keys, under "gambles" in the run's save block, written and read alike. The version says which gambles
+// the save's are.
+void SerializeGambles(FSerializer& arc, Gambles& g)
+{
+	if (!arc.BeginObject("gambles")) return;
+	if (arc.isWriting()) g.version = kGambleVersion;
+	arc("version", g.version)
+		("hungerkills", g.hungerKills)
+		("rampagestacks", g.stacks)
+		("rampagearmed", g.armed)
+		("rampagelapseat", g.lapseAt);
+	arc.EndObject();
+}
+
+// A loaded save's gambles, once its Omens are read. A save from before these gambles (no version) ran others in their
+// places: a gamble it runs is dropped, cleanly (none asks a price as it ends), and its state starts afresh. Its cursed
+// reliquaries still on the floor are these gambles now.
+void GamblesFromSave(const Gambles& g)
+{
+	gambles = g;
+	gambleBursts.Clear();
+	if (g.version != kGambleVersion)
+	{
+		for (int i = int(omens.Size()) - 1; i >= 0; i--)
+			if (omenInfo[omens[i].id].tier == kOmenGamble) omens.Delete(i);
+		gambles = Gambles();
+	}
+	gambles.hungerKills = std::clamp(gambles.hungerKills, 0, kHungerKills - 1);
+	gambles.stacks = std::clamp(gambles.stacks, 0, kRampageStacks);
+}
+
+//---------------------------------------------------------------------------
+//
 // events and the ticker
 //
 //---------------------------------------------------------------------------
@@ -3013,6 +4537,9 @@ void OnEvent(const bmod::EventInfo& ev)
 		if (IsCryptLevel()) SetupCrypt();
 		else crypt.in = false;
 		LevelStarted();
+		MomentumRestart(); // after the run's checks: a map warp leaves the run, and its meter
+		ClearedStart(); // after the remix: the enemies the map starts with
+		StatsStart(); // the stats line's counts, and its start count
 		break;
 	case bmod::Event::SaveLoaded:
 		LitaniesLoaded();
@@ -3025,9 +4552,11 @@ void OnEvent(const bmod::EventInfo& ev)
 		else crypt.in = false;
 		if (run.active && !run.over) StartCurse(); // effects aren't saved: the curse comes back on
 		OmensLoaded(); // and the Omens' (after the curse, so one the curse runs is the curse's)
+		MomentumRestart(); // after the Omens: Fever as it stands
 		break;
 	case bmod::Event::LevelEnd:
 		EndOmens(true, true); // the Omens end with the map (a map's own powerup keeps its time)
+		MomentumLevelEnd(); // half of Bloodrush goes on
 		break;
 	case bmod::Event::Kill:
 		if (run.active && !run.over && AllowedKillType(ev.actor))
@@ -3038,11 +4567,15 @@ void OnEvent(const bmod::EventInfo& ev)
 			run.ichor += red ? kIchorRed : champion ? kIchorChampion : kIchorKill;
 			if (champion && !crypt.in) DropChampionArmour(ev.actor, red);
 			if (!crypt.in) DropOmens(ev.actor, champion, red);
-			if (ByYou(ev.other)) ExtendOmens();
+			if (ByYou(ev.other)) YourKill(ev.actor); // the momentum: time on the boons, Bloodrush
 		}
 		break;
 	case bmod::Event::PlayerDeath:
-		if (ev.player == getPlayer(myconnectindex)) RunOver();
+		if (ev.player == getPlayer(myconnectindex))
+		{
+			StatsLine("died"); // rl_stats: the map's line, as the run ends
+			RunOver();
+		}
 		break;
 	default:
 		break;
@@ -3063,6 +4596,7 @@ void OnTick()
 	}
 	bmod::modeEnemyTimeScale = run.active && !run.over ? 1. + 0.15 * run.cov[kHaste] : 1.; // the Covenant's Haste lasts the run
 	OmenTick(); // before the curse's retry, which then finds a rival an Omen just let go
+	MomentumTick(); // after the Omens' clocks: Fever's entry
 	if (crypt.in)
 	{
 		CryptTick();
@@ -3176,12 +4710,34 @@ void DrawLitanyTitle()
 		DTA_Alpha, alpha, TAG_DONE);
 }
 
-// The Omens' chips in the shared row, oldest first (gold a boon, purple a gamble, blinking their last 3 s). The map's
-// curse is on the run line, but "No HUD" (chaos's, or the curse itself) hides that: then, with the Omens on (rl_omens),
-// it's a red chip first, with no countdown (while it runs: one a chaos rival holds off isn't). And the cursed reliquary
-// you face, named where the Crypt's prompts go: even under "No HUD", as it's how you choose whether to take one.
+// A boon's chip fills toward its kill cap (full: kills add no more); one kills never feed (Death's Grin, Bottomless, a
+// gamble) by the most time it has had.
+double OmenFill(const RunningOmen& r)
+{
+	int cap = KillCap(r);
+	int top = cap > 0 ? std::max(cap, r.left) : std::max({ r.base, r.peak, 1 });
+	return double(r.left) / std::max(top, 1);
+}
+
+// The Omens' chips in the shared row (gold a boon, orange in Fever, purple a gamble, blinking their last 3 s), the
+// soonest to end first, at most kChipLimit, then "+k" for the rest. In front of them, outside the limit: Bloodrush's
+// chip (rl_rush; its tier, the meter its fill, dimmed while held), the map's curse, and "DMG xN". The curse is on the
+// run line, but "No HUD" (chaos's, or the curse itself) hides that: then, with the Omens on (rl_omens), it's a red chip,
+// with no countdown (while it runs: one a chaos rival holds off isn't). Chaos's chips are its own drawer's, in their
+// place in the row. And the cursed reliquary you face, named where the Crypt's prompts go: even under "No HUD", as it's
+// how you choose whether to take one.
 void DrawOmens()
 {
+	if (OmensLive() && RushLive() && Mo().rush > 0)
+	{
+		bmod::Chip c;
+		int tier = TierOf(Mo().rush);
+		c.text = tier > kTierNone ? rushTierNames[tier] : "Bloodrush";
+		c.color = PalEntry(kRushChip);
+		c.frac = Mo().rush / kRushMax;
+		c.alpha = Mo().held ? kRushHeldAlpha : 1.;
+		bmod::AddChip(c);
+	}
 	auto curse = CurseEffect();
 	if (bmod::mods.hideHud && OmensLive() && curse && bmod::IsActive(curse))
 	{
@@ -3190,14 +4746,37 @@ void DrawOmens()
 		c.color = PalEntry(kCurseChip);
 		bmod::AddChip(c);
 	}
-	for (auto& r : omens)
+	double damage = OmenDeal(); // the Omens' damage rule (a curse's or chaos's Glass Cannon isn't the Omens')
+	if (OmensLive() && damage != 1)
 	{
+		bmod::Chip c;
+		c.text.Format("DMG x%g", damage);
+		c.color = PalEntry(kDamageChip);
+		c.frac = 0;
+		bmod::AddChip(c);
+	}
+	TArray<const RunningOmen*> order;
+	for (auto& r : omens) order.Push(&r);
+	std::stable_sort(order.begin(), order.end(), [](const RunningOmen* a, const RunningOmen* b) { return a->left < b->left; });
+	unsigned shown = std::min(order.Size(), unsigned(kChipLimit));
+	for (unsigned i = 0; i < shown; i++)
+	{
+		auto& r = *order[i];
 		auto& o = omenInfo[r.id];
 		bmod::Chip c;
 		c.text.Format("%s %ds", o.name, bmod::SecondsLeft(r.left));
-		c.color = PalEntry(o.tier == kOmenGamble ? kGambleChip : kBoonChip);
-		c.frac = double(r.left) / std::max({ r.base, r.peak, 1 });
-		c.alpha = r.left <= 3 * kClock && (PlayClock / 15) % 2 ? 0.3 : 1.;
+		c.color = o.tier == kOmenGamble ? PalEntry(kGambleChip) : BoonChip(); // a boon's gold, orange in Fever
+		c.frac = OmenFill(r);
+		if (o.tier == kOmenGamble) GambleChip(r, c); // its own clock, and what it counts
+		c.alpha = r.left <= kBoonWarning && (PlayClock / 15) % 2 ? 0.3 : 1.;
+		bmod::AddChip(c);
+	}
+	if (order.Size() > shown)
+	{
+		bmod::Chip c;
+		c.text.Format("+%u", order.Size() - shown);
+		c.color = BoonChip();
+		c.frac = 0;
 		bmod::AddChip(c);
 	}
 	if (reliquaryHint.IsEmpty()) return;
@@ -3311,8 +4890,12 @@ void OnDraw(DBloodPlayer* pPlayer)
 		DrawRunOver(pPlayer, sc);
 		return;
 	}
-	DrawCurseTitle(); // even under the "No HUD" curse, which must announce itself too
-	DrawLitanyTitle();
+	if (!CentreQueued()) // with the Omens off, as before; else they're the centre slot's queue's
+	{
+		DrawCurseTitle(); // even under the "No HUD" curse, which must announce itself too
+		DrawLitanyTitle();
+	}
+	DrawCentreLine(); // the centre slot (the curse's title, CLEARED, a tier reached, a Litany), under "No HUD" too
 	DrawOmens(); // the chip row isn't the HUD: chaos's chips show under "No HUD" too
 	if (bmod::mods.hideHud) return; // the "No HUD" effect hides the run line
 	DrawRunLine(sc);
@@ -3634,6 +5217,7 @@ MapRecord* NextLevel(MapRecord* stockNext)
 	if (run.exiting) // a second exit in the same tic: the same answer
 		return run.pending >= 0 && run.pending < int(run.maps.Size()) ? FindMapByName(run.maps[run.pending].GetChars()) : nullptr;
 	run.exiting = true;
+	StatsLine("exit"); // rl_stats: the map's line (before the last map's exit ends the run)
 	run.cleared++;
 	run.ichor += kIchorMap;
 	if (run.index == 0)
@@ -3743,9 +5327,9 @@ int TakePickup(DBloodActor* item, int room)
 }
 
 // An Omen's pickup is the run's: walked into, it begins (or adds its time), with Blood's powerup chime, the pickup flash
-// and a message. A cursed reliquary isn't taken by walking over it (Use takes it: TakeReliquary); nor is either with
-// the Omens off (rl_omens 0, the run over), when they lie inert. A map's powerup the stock pickup is about to take while
-// an Omen runs on its timer is noted, for PickupTaken.
+// and a message. A cursed reliquary isn't taken by walking over it (Use takes it: TakeReliquary), only named (OmenTick);
+// nor is either with the Omens off (rl_omens 0, the run over), when they lie inert. A map's powerup the stock pickup is
+// about to take while an Omen runs on its timer is noted, for PickupTaken.
 bool ClaimPickup(DBloodPlayer* pPlayer, DBloodActor* item)
 {
 	omenPowerItem = nullptr;
@@ -3765,9 +5349,15 @@ bool ClaimPickup(DBloodPlayer* pPlayer, DBloodActor* item)
 	if (pPlayer != getPlayer(myconnectindex) || !OmensLive()) return true;
 	int id = item->xspr.data1;
 	auto& o = omenInfo[id];
-	if (o.tier == kOmenGamble) return true;
+	if (o.tier == kOmenGamble)
+	{
+		reliquaryTouched = item; // OmenTick names it, and how to take it
+		reliquaryTouchedAt = PlayClock;
+		return true;
+	}
 	bool chimed = false;
 	if (!GrantOmen(id, o.seconds * kClock, &chimed)) return true; // it can't take hold now (CanGrant): it stays
+	StatsOmen(id, true);
 	if (!chimed) sfxPlay3DSound(pPlayer->GetActor(), 776, -1, 0); // Blood's powerup chime (powerupActivate plays it)
 	pPlayer->pickupEffect = 30;
 	viewSetMessage(FStringf("Omen: %s, %d s: %s", o.name, bmod::SecondsLeft(RunningOf(id)->left), o.sentence).GetChars(),
@@ -3859,7 +5449,7 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, DAMAGE_TYPE damageType
 		{
 			forgeExplosionNow->modFlags |= kModKicked;
 			DVector2 away = target->spr.pos.XY() - forgeExplosionNow->spr.pos.XY();
-			if (away.LengthSquared() > 1) target->vel.XY() += away.Unit() * 4.;
+			if (away.LengthSquared() > 1) target->vel += away.Unit() * 4.; // X and Y (vel.XY() is a copy)
 			target->vel.Z = std::min(target->vel.Z, kLeapKick); // a little over a jump (-11.7): a 64-unit ledge from your feet
 			LitanyFired(kLitLeap);
 		}
@@ -3877,10 +5467,11 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, DAMAGE_TYPE damageType
 		forgeScent = s; // Blood Feud's quarry
 		forgeScentAt = PlayClock;
 	}
-	// Fury and Frenzy (Omens): your hits on foes, times their factor, on top of the Forge's bite and the base's Glass
-	// Cannon (applied before this), as those stack already. A red champion's flinch counts the hit as dealt.
+	// The Omens (Fury, Rampage: OmenDeal, their bonuses added, at most 6x): your hits on foes, times their factor, on top
+	// of the Forge's bite and the base's damage scale (a curse's or chaos's Glass Cannon, applied before this), as those
+	// stack already. A red champion's flinch counts the hit as dealt.
 	if (s && s != target && s->IsPlayerActor() && target->IsDudeActor() && !target->IsPlayerActor())
-		if (int deal = OmenDeal(); deal != 1) damage *= deal;
+		if (double deal = OmenDeal(); deal != 1) damage = int(damage * deal);
 	// Your hit on a red champion, as dealt (before its own armour: its type's and the skill's), for its flinch.
 	if (s && s != target && s->IsPlayerActor() && (target->modFlags & kModRedChampion) && target->spr.statnum == kStatDude)
 		StaggerHit(target, damage);
@@ -3900,7 +5491,7 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, DAMAGE_TYPE damageType
 OmenWound::OmenWound(DBloodActor* source, DBloodActor* target)
 {
 	if (!omens.Size() || !source || !target || target->IsPlayerActor() || !AllowedKillType(target) || !target->hasX()
-		|| target->xspr.health <= 0 || !BloodlustOn() || !ByYou(source))
+		|| target->xspr.health <= 0 || !BloodlustOn() || !ByYou(source) || IsRift(target)) // rifts.cpp: not a foe yet
 		return;
 	foe = target;
 	healthBefore = int(target->xspr.health);
@@ -4009,8 +5600,26 @@ static bool PayInBlood(DBloodPlayer* p)
 	return true;
 }
 
+// A foe not yet in the fight, which no shot should hunt: a buried axe zombie still under the earth and a laying one still
+// on the floor (neither can be shot until it rises, and a blast beside one wakes it), and a gargoyle statue (it takes no
+// damage, and wakes only as the map's wiring says). By its AI state, not its hitscan bit: a phantasm's idle and moving
+// frames lack that bit, and it's a foe all the same.
+static bool Dormant(DBloodActor* a)
+{
+	if (IsRift(a)) return true; // rifts.cpp: a rift still opening (its foe not yet through)
+	switch (a->spr.type)
+	{
+	case kDudeZombieAxeBuried: return a->xspr.aiState == &zombieEIdle;
+	case kDudeZombieAxeLaying: return a->xspr.aiState == &zombieSIdle;
+	case kDudeGargoyleStatueFlesh:
+	case kDudeGargoyleStatueStone: return true;
+	default: return false;
+	}
+}
+
 // The Hound's Nose: the nearest foe within the cone ahead, in sight.
-// The nearest live foe in sight from a point, within a cone around a heading and a range (exclude: one not to pick).
+// The nearest live foe in sight from a point, within a cone around a heading and a range (exclude: one not to pick),
+// not a dormant one.
 // Given the foes already hunted (a foe once for each hunter), the least hunted one wins, nearest first: hunters share
 // a pack out in turn.
 static DBloodActor* HoundFoe(const DVector3& from, sectortype* sect, DAngle heading, double cone, double range, DBloodActor* exclude = nullptr,
@@ -4022,7 +5631,7 @@ static DBloodActor* HoundFoe(const DVector3& from, sectortype* sect, DAngle head
 	BloodStatIterator it(kStatDude);
 	while (auto a = it.Next())
 	{
-		if (a == exclude || a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !AllowedKillType(a) || !a->insector()) continue;
+		if (a == exclude || a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !AllowedKillType(a) || !a->insector() || Dormant(a)) continue;
 		DVector2 d = a->spr.pos.XY() - from.XY();
 		double dist = d.Length();
 		int uses = 0;
@@ -4193,6 +5802,7 @@ static void LitanyFired(int k)
 	litanyFired |= 1u << k;
 	litanyShown = k;
 	litanyShownAt = PlayClock;
+	ShowCentre(kCentreLitany, FStringf("Litany: %s", litanies[k].name).GetChars(), CR_GOLD, false, kLitanyTitle); // the queue's (rl_omens)
 	Printf(PRINT_NOTIFY, "Litany: %s\n", litanies[k].name);
 }
 
@@ -4257,7 +5867,7 @@ static void PyreMark(DBloodActor* source, DBloodActor* t)
 // burning kinds a burn has already turned them into, are left alone, so nothing shows a fire that isn't there.
 static void PyreLight(DBloodActor* source, DBloodActor* t)
 {
-	if (!source || !t || !t->IsDudeActor() || t->IsPlayerActor() || !t->hasX() || t->xspr.health <= 0 || IsBurningDude(t)) return;
+	if (!source || !t || !t->IsDudeActor() || t->IsPlayerActor() || !t->hasX() || t->xspr.health <= 0 || IsBurningDude(t) || IsRift(t)) return; // rifts.cpp: not a waiting rift
 	if (!getDudeInfo(t->spr.type)->damageVal[kDamageBurn]) return;
 	bool was = t->xspr.burnTime > 0;
 	BurnTo(source, t, kPyreBurn);
@@ -4822,7 +6432,7 @@ ForgeImpact::ForgeImpact(DBloodActor* m, DBloodActor* hit, int code, walltype* h
 		BloodStatIterator it(kStatDude);
 		while (auto d = it.Next())
 		{
-			if (d == hit || !d->hasX() || d->xspr.health <= 0 || (d->spr.pos.XY() - hit->spr.pos.XY()).Length() > 128) continue;
+			if (d == hit || !d->hasX() || d->xspr.health <= 0 || IsRift(d) || (d->spr.pos.XY() - hit->spr.pos.XY()).Length() > 128) continue; // rifts.cpp: not a waiting rift
 			if (!cansee(MiddleOf(hit), hit->sector(), MiddleOf(d), d->sector())) continue;
 			BurnTo(owner, d, kWitchfireBurn);
 		}
@@ -5133,7 +6743,7 @@ static void ForgeTick()
 			BloodStatIterator di(kStatDude);
 			while (auto d = di.Next())
 			{
-				if (d->IsPlayerActor() || !d->hasX() || d->xspr.health <= 0) continue;
+				if (d->IsPlayerActor() || !d->hasX() || d->xspr.health <= 0 || IsRift(d)) continue; // rifts.cpp: not a waiting rift
 				if ((d->spr.pos.XY() - k->spr.pos.XY()).Length() > 64 || std::abs(d->spr.pos.Z - k->spr.pos.Z) > 64) continue;
 				if (!cansee(k->spr.pos, k->sector(), MiddleOf(d), d->sector())) continue;
 				blown.Push(k);
@@ -5303,6 +6913,21 @@ void KitChanged()
 }
 void CovenantChanged() { UpdateMenus(); }
 
+// The run's side of the rifts (rifts.h): rifts.cpp reads the run only through these.
+bool RiftRunLive() { return run.active && !run.over && !crypt.in; }
+RiftRules RiftRunRules(double depth)
+{
+	RiftRules r;
+	r.blueChance = (kChampionFirst + (kChampionLast - kChampionFirst) * depth) * (1 + run.cov[kChampions]); // as RemixEnemies rolls
+	r.flesh = 1. + 0.15 * run.cov[kFlesh]; // as CovenantEnemies gives it
+	r.championHealth = kChampionHealth;
+	r.redHealth = kRedHealth;
+	r.championSize = kChampionSize;
+	return r;
+}
+void RiftMakeChampion(DBloodActor* a, bool red) { MakeChampion(a, true, red); }
+int RiftThreatCost(int type) { return KindCost(type); }
+
 void TintSprite(DBloodActor* owner, tspritetype* tspr)
 {
 	if (owner && tspr && owner == forgeScent && Sings(kLitBloodFeud) && PlayClock - forgeScentAt < 5 * kClock)
@@ -5315,6 +6940,42 @@ void TintSprite(DBloodActor* owner, tspritetype* tspr)
 	int pal = (owner->modFlags & kModRedChampion) ? rl_elite_red_pal : rl_elite_pal;
 	if (pal > 0 && pal < MAXREALPAL && lookups.checkTable(pal)) tspr->pal = pal;
 	tspr->shade = int8_t(std::max(tspr->shade - 12, -128)); // and a little brighter
+}
+
+// An item drawn, after a coloured floor has put its palette on it (viewApplyDefaultPal): an Omen keeps its tier's, as the
+// tier is what it tells. And a cursed reliquary is circled by Blood's own "atom" view effect (kViewEffectAtom, which no
+// stock code draws), its maths as animatesprite.cpp has it: 16 fullbright motes (tile 1720) on randomly tilted rings, a
+// shell of radius 32 turning once a second. Here it's centred kReliquaryHaloZ above the chest's floor, so no mote dips
+// under it and its top is at your eye even with the chest below the screen, and the motes take the chest's FLAME (they
+// stay bright in it, and their own blue is the rare Omens' COLD). Drawn each frame, so nothing of it is saved.
+void OmenItemSprite(tspriteArray& tsprites, tspritetype* tspr)
+{
+	auto a = tspr ? static_cast<DBloodActor*>(tspr->ownerActor) : nullptr;
+	if (!IsOmenItem(a) || !OmensLive()) return;
+	int tier = omenInfo[a->xspr.data1].tier;
+	tspr->pal = omenPal[tier];
+	if (tier != kOmenGamble) return;
+	double top, bottom;
+	GetActorExtents(a, &top, &bottom);
+	DVector3 centre(tspr->pos.XY(), bottom - kReliquaryHaloZ);
+	for (int i = 0; i < 16; i++)
+	{
+		auto m = viewInsertTSprite(tsprites, tspr->sectp, 32767, tspr);
+		if (!m) break;
+		auto ang = mapangle((PlayClock * 2048) / 120).Normalized360() + random_angles[i][2];
+		auto vect = DVector3(32 * ang.ToVector(), 0);
+		DVector2 pt(vect.Y, vect.Z);
+		pt = pt.Rotated(random_angles[i][0]);
+		vect.Y = pt.X;
+		pt.X = vect.X;
+		pt = pt.Rotated(random_angles[i][1]);
+		vect.X = pt.X;
+		vect.Z = pt.Y;
+		m->pos = centre + vect;
+		m->setspritetexture(aTexIds[kTexATOMEFFECT]);
+		m->shade = -128;
+		m->pal = omenPal[kOmenGamble];
+	}
 }
 
 void Serialize(FSerializer& arc)
@@ -5360,6 +7021,9 @@ void Serialize(FSerializer& arc)
 				running.Push(r.peak);
 			}
 			arc("omens", running);
+			SerializeMomentum(arc, Mo()); // the momentum's keys (Bloodrush)
+			if (rl_stats) SerializeStats(arc, mapStats); // the stats line's counts so far
+			SerializeGambles(arc, gambles); // the gambles' state, and which gambles these are
 			arc.EndObject();
 		}
 		return;
@@ -5372,6 +7036,9 @@ void Serialize(FSerializer& arc)
 	reliquaryHint = "";
 	Run loaded;
 	TArray<int> running;
+	Momentum loadedMomentum;
+	MapStats loadedStats;
+	Gambles loadedGambles;
 	bool has = false;
 	if (arc.BeginObject("roguelite"))
 	{
@@ -5401,6 +7068,9 @@ void Serialize(FSerializer& arc)
 		arc.Array("forge", loaded.forge, kForgeSlots);
 		arc("litanies", loaded.litanies);
 		arc("omens", running);
+		SerializeMomentum(arc, loadedMomentum);
+		SerializeStats(arc, loadedStats);
+		SerializeGambles(arc, loadedGambles);
 		arc.EndObject();
 		has = true;
 	}
@@ -5415,9 +7085,12 @@ void Serialize(FSerializer& arc)
 	run = std::move(loaded);
 	run.active = true;
 	run.curseClock = INT_MIN / 2;
+	MomentumFromSave(loadedMomentum);
+	StatsFromSave(loadedStats);
 	for (unsigned i = 0; i + 3 < running.Size(); i += 4) // the save's Omens (OmensLoaded starts their effects)
 		if (running[i] >= 0 && running[i] < kNumOmens && running[i + 1] > 0 && running[i + 2] > 0 && !RunningOf(running[i]))
 			omens.Push({ running[i], running[i + 1], running[i + 2], std::max(running[i + 3], running[i + 1]), false });
+	GamblesFromSave(loadedGambles); // a save of the old gambles drops the one it runs
 	bmod::modeEnemyTimeScale = run.over ? 1. : 1. + 0.15 * run.cov[kHaste];
 }
 
@@ -5433,6 +7106,37 @@ void OnMenuOpened()
 //
 //---------------------------------------------------------------------------
 
+// An episode named at the console (1..N in the game's own list, or "gauntlet") that a run can be started in: else -1,
+// once it has said why.
+static int ConsoleEpisode(const char* command, const char* name)
+{
+	TArray<Episode> eps;
+	GetEpisodes(eps);
+	int count = int(eps.Size()), unlocked = Unlocked(count);
+	if (!isBlood() || numplayers > 1)
+	{
+		Printf("%s: Blood single player only\n", command);
+		return -1;
+	}
+	int episode = !stricmp(name, "gauntlet") ? 0 : atoi(name);
+	if (count == 0 || episode < 0 || episode > count || (episode == 0 && stricmp(name, "gauntlet")))
+	{
+		Printf("%s: no episode '%s' (1-%d or gauntlet)\n", command, name, count);
+		return -1;
+	}
+	if (episode == 0 && unlocked < count)
+	{
+		Printf(PRINT_NOTIFY, "The gauntlet opens once every episode is unlocked\n");
+		return -1;
+	}
+	if (episode > unlocked)
+	{
+		Printf(PRINT_NOTIFY, "%s is locked: win a run of %s first\n", eps[episode - 1].name.GetChars(), eps[episode - 2].name.GetChars());
+		return -1;
+	}
+	return episode;
+}
+
 CCMD(rl_newrun)
 {
 	TArray<Episode> eps;
@@ -5445,29 +7149,28 @@ CCMD(rl_newrun)
 		Printf("  gauntlet  every episode in one run%s\n", count > 0 && unlocked >= count ? "" : " (locked)");
 		return;
 	}
-	if (!isBlood() || numplayers > 1)
-	{
-		Printf("rl_newrun: Blood single player only\n");
-		return;
-	}
-	int episode = !stricmp(argv[1], "gauntlet") ? 0 : atoi(argv[1]);
-	if (count == 0 || episode < 0 || episode > count || (episode == 0 && stricmp(argv[1], "gauntlet")))
-	{
-		Printf("rl_newrun: no episode '%s' (1-%d or gauntlet)\n", argv[1], count);
-		return;
-	}
-	if (episode == 0 && unlocked < count)
-	{
-		Printf(PRINT_NOTIFY, "The gauntlet opens once every episode is unlocked\n");
-		return;
-	}
-	if (episode > unlocked)
-	{
-		Printf(PRINT_NOTIFY, "%s is locked: win a run of %s first\n", eps[episode - 1].name.GetChars(), eps[episode - 2].name.GetChars());
-		return;
-	}
+	int episode = ConsoleEpisode("rl_newrun", argv[1]);
+	if (episode < 0) return;
 	uint32_t seed = argv.argc() >= 3 ? uint32_t(strtoul(argv[2], nullptr, 10)) : uint32_t(std::random_device{}());
 	StartRun(episode, seed);
+}
+
+// A run begun at map N of its order (testing a late map: the order is the seed's, and the map is remixed at its own
+// depth with the run's seed, its pickups leaning to the kit's guns; you have only the kit). The episode: the one named,
+// else the run in progress's, else the first.
+CCMD(rl_startat)
+{
+	if (argv.argc() < 2 || atoi(argv[1]) < 1)
+	{
+		Printf("usage: rl_startat <map> [seed] [episode|gauntlet]   (a run from map N of its order, with the kit only; skill: rl_skill)\n");
+		return;
+	}
+	FString named = argv.argc() >= 4 ? FString(argv[3]) : run.active && run.episode == 0 ? FString("gauntlet")
+		: FStringf("%d", run.active ? run.episode : 1);
+	int episode = ConsoleEpisode("rl_startat", named.GetChars());
+	if (episode < 0) return;
+	uint32_t seed = argv.argc() >= 3 ? uint32_t(strtoul(argv[2], nullptr, 10)) : uint32_t(std::random_device{}());
+	StartRun(episode, seed, atoi(argv[1]) - 1);
 }
 
 CCMD(rl_status)
@@ -5742,7 +7445,8 @@ CCMD(rl_kit)
 }
 
 // The Omens, for testing every one without a run of luck. An Omen is named by its number in "rl_omen list", by its name
-// without spaces or capitals ("twinvessel", "deathsgrin"), or by the start of that ("twin").
+// without spaces or capitals ("twinvessel", "deathsgrin"; a leading "The" may go: "hunger"), or by the start of that
+// ("twin", "corpse").
 static int FindOmen(const char* arg)
 {
 	auto squash = [](const char* s)
@@ -5751,13 +7455,16 @@ static int FindOmen(const char* arg)
 		for (; *s; s++) if (isalnum((unsigned char)*s)) out += char(tolower((unsigned char)*s));
 		return out;
 	};
+	auto bare = [](const char* s) { return strnicmp(s, "the ", 4) ? s : s + 4; }; // "The Hunger": "Hunger"
 	char* end;
 	long n = strtol(arg, &end, 10);
 	if (*arg && !*end) return n >= 1 && n <= kNumOmens ? int(n) - 1 : -1;
 	FString want = squash(arg);
 	if (want.IsEmpty()) return -1;
-	for (int i = 0; i < kNumOmens; i++) if (squash(omenInfo[i].name).Compare(want) == 0) return i;
-	for (int i = 0; i < kNumOmens; i++) if (squash(omenInfo[i].name).IndexOf(want) == 0) return i;
+	for (int i = 0; i < kNumOmens; i++)
+		if (squash(omenInfo[i].name).Compare(want) == 0 || squash(bare(omenInfo[i].name)).Compare(want) == 0) return i;
+	for (int i = 0; i < kNumOmens; i++)
+		if (squash(omenInfo[i].name).IndexOf(want) == 0 || squash(bare(omenInfo[i].name)).IndexOf(want) == 0) return i;
 	return -1;
 }
 
@@ -5782,13 +7489,14 @@ static void SpawnOmenAhead(const char* cmd, int id)
 	TArray<DVector2> taken;
 	DVector2 spot = pl->spr.pos.XY();
 	sectortype* sect = pl->sector();
+	double clear = omenInfo[id].tier == kOmenGamble ? kReliquaryClear : 0; // a reliquary is drawn big (as PlaceOmenItem)
 	if (s && cansee(DVector3(pl->spr.pos.XY(), p->zView), pl->sector(), DVector3(ahead, getflorzofslopeptr(s, ahead.X, ahead.Y) - 16), s)
-		&& SpotOk(s, ahead, floor.Z, taken, true))
+		&& SpotOk(s, ahead, floor.Z, taken, true, clear))
 	{
 		spot = ahead;
 		sect = s;
 	}
-	else FindItemSpot(rng, pl->sector(), floor, 24, 80, taken, spot, sect);
+	else FindItemSpot(rng, pl->sector(), floor, 24, 80, taken, spot, sect, nullptr, 16, clear);
 	if (SpawnOmenItem(sect, spot, id)) Printf(PRINT_NOTIFY, "%s: %s\n", cmd, omenInfo[id].name);
 	else Printf("%s: no room for it\n", cmd);
 }
@@ -5810,10 +7518,11 @@ CCMD(rl_omen)
 				r ? FStringf("  (running: %d s left)", bmod::SecondsLeft(r->left)).GetChars() : "");
 		}
 		Printf("Drops: every champion (blue: common %d%%, rare %d%%; red: rare %d%%, relic %d%%), a plain enemy 1 in %d (common %d%%,"
-			" rare %d%%, relic %d%%). Cursed reliquaries (the gambles, taken with Use): red champions 1 in %d, blue 1 in %d. rl_omens %d\n",
+			" rare %d%%, relic %d%%). Cursed reliquaries (the gambles, taken with Use): red champions 1 in %d, blue 1 in %d. rl_omens %d,"
+			" rl_reliquaries %d\n",
 			int(100 * (1 - kOmenBlueRare) + 0.5), int(100 * kOmenBlueRare + 0.5), int(100 * (1 - kOmenRedRelic) + 0.5), int(100 * kOmenRedRelic + 0.5),
 			int(1 / kOmenPlain + 0.5), int(100 * (1 - kOmenPlainRare - kOmenPlainRelic) + 0.5), int(100 * kOmenPlainRare + 0.5),
-			int(100 * kOmenPlainRelic + 0.5), int(1 / kReliquaryRed + 0.5), int(1 / kReliquaryBlue + 0.5), (int)rl_omens);
+			int(100 * kOmenPlainRelic + 0.5), int(1 / kReliquaryRed + 0.5), int(1 / kReliquaryBlue + 0.5), (int)rl_omens, (int)rl_reliquaries);
 		return;
 	}
 	int id = FindOmen(argv[1]);
@@ -5829,7 +7538,10 @@ CCMD(rl_omen)
 		Printf("rl_omen: %s can't take hold %s\n", omenInfo[id].name, HoldBar(id).GetChars());
 		return;
 	}
-	Printf(PRINT_NOTIFY, "Omen: %s, %d s: %s\n", omenInfo[id].name, bmod::SecondsLeft(RunningOf(id)->left), omenInfo[id].sentence);
+	auto r = RunningOf(id);
+	if (omenInfo[id].tier == kOmenGamble)
+		Printf(PRINT_NOTIFY, "Gamble: %s: %s\n", GambleHead(id, r ? r->left : 0).GetChars(), omenInfo[id].sentence);
+	else Printf(PRINT_NOTIFY, "Omen: %s, %d s: %s\n", omenInfo[id].name, bmod::SecondsLeft(r ? r->left : 0), omenInfo[id].sentence);
 }
 
 CCMD(rl_omen_drop)
@@ -5848,10 +7560,60 @@ CCMD(rl_reliquary)
 	int id = argv.argc() > 1 ? FindOmen(argv[1]) : -1;
 	if (id < 0 || omenInfo[id].tier != kOmenGamble)
 	{
-		Printf("usage: rl_reliquary <name|number>   (a gamble: Glass Cannon, Frenzy, Powder Keg; rl_omen list)\n");
+		Printf("usage: rl_reliquary <name|number>   (a gamble: The Hunger, Rampage, Corpse Fire; rl_omen list)\n");
 		return;
 	}
 	if (OmenReady("rl_reliquary")) SpawnOmenAhead("rl_reliquary", id);
+}
+
+// Bloodrush and Fever as they stand. It has the switch's name (a command comes before a CVAR at the console), so an
+// argument sets the switch: "rl_rush 0" still turns Bloodrush off.
+CCMD(rl_rush)
+{
+	if (argv.argc() > 1) rl_rush->CmdSet(argv[1]);
+	Printf("rl_rush %d: Bloodrush is %s (rl_rush_set <0-100> sets the meter)\n", (int)rl_rush, rl_rush ? "on" : "off");
+	if (!MomentumLive() || gamestate != GS_LEVEL)
+	{
+		Printf("  no run in progress (or this is the Crypt)\n");
+		return;
+	}
+	auto& m = Mo();
+	int tier = TierOf(m.rush), seen = CountAlerted();
+	FString drain;
+	if (m.held) drain = "held as it is until an enemy here is alerted to you";
+	else if (seen > 0) drain.Format("%.3g a second", kRushDrain * rushRate[tier]);
+	else if (m.rush > tier * kRushTierStep) drain.Format("%.3g a second, down to %d", kRushDrain, int(tier * kRushTierStep));
+	else drain = "none (at its tier's floor)";
+	Printf("  meter %.1f of %d, %s; drain %s; %d %s alerted to you\n", m.rush, int(kRushMax), rushTierNames[tier], drain.GetChars(),
+		seen, seen == 1 ? "enemy" : "enemies");
+	Printf("  kill time x%g, a plain enemy's Omen 1 in %d, the 2x kill caps %s; rl_omen_weights %d\n", TierFactor(),
+		int(1 / PlainOmenChance() + 0.5), RushTier() >= kTierRavening ? "at 3x" : "as they are", (int)rl_omen_weights);
+	Printf("rl_fever %d: Fever %s, %d of %d boons running\n", (int)rl_fever, FeverOn() ? "on" : "off", BoonsRunning(), FeverNeed());
+	if (m.clearStart <= 0) Printf("rl_cleared %d: Cleared: no start count on this map (it can't come here)\n", (int)rl_cleared);
+	else
+	{
+		int dead = m.clearStart - OriginAlive(), need = (m.clearStart * kClearedPercent + 99) / 100;
+		Printf("rl_cleared %d: Cleared %s: %d of the %d enemies the map started with dead, %d needed\n", (int)rl_cleared,
+			m.clearDone ? "came" : "not yet", dead, m.clearStart, need);
+	}
+}
+
+CCMD(rl_rush_set)
+{
+	if (argv.argc() < 2)
+	{
+		Printf("usage: rl_rush_set <0-100>   (Bloodrush's meter; tiers at 25 Blooded, 50 Savage, 75 Ravening; rl_rush: as it stands)\n");
+		return;
+	}
+	if (!MomentumLive() || gamestate != GS_LEVEL)
+	{
+		Printf("rl_rush_set: no run in progress (or this is the Crypt)\n");
+		return;
+	}
+	auto& m = Mo();
+	m.rush = std::clamp(atof(argv[1]), 0., kRushMax);
+	RushChanged(); // a tier reached is cued, as from a kill
+	Printf(PRINT_NOTIFY, "Bloodrush: %.0f, %s%s\n", m.rush, rushTierNames[TierOf(m.rush)], rl_rush ? "" : " (rl_rush is 0: no effect)");
 }
 
 CCMD(rl_clearmap)

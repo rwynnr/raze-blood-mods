@@ -31,6 +31,7 @@ public:
 	EventObject condition[2];
 	bool explosionhackflag; // this originally hijacked the target field which is not safe when working with pointers.
 	uint8_t modFlags = 0; // blood2d mods: per-actor flags, saved (rogue::kModChampion)
+	uint16_t riftPlan = 0; // blood2d roguelite: a zombie's planned rift, saved (rifts.cpp: what comes through; 0 = the stock rise)
 
 	// transient data (not written to savegame)
 	int cumulDamage;

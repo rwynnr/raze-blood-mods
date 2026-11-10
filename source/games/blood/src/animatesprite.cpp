@@ -816,6 +816,7 @@ void viewProcessSprites(tspriteArray& tsprites, const DVector3& cPos, DAngle cA,
 					pTSprite->shade = -128;
 
 				viewApplyDefaultPal(pTSprite, pSector);
+				rogue::OmenItemSprite(tsprites, pTSprite); // blood2d roguelite: an Omen keeps its tier's palette on a coloured floor; a cursed reliquary's halo
 				break;
 			}
 		}
@@ -876,6 +877,7 @@ void viewProcessSprites(tspriteArray& tsprites, const DVector3& cPos, DAngle cA,
 			if (pXSector && pXSector->color) copyfloorpal(pTSprite, pSector);
 			if (powerupCheck(pPlayer, kPwUpBeastVision) > 0) pTSprite->shade = -128;
 			rogue::TintSprite(owneractor, pTSprite); // blood2d roguelite: champions are tinted
+			rogue::RiftSprite(owneractor, pTSprite); // blood2d roguelite: a rift's arrival fades in
 
 			if (IsPlayerSprite(pTSprite)) {
 				DBloodPlayer* thisPlayer = getPlayer(pTSprite->type - kDudePlayer1);
