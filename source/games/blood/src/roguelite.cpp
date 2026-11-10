@@ -1569,7 +1569,10 @@ void CountAmmo(AmmoLedger& l, DBloodPlayer* p, bool carried)
 	while (auto a = it.Next())
 	{
 		if (a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !AllowedKillType(a)) continue;
-		AddEnemy(l, a->spr.type, a->xspr.health / 16.);
+		int type = a->spr.type;
+		double health = a->xspr.health / 16.;
+		RiftLedger(a, type, health); // rifts.cpp: a zombie a rift will replace counts as what comes through
+		AddEnemy(l, type, health);
 		AddDrops(l, a);
 	}
 	// The map's dude spawners (275 on the stock maps), each counted once.
@@ -2165,6 +2168,7 @@ void Remix()
 	double depth = run.maps.Size() > 1 ? double(run.index) / double(run.maps.Size() - 1) : 0.;
 	RemixEnemies(rng, depth);
 	CovenantEnemies();
+	PlanRifts(run.seed, run.index, depth); // rifts.cpp: which zombies come through rifts, as what (its own seeded stream)
 	bool owned[kWeapMax];
 	OwnedGuns(getPlayer(myconnectindex), owned);
 	RemixItems(rng, owned);
@@ -5399,6 +5403,21 @@ void KitChanged()
 	UpdateMenus();
 }
 void CovenantChanged() { UpdateMenus(); }
+
+// The run's side of the rifts (rifts.h): rifts.cpp reads the run only through these.
+bool RiftRunLive() { return run.active && !run.over && !crypt.in; }
+RiftRules RiftRunRules(double depth)
+{
+	RiftRules r;
+	r.blueChance = (kChampionFirst + (kChampionLast - kChampionFirst) * depth) * (1 + run.cov[kChampions]); // as RemixEnemies rolls
+	r.flesh = 1. + 0.15 * run.cov[kFlesh]; // as CovenantEnemies gives it
+	r.championHealth = kChampionHealth;
+	r.redHealth = kRedHealth;
+	r.championSize = kChampionSize;
+	return r;
+}
+void RiftMakeChampion(DBloodActor* a, bool red) { MakeChampion(a, true, red); }
+int RiftThreatCost(int type) { return KindCost(type); }
 
 void TintSprite(DBloodActor* owner, tspritetype* tspr)
 {
