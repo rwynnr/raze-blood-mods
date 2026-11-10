@@ -54,10 +54,14 @@
 // Blood's atom motes circle it), which names both its halves when you come
 // near or walk into it, and is taken with Use. A kill of yours while a boon runs
 // adds time to it (the momentum, below); taking one again adds its whole
-// time (up to three times). They show in the shared chip row, last through a
-// save and load, and end with the map.
+// time (up to three times). They show in the shared chip row, the soonest to
+// end first (five, then "+k"), a boon's filling toward its kill cap, with a
+// quiet beep as one's last 3 s begin, Bloodrush's chip in front and "DMG xN"
+// while their damage factor isn't 1; they last through a save and load, and
+// end with the map. With them on, the centre slot under the map's name shows
+// one line at a time: the curse's title, CLEARED, a tier reached, a Litany.
 //
-// The momentum (rl_omen_weights, rl_rush, rl_fever; each 0 leaves its part as
+// The momentum (rl_omen_weights, rl_rush, rl_fever, rl_cleared; each 0 leaves its part as
 // before). A kill of yours adds boon time by the foe's size (its start health),
 // its champion tier, Bloodrush's tier, Fever and a multi-kill, at most 5 s, a
 // wave enemy half; Death's Grin and Bottomless never gain from kills, Mirror
@@ -69,7 +73,10 @@
 // drop Omens 1 in 12, Ravening (75) raises the 2x caps to 3x. Half of it goes
 // on to the next map, held until an enemy there is alerted to you. Fever, 3
 // boons running at once (4 from a run's halfway map), doubles kill time, runs
-// the boons 25% slower and turns their chips orange.
+// the boons 25% slower and turns their chips orange. Cleared, once a map when
+// 90% of the enemies it started with are dead (waves and spawns don't count),
+// gives every boon 5 s (up to its cap), slides the floor's Omens to you and
+// drops a rare one at your feet.
 //
 // Dying ends the run: a "Run over" screen, then the main menu (no reload).
 // Finishing the last map wins it: "Run complete" at the menu, and the next
@@ -90,14 +97,14 @@
 //   rl_omen list                         the Omens and the gambles, numbered, with what runs now and the drop odds
 //   rl_omen <name|number> [seconds]      grant an Omen (or a gamble) at once, e.g. "rl_omen twin", "rl_omen 9 30" (testing)
 //   rl_omen_drop / rl_reliquary <name|number>  an Omen's pickup / a gamble's cursed reliquary in front of you (testing)
-//   rl_rush [0|1]                        Bloodrush's meter, tier, drain and enemies alerted, and Fever (an argument sets rl_rush)
+//   rl_rush [0|1]                        Bloodrush's meter, tier, drain and enemies alerted, Fever and Cleared (an argument sets rl_rush)
 //   rl_rush_set <0-100>                  set Bloodrush's meter (testing)
 //   rl_unlock <count|all>                set how many of this game's episodes are unlocked (testing)
 //   rl_resetprogress                     lock this game's episodes again; empty the ichor bank and the wins
 //   openmenu RogueliteMenu               the Roguelite menu (it is also on the main menu)
 // CVARs: rl_skill (0-4, set by the menu), rl_elite_pal (the champions' tint, a palette lookup number:
 // 0-14 in Blood, 0 = none), rl_ammo_target (the supplies' target, percent; 0 = no supplies), rl_omens (0: no Omens),
-// rl_omen_weights, rl_rush and rl_fever (the momentum's parts), and the meta progress, kept in the config: rl_progress (per game, since
+// rl_omen_weights, rl_rush, rl_fever and rl_cleared (the momentum's parts), and the meta progress, kept in the config: rl_progress (per game, since
 // Blood and Cryptic Passage share a config: episodes unlocked, the gauntlet won, the run whose saves can
 // still be continued) and, shared by both, rl_ichor, rl_runs, rl_wins.
 //
@@ -154,6 +161,7 @@ CVARD(Bool, rl_omens, true, CVAR_ARCHIVE, "roguelite: the dead drop Omens (timed
 CVARD(Bool, rl_omen_weights, true, CVAR_ARCHIVE, "roguelite: a kill adds boon time by the foe's size, champion tier and streak, up to 5 s, and Death's Grin and Bottomless never gain from kills (0 = 1 s a kill, up to 2x)")
 CVARD(Bool, rl_rush, true, CVAR_ARCHIVE, "roguelite: Bloodrush, a meter your kills fill and fights drain, with tiers Blooded, Savage and Ravening (0 = none)")
 CVARD(Bool, rl_fever, true, CVAR_ARCHIVE, "roguelite: Fever with 3 boons running (4 late in a run): kills add double time and boons run down slower (0 = none)")
+CVARD(Bool, rl_cleared, true, CVAR_ARCHIVE, "roguelite: Cleared, 90% of a map's starting enemies dead: 5 s more on every boon, the floor's Omens slide to you, a rare one drops (0 = none)")
 
 // Meta progress, kept across runs. Blood and Cryptic Passage share a config, so what belongs to one game's episodes
 // is kept per game in rl_progress; the ichor bank and the run counts are shared.
@@ -3092,9 +3100,11 @@ void StackPowerPickup(DBloodActor* item)
 //
 // the momentum (docs/roguelite.md, "Momentum and rifts"): what a kill of
 // yours is worth to the boons running (rl_omen_weights), Bloodrush, a meter
-// your kills fill and fights drain (rl_rush), and Fever, three boons running
-// at once (rl_fever). Each has its own switch, and off it is as before. All
-// of it only in a live run, outside the Crypt.
+// your kills fill and fights drain (rl_rush), Fever, three boons running
+// at once (rl_fever), and Cleared, 90% of the enemies a map started with dead
+// (rl_cleared). Each has its own switch, and off it is as before. All of it
+// only in a live run, outside the Crypt. The centre slot's queue, the boons'
+// warning and the chips' order are the Omens' (rl_omens).
 //
 //---------------------------------------------------------------------------
 
@@ -3142,6 +3152,28 @@ constexpr int kFeverStep = kTicsPerFrame * 3 / 4;
 constexpr uint32_t kFeverChip = 0xffff7a1e;
 constexpr int kFeverSound = 745;
 const int calebKillLines[] = { 734, 735, 736, 737, 738, 739, 740, 741, 3038, 3049 };
+// Cleared (rl_cleared): once a map, when 90% of the enemies it started with are dead (every live enemy as the level
+// starts, after the remix, marked kModOrigin; wave, Dare and spawner enemies come later, and count toward neither the
+// total nor the dead). Every boon running gets 5 s, up to its cap (ToCap: never Death's Grin or Bottomless); every Omen
+// on the floor slides to you (the reliquaries stay); a rare Omen drops at your feet; and "CLEARED" shows in gold in the
+// centre slot, with Tchernobog's third pain cry (TBPAIN3, 2372, 1.35 s, deep): stock code plays only his first two
+// (2370 + Random(2), ai.cpp), and no SEQ, QAV or map-placed sound plays it, nor the mode or chaos. His flock is dead.
+constexpr int kClearedPercent = 90;
+constexpr int kClearedTime = 5 * kClock;
+constexpr int kClearedSound = 2372;
+constexpr double kSlideSpeed = 1024;                 // world units a second: an Omen's slide takes kSlideMin to kSlideMax
+constexpr int kSlideMin = kClock / 4, kSlideMax = kClock;
+// The chips (rl_omens): the Omens' soonest to end first, at most kChipLimit of them, then a "+k" chip; Bloodrush's chip
+// at the front (its tier, the meter its fill; dimmed while held), and "DMG xN" while the Omens' damage factor isn't 1,
+// both outside the limit. A boon's fill measures toward its kill cap (full: kills add nothing more). 3 s before a boon
+// ends, as its chip starts to blink, a quiet PING (284, 1.0 s: a bright beep that dies away), which no stock code, SEQ,
+// QAV or map-placed sound plays, nor the mode or chaos; once a tic at most, and half a second apart.
+constexpr int kChipLimit = 5;
+constexpr uint32_t kRushChip = 0xffd4202c, kDamageChip = 0xffe8e8e8;
+constexpr double kRushHeldAlpha = 0.6;
+constexpr int kBoonWarning = 3 * kClock;             // as the chip's blink
+constexpr int kBoonWarnSound = 284, kBoonWarnVolume = 40; // Blood's volume scale (80 a sound's usual; PING's own is 150)
+constexpr int kBoonWarnGap = kClock / 2;
 
 // The momentum's part of the run: saved (SerializeMomentum), and started afresh with each new run (Mo).
 struct Momentum
@@ -3149,6 +3181,8 @@ struct Momentum
 	int runId = 0;     // the run it belongs to
 	double rush = 0;   // Bloodrush, 0-100
 	bool held = false; // carried from the last map: held as it is until an enemy there is alerted to you
+	int clearStart = 0;     // Cleared: the enemies this map started with (kModOrigin), 0: none counted (it can't come)
+	bool clearDone = false; // Cleared came on this map
 };
 Momentum mo;
 // Not saved: a level start and a load set them afresh.
@@ -3173,20 +3207,69 @@ bool MomentumLive() { return run.active && !run.over && !crypt.in; }
 bool RushLive() { return rl_rush && MomentumLive(); }
 double RunDepth() { return run.maps.Size() > 1 ? double(run.index) / double(run.maps.Size() - 1) : 0.; } // as Remix has it
 
-// The centre slot, under the map's name, where the curse and the Litanies announce themselves. The momentum's line shows
-// one at a time, the newest, and gives way to the curse's title. (Part M1b orders every line through a queue, curse
-// title > CLEARED > tier reached > Litany, in place of this; the priorities below are its.)
+// The centre slot, under the map's name, where the curse, CLEARED, a tier reached and the Litanies announce themselves.
+// With the Omens on (rl_omens: the chip fixes) one line shows at a time, by priority: the curse's title > CLEARED > a
+// tier reached > a Litany. A higher line replaces a lower one at once (the lower one is dropped); the others wait, at
+// most kCentreWaiting of them, each dropped once it has waited kCentreWait. With the Omens off it's as before: the
+// curse's and the Litany's titles in their own places (DrawCurseTitle, DrawLitanyTitle), and the momentum's newest line
+// (Ravening reached) where the curse's goes, giving way to it.
 enum { kCentreLitany, kCentreTier, kCentreCleared, kCentreCurse };
 constexpr int kCentreTime = 2 * kClock;              // as long as a Litany's title
-struct CentreLine { FString text; int color = CR_GOLD; int priority = kCentreLitany; int at = INT_MIN / 2; };
-CentreLine centreLine;
-
-void ShowCentre(int priority, const char* text, int color)
+constexpr int kCentreWaiting = 2, kCentreWait = 3 * kClock;
+struct CentreLine
 {
-	centreLine.text = text;
-	centreLine.color = color;
-	centreLine.priority = priority;
-	centreLine.at = PlayClock;
+	FString text, sub;          // sub: a SmallFont line under it (the curse's "for the whole level")
+	int color = CR_GOLD;
+	bool big = true;            // BigFont, else SmallFont (a Litany)
+	int priority = kCentreLitany;
+	int at = INT_MIN / 2;       // PlayClock as it began to show, or (waiting) to wait
+	int length = kCentreTime;
+};
+CentreLine centreNow;              // the line showing (no text: none)
+TArray<CentreLine> centreWaiting;  // the highest priority first, and the oldest first within one
+CentreLine centreLast;             // the momentum's newest line, as it shows with the Omens off
+
+bool CentreQueued() { return OmensLive(); }
+
+// The line showing ends, and lines that have waited too long are dropped; then the next waiting one shows.
+void CentreAdvance()
+{
+	for (int i = int(centreWaiting.Size()) - 1; i >= 0; i--)
+	{
+		int waited = PlayClock - centreWaiting[i].at;
+		if (waited < 0 || waited >= kCentreWait) centreWaiting.Delete(i);
+	}
+	int age = PlayClock - centreNow.at;
+	if (centreNow.text.IsNotEmpty() && (age < 0 || age >= centreNow.length)) centreNow = CentreLine();
+	if (centreNow.text.IsEmpty() && centreWaiting.Size())
+	{
+		centreNow = centreWaiting[0];
+		centreNow.at = PlayClock;
+		centreWaiting.Delete(0);
+	}
+}
+
+void ShowCentre(int priority, const char* text, int color, bool big = true, int length = kCentreTime, const char* sub = nullptr)
+{
+	CentreLine line;
+	line.text = text;
+	if (sub) line.sub = sub;
+	line.color = color;
+	line.big = big;
+	line.priority = priority;
+	line.at = PlayClock;
+	line.length = length;
+	if (priority == kCentreTier || priority == kCentreCleared) centreLast = line;
+	CentreAdvance();
+	if (centreNow.text.IsEmpty() || priority > centreNow.priority)
+	{
+		centreNow = line;
+		return;
+	}
+	unsigned k = 0;
+	while (k < centreWaiting.Size() && centreWaiting[k].priority >= priority) k++;
+	centreWaiting.Insert(k, line);
+	if (centreWaiting.Size() > kCentreWaiting) centreWaiting.Delete(centreWaiting.Size() - 1); // the lowest, newest
 }
 
 bool CurseTitleShowing()
@@ -3195,16 +3278,37 @@ bool CurseTitleShowing()
 	return CurseEffect() && age >= 0 && age < kCurseTitle;
 }
 
-// In the 320x200 space the map's name uses, where the curse's title goes, in BigFont, fading over its last half second.
+// A level start or a load: the slot empties, and the curse's title as the map starts (a load doesn't announce it again)
+// takes it, for as long as DrawCurseTitle shows it.
+void CentreRestart()
+{
+	centreNow = CentreLine();
+	centreWaiting.Clear();
+	centreLast = CentreLine();
+	if (!CurseTitleShowing()) return;
+	ShowCentre(kCentreCurse, FStringf("Curse: %s", bmod::EffectTitle(CurseEffect())).GetChars(), CR_RED, true, kCurseTitle,
+		"for the whole level");
+	centreNow.at = run.curseClock;
+}
+
+// In the 320x200 space the map's name uses, just under it, where the curse's title goes, fading over its last half
+// second: the queue's line (BigFont, or a Litany's SmallFont), or with the Omens off the momentum's (BigFont).
 void DrawCentreLine()
 {
-	int age = PlayClock - centreLine.at;
-	if (centreLine.text.IsEmpty() || age < 0 || age >= kCentreTime || CurseTitleShowing()) return;
-	double alpha = std::clamp((kCentreTime - age) / (0.5 * kClock), 0., 1.);
-	double w = BigFont->StringWidth(centreLine.text.GetChars());
+	bool queued = CentreQueued();
+	const CentreLine& l = queued ? centreNow : centreLast;
+	int age = PlayClock - l.at;
+	if (l.text.IsEmpty() || age < 0 || age >= l.length || (!queued && CurseTitleShowing())) return;
+	double alpha = std::clamp((l.length - age) / (0.5 * kClock), 0., 1.);
+	FFont* font = l.big ? BigFont : SmallFont;
+	double w = font->StringWidth(l.text.GetChars());
 	double s = w > 300 ? 300 / w : 1.;
-	DrawText(twod, BigFont, centreLine.color, 160 - w * s / 2, 50 + BigFont->GetHeight() + 6, centreLine.text.GetChars(),
-		DTA_FullscreenScale, FSMode_Fit320x200, DTA_ScaleX, s, DTA_ScaleY, s, DTA_Alpha, alpha, TAG_DONE);
+	double y = 50 + BigFont->GetHeight() + 6;
+	DrawText(twod, font, l.color, 160 - w * s / 2, y, l.text.GetChars(), DTA_FullscreenScale, FSMode_Fit320x200,
+		DTA_ScaleX, s, DTA_ScaleY, s, DTA_Alpha, alpha, TAG_DONE);
+	if (l.sub.IsNotEmpty())
+		DrawText(twod, SmallFont, CR_GRAY, 160 - SmallFont->StringWidth(l.sub.GetChars()) / 2., y + font->GetHeight() * s + 3,
+			l.sub.GetChars(), DTA_FullscreenScale, FSMode_Fit320x200, DTA_Alpha, alpha, TAG_DONE);
 }
 
 // A prone or burning kind counts as the kind standing (every cultist burns as one kind; all weigh 40), a buried or laying
@@ -3404,17 +3508,31 @@ void FeverEntered()
 	sfxPlay3DSound(pl, calebKillLines[rand() % countof(calebKillLines)], 0, FX_SoundMatch);
 }
 
+// A boon's last 3 s begin (its chip blinks): the quiet warning (kBoonWarnSound), once a tic at most, half a second apart.
+int boonWarnedAt = INT_MIN / 2;
+
+void BoonWarning(DBloodPlayer* p)
+{
+	if (PlayClock >= boonWarnedAt && PlayClock - boonWarnedAt < kBoonWarnGap) return;
+	boonWarnedAt = PlayClock;
+	if (p && p->GetActor()) sfxPlay3DSoundVolume(p->GetActor(), kBoonWarnSound, -1, 0, -1, kBoonWarnVolume);
+}
+
 // An Omen's clock this tic (from OmenTick): a boon's runs 25% slower in Fever. Its stock powerup's timer, which Blood's
 // powerupProcess ran down by a whole tic just before, gets back what the Omen's own time didn't lose (on its last tic
 // too), so the two stay in step and a map's own powerup time on that timer never changes. Without Fever an Omen's time
-// stays whole tics (grants, kill time and the caps are), so nothing ever comes back, as before.
+// stays whole tics (grants, kill time and the caps are), so nothing ever comes back, as before. A boon running down into
+// its last 3 s sounds the warning.
 void RunDown(RunningOmen& r, DBloodPlayer* p, bool fever)
 {
-	int step = fever && omenInfo[r.id].tier != kOmenGamble ? kFeverStep : kTicsPerFrame;
+	bool boon = omenInfo[r.id].tier != kOmenGamble;
+	int step = fever && boon ? kFeverStep : kTicsPerFrame;
 	int spent = std::clamp(r.left, 0, step);
+	bool warned = r.left <= kBoonWarning;
 	r.left -= step;
 	int n = omenInfo[r.id].powerup;
 	if (n >= 0 && spent < kTicsPerFrame && p->pwUpTime[n] > 0) p->pwUpTime[n] += kTicsPerFrame - spent;
+	if (boon && !warned && r.left <= kBoonWarning && r.left > 0) BoonWarning(p);
 }
 
 // A kill of yours (from the Kill event): time on the boons running, then Bloodrush's fill (so this kill's time has the
@@ -3431,7 +3549,125 @@ void YourKill(DBloodActor* victim)
 	RushChanged();
 }
 
-// Each tic, after the Omens': the alert scan and Bloodrush's drain, then Fever's entry.
+// Cleared, as the level starts (after the remix): every live enemy is marked as the map's own, and counted.
+void ClearedStart()
+{
+	auto& m = Mo();
+	m.clearStart = 0;
+	m.clearDone = false;
+	if (!rl_cleared || !MomentumLive()) return;
+	BloodStatIterator it(kStatDude);
+	while (auto a = it.Next())
+	{
+		if (a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || !AllowedKillType(a)) continue; // as the ammo ledger counts
+		a->modFlags |= kModOrigin;
+		m.clearStart++;
+	}
+}
+
+// The map's own enemies (kModOrigin) still alive: a burning one, a two-headed Cerberus losing a head (at 0 health until
+// it rises with one, in place: actProcessSprites), a zombie a rift is bringing through (retyped in place) are; one that
+// died (a thing now, or gone) isn't.
+int OriginAlive()
+{
+	int n = 0;
+	BloodStatIterator it(kStatDude);
+	while (auto a = it.Next())
+		if ((a->modFlags & kModOrigin) && !a->IsPlayerActor() && a->hasX() && (a->xspr.health > 0 || a->spr.type == kDudeCerberusTwoHead))
+			n++;
+	return n;
+}
+
+// The Omens Cleared pulls in, sliding along the floor (through walls too) to you in kSlideMin-kSlideMax, following you;
+// the stock pickup takes each as you meet (or it waits at your feet, as one does that can't take hold now). Not saved:
+// after a load an Omen lies where its slide had got to. Compared, never followed: matched each tic among the items.
+struct OmenSlide { DBloodActor* item; DVector2 from; int at, length; double lift; };
+TArray<OmenSlide> slides;
+
+void PullOmens(DBloodActor* pl)
+{
+	BloodStatIterator it(kStatItem);
+	while (auto a = it.Next())
+	{
+		if (!IsOmenItem(a) || omenInfo[a->xspr.data1].tier == kOmenGamble || (a->spr.flags & 32) || !a->insector()) continue;
+		double top, bottom;
+		GetActorExtents(a, &top, &bottom);
+		double dist = (a->spr.pos.XY() - pl->spr.pos.XY()).Length();
+		int length = std::clamp(int(dist / kSlideSpeed * kClock), kSlideMin, kSlideMax);
+		slides.Push({ a, a->spr.pos.XY(), PlayClock, length, a->spr.pos.Z - bottom });
+	}
+}
+
+void SlideTick()
+{
+	if (!slides.Size()) return;
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !pl->insector() || !OmensLive())
+	{
+		slides.Clear();
+		return;
+	}
+	TArray<DBloodActor*> live; // the slides' Omens still on the floor
+	BloodStatIterator it(kStatItem);
+	while (auto a = it.Next())
+		for (auto& s : slides)
+			if (s.item == a && IsOmenItem(a) && !(a->spr.flags & 32) && a->insector()) live.Push(a);
+	for (int i = int(slides.Size()) - 1; i >= 0; i--)
+	{
+		auto& s = slides[i];
+		auto item = s.item;
+		if (live.Find(item) >= live.Size())
+		{
+			slides.Delete(i); // taken, or gone
+			continue;
+		}
+		double t = std::clamp(double(PlayClock - s.at) / s.length, 0., 1.);
+		bool there = t >= 1;
+		t = t * t * (3 - 2 * t);
+		DVector2 xy = there ? pl->spr.pos.XY() : s.from + (pl->spr.pos.XY() - s.from) * t;
+		sectortype* sect = there ? pl->sector() : item->sector();
+		if (!there) updatesector(xy, &sect);
+		if (sect) // inside a wall (in no sector): it stays a tic, and catches up
+		{
+			viewBackupSpriteLoc(item);
+			if (sect != item->sector()) ChangeActorSect(item, sect);
+			item->spr.pos = DVector3(xy, getflorzofslopeptr(sect, xy.X, xy.Y) + s.lift);
+			item->basePoint = item->spr.pos;
+		}
+		if (there) slides.Delete(i);
+	}
+}
+
+// Cleared comes: time on the boons, the floor's Omens pulled in, a rare Omen at your feet (the run's roll: its seed and
+// the map, so a reload rolls the same), the word and its sound.
+void Cleared(DBloodPlayer* p)
+{
+	auto pl = p->GetActor();
+	ExtendToCap(kClearedTime);
+	PullOmens(pl);
+	std::mt19937 rng(run.seed ^ (0x9E3779B9u * uint32_t(run.index + 1)) ^ 0x3C6EF372u);
+	int id = PickOmen(rng, kOmenRare);
+	if (id >= 0) SpawnOmenItem(pl->sector(), pl->spr.pos.XY(), id);
+	sfxPlay3DSound(pl, kClearedSound, -1, 0);
+	ShowCentre(kCentreCleared, "CLEARED", CR_GOLD);
+}
+
+// Each tic: the slides, then whether Cleared comes (once a map, with the Omens on).
+void ClearedTick()
+{
+	SlideTick();
+	auto& m = Mo();
+	if (!rl_cleared || !OmensLive() || m.clearDone || m.clearStart <= 0) return;
+	auto p = getPlayer(myconnectindex);
+	if (!p || !p->GetActor() || !p->GetActor()->insector() || p->GetActor()->xspr.health <= 0) return;
+	int dead = m.clearStart - OriginAlive();
+	if (dead * 100 < m.clearStart * kClearedPercent) return;
+	m.clearDone = true;
+	Cleared(p);
+}
+
+// Each tic, after the Omens': the alert scan and Bloodrush's drain, then Fever's entry, the centre slot, and Cleared.
 void MomentumTick()
 {
 	if (!MomentumLive()) return;
@@ -3456,17 +3692,22 @@ void MomentumTick()
 	bool fever = FeverOn();
 	if (fever && !feverWas) FeverEntered();
 	feverWas = fever;
+	CentreAdvance();
+	ClearedTick();
 }
 
 // A level start or a load: no kill is recent (PlayClock starts again, or is the save's), nothing is alerted until the
-// first scan, and the meter's tier and Fever stand as they are, uncued.
+// first scan, and the meter's tier and Fever stand as they are, uncued. The centre slot starts afresh (with the curse's
+// title as a map starts), no Omen slides, and no boon has just been warned of.
 void MomentumRestart()
 {
 	lastKillAt = INT_MIN / 2;
 	alerted = 0;
 	alertScanIn = 0;
 	for (auto& at : rushCuedAt) at = INT_MIN / 2;
-	centreLine = CentreLine();
+	CentreRestart();
+	slides.Clear();
+	boonWarnedAt = INT_MIN / 2;
 	rushTier = TierOf(Mo().rush);
 	feverWas = FeverOn();
 }
@@ -3480,11 +3721,14 @@ void MomentumLevelEnd()
 	m.held = m.rush > 0;
 }
 
-// The momentum's keys in the run's save block, written and read alike (an older save has none: the meter is empty).
+// The momentum's keys in the run's save block, written and read alike (an older save has none: the meter is empty, and
+// that map has no start count, so Cleared can't come on it).
 void SerializeMomentum(FSerializer& arc, Momentum& m)
 {
 	arc("rush", m.rush)
-		("rushheld", m.held);
+		("rushheld", m.held)
+		("clearstart", m.clearStart)
+		("cleardone", m.clearDone);
 }
 
 // A loaded save's momentum, once its run is the run.
@@ -3493,6 +3737,7 @@ void MomentumFromSave(const Momentum& m)
 	mo = m;
 	mo.runId = run.id;
 	mo.rush = mo.rush >= 0 ? std::min(mo.rush, kRushMax) : 0; // not a number: 0 too
+	mo.clearStart = std::max(mo.clearStart, 0);
 }
 
 //---------------------------------------------------------------------------
@@ -3515,6 +3760,7 @@ void OnEvent(const bmod::EventInfo& ev)
 		else crypt.in = false;
 		LevelStarted();
 		MomentumRestart(); // after the run's checks: a map warp leaves the run, and its meter
+		ClearedStart(); // after the remix: the enemies the map starts with
 		break;
 	case bmod::Event::SaveLoaded:
 		LitaniesLoaded();
@@ -3681,12 +3927,50 @@ void DrawLitanyTitle()
 		DTA_Alpha, alpha, TAG_DONE);
 }
 
-// The Omens' chips in the shared row, oldest first (gold a boon, purple a gamble, blinking their last 3 s). The map's
-// curse is on the run line, but "No HUD" (chaos's, or the curse itself) hides that: then, with the Omens on (rl_omens),
-// it's a red chip first, with no countdown (while it runs: one a chaos rival holds off isn't). And the cursed reliquary
-// you face, named where the Crypt's prompts go: even under "No HUD", as it's how you choose whether to take one.
+// The damage the Omens give your hits on foes: Fury's and Frenzy's factor (OmenDeal), and Glass Cannon's, which is its
+// base effect's (bmod::mods.damageDealtScale while it runs).
+double OmenDamage()
+{
+	double f = OmenDeal();
+	if (!OmensLive()) return f;
+	auto glass = bmod::FindEffect("glasscannon");
+	for (auto& r : omens)
+		if (glass && OmenEffect(r.id) == glass && bmod::IsActive(glass))
+		{
+			f *= bmod::mods.damageDealtScale;
+			break;
+		}
+	return f;
+}
+
+// A boon's chip fills toward its kill cap (full: kills add no more); one kills never feed (Death's Grin, Bottomless, a
+// gamble) by the most time it has had.
+double OmenFill(const RunningOmen& r)
+{
+	int cap = KillCap(r);
+	int top = cap > 0 ? std::max(cap, r.left) : std::max({ r.base, r.peak, 1 });
+	return double(r.left) / std::max(top, 1);
+}
+
+// The Omens' chips in the shared row (gold a boon, orange in Fever, purple a gamble, blinking their last 3 s), the
+// soonest to end first, at most kChipLimit, then "+k" for the rest. In front of them, outside the limit: Bloodrush's
+// chip (rl_rush; its tier, the meter its fill, dimmed while held), the map's curse, and "DMG xN". The curse is on the
+// run line, but "No HUD" (chaos's, or the curse itself) hides that: then, with the Omens on (rl_omens), it's a red chip,
+// with no countdown (while it runs: one a chaos rival holds off isn't). Chaos's chips are its own drawer's, in their
+// place in the row. And the cursed reliquary you face, named where the Crypt's prompts go: even under "No HUD", as it's
+// how you choose whether to take one.
 void DrawOmens()
 {
+	if (OmensLive() && RushLive() && Mo().rush > 0)
+	{
+		bmod::Chip c;
+		int tier = TierOf(Mo().rush);
+		c.text = tier > kTierNone ? rushTierNames[tier] : "Bloodrush";
+		c.color = PalEntry(kRushChip);
+		c.frac = Mo().rush / kRushMax;
+		c.alpha = Mo().held ? kRushHeldAlpha : 1.;
+		bmod::AddChip(c);
+	}
 	auto curse = CurseEffect();
 	if (bmod::mods.hideHud && OmensLive() && curse && bmod::IsActive(curse))
 	{
@@ -3695,14 +3979,36 @@ void DrawOmens()
 		c.color = PalEntry(kCurseChip);
 		bmod::AddChip(c);
 	}
-	for (auto& r : omens)
+	double damage = OmenDamage();
+	if (OmensLive() && damage != 1)
 	{
+		bmod::Chip c;
+		c.text.Format("DMG x%g", damage);
+		c.color = PalEntry(kDamageChip);
+		c.frac = 0;
+		bmod::AddChip(c);
+	}
+	TArray<const RunningOmen*> order;
+	for (auto& r : omens) order.Push(&r);
+	std::stable_sort(order.begin(), order.end(), [](const RunningOmen* a, const RunningOmen* b) { return a->left < b->left; });
+	unsigned shown = std::min(order.Size(), unsigned(kChipLimit));
+	for (unsigned i = 0; i < shown; i++)
+	{
+		auto& r = *order[i];
 		auto& o = omenInfo[r.id];
 		bmod::Chip c;
 		c.text.Format("%s %ds", o.name, bmod::SecondsLeft(r.left));
 		c.color = o.tier == kOmenGamble ? PalEntry(kGambleChip) : BoonChip(); // a boon's gold, orange in Fever
-		c.frac = double(r.left) / std::max({ r.base, r.peak, 1 });
-		c.alpha = r.left <= 3 * kClock && (PlayClock / 15) % 2 ? 0.3 : 1.;
+		c.frac = OmenFill(r);
+		c.alpha = r.left <= kBoonWarning && (PlayClock / 15) % 2 ? 0.3 : 1.;
+		bmod::AddChip(c);
+	}
+	if (order.Size() > shown)
+	{
+		bmod::Chip c;
+		c.text.Format("+%u", order.Size() - shown);
+		c.color = BoonChip();
+		c.frac = 0;
 		bmod::AddChip(c);
 	}
 	if (reliquaryHint.IsEmpty()) return;
@@ -3816,9 +4122,12 @@ void OnDraw(DBloodPlayer* pPlayer)
 		DrawRunOver(pPlayer, sc);
 		return;
 	}
-	DrawCurseTitle(); // even under the "No HUD" curse, which must announce itself too
-	DrawLitanyTitle();
-	DrawCentreLine(); // the momentum's (Ravening reached)
+	if (!CentreQueued()) // with the Omens off, as before; else they're the centre slot's queue's
+	{
+		DrawCurseTitle(); // even under the "No HUD" curse, which must announce itself too
+		DrawLitanyTitle();
+	}
+	DrawCentreLine(); // the centre slot (the curse's title, CLEARED, a tier reached, a Litany), under "No HUD" too
 	DrawOmens(); // the chip row isn't the HUD: chaos's chips show under "No HUD" too
 	if (bmod::mods.hideHud) return; // the "No HUD" effect hides the run line
 	DrawRunLine(sc);
@@ -4721,6 +5030,7 @@ static void LitanyFired(int k)
 	litanyFired |= 1u << k;
 	litanyShown = k;
 	litanyShownAt = PlayClock;
+	ShowCentre(kCentreLitany, FStringf("Litany: %s", litanies[k].name).GetChars(), CR_GOLD, false, kLitanyTitle); // the queue's (rl_omens)
 	Printf(PRINT_NOTIFY, "Litany: %s\n", litanies[k].name);
 }
 
@@ -6446,6 +6756,13 @@ CCMD(rl_rush)
 	Printf("  kill time x%g, a plain enemy's Omen 1 in %d, the 2x kill caps %s; rl_omen_weights %d\n", TierFactor(),
 		int(1 / PlainOmenChance() + 0.5), RushTier() >= kTierRavening ? "at 3x" : "as they are", (int)rl_omen_weights);
 	Printf("rl_fever %d: Fever %s, %d of %d boons running\n", (int)rl_fever, FeverOn() ? "on" : "off", BoonsRunning(), FeverNeed());
+	if (m.clearStart <= 0) Printf("rl_cleared %d: Cleared: no start count on this map (it can't come here)\n", (int)rl_cleared);
+	else
+	{
+		int dead = m.clearStart - OriginAlive(), need = (m.clearStart * kClearedPercent + 99) / 100;
+		Printf("rl_cleared %d: Cleared %s: %d of the %d enemies the map started with dead, %d needed\n", (int)rl_cleared,
+			m.clearDone ? "came" : "not yet", dead, m.clearStart, need);
+	}
 }
 
 CCMD(rl_rush_set)

@@ -2196,6 +2196,7 @@ OptionMenu "RogueliteMenu" protected
 	Option "Kill weights: big kills, more boon time",	"rl_omen_weights", "OnOff"
 	Option "Bloodrush: a meter your kills fill",	"rl_rush", "OnOff"
 	Option "Fever: three boons at once",	"rl_fever", "OnOff"
+	Option "Cleared: a map's foes dead, a reward",	"rl_cleared", "OnOff"
 	StaticText ""
 }
 

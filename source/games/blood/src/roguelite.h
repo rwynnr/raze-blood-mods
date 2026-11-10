@@ -39,8 +39,11 @@ namespace rogue
 	// - kModWave (16): on a dude, a wave enemy (SpawnWave's; set in WaveSpawned, kept through RetypeDude, burning and
 	//   death): it counts half toward the momentum. Every reader of kModOffspring (16, 32) checks kModForged first, which
 	//   no dude ever carries.
+	// - kModOrigin (2): on a dude, one of the enemies the map started with (Cleared counts them; set as the level starts,
+	//   after the remix, kept through RetypeDude, the rifts, burning and death). kModBigPickup's readers (ActorAmmo,
+	//   TakePickup, PickupTaken) look at ammo and weapon items only, and no dude becomes an item.
 	enum { kModChampion = 1, kModBigPickup = 2, kModRedChampion = 4, kModForged = 8, kModOffspring = 48, kModBloodBought = 64, kModKicked = 128 };
-	enum { kModSpareYou = kModBloodBought, kModPyreMark = kModKicked, kModOmen = kModForged, kModWave = 16 };
+	enum { kModSpareYou = kModBloodBought, kModPyreMark = kModKicked, kModOmen = kModForged, kModWave = 16, kModOrigin = kModBigPickup };
 
 	MapRecord* NextLevel(MapRecord* stockNext);                            // levelEndLevel: a run picks its own next map (null: the run is won)
 	bool OnDeathRestart();                                                 // playerProcess, Use while dead in single player: true = handled
