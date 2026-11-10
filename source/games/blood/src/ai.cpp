@@ -911,7 +911,7 @@ void aiSetTarget(DBloodActor* actor, const DVector3& pos)
 
 void aiSetTarget(DBloodActor* actor, DBloodActor* target)
 {
-	if (target && rogue::IsRift(actor)) return; // blood2d roguelite: a waiting rift takes no foe (rifts.cpp)
+	if (target && (rogue::IsRift(actor) || rogue::IsRift(target))) return; // blood2d roguelite: a waiting rift takes no foe, nor is one (rifts.cpp)
 	if (target == nullptr)
 	{
 		actor->SetTarget(nullptr);

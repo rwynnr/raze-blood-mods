@@ -188,8 +188,11 @@ double ArrivalHealth(DBloodActor* a, int type, bool tier)
 	return std::max(health, 16.);
 }
 
+bool Rooted(DBloodActor* d);
+bool InTheWay(DBloodActor* other, const DVector2& spot, double fz, double clip, double height);
+
 // It fits where the zombie lies: dry floor, headroom over its height, elbow room around it (the base's wave spots'
-// tests, bloodmod.cpp FindWaveSpot: four rays of 1.5x its clipdist, from its middle).
+// tests, bloodmod.cpp FindWaveSpot: four rays of 1.5x its clipdist, from its middle), and no rooted dude in its spot.
 bool Fits(DBloodActor* a, int type, double height)
 {
 	auto sect = a->sector();
@@ -207,6 +210,10 @@ bool Fits(DBloodActor* a, int type, double height)
 		updatesector(e, &es);
 		if (!es || !cansee(mid, sect, DVector3(e, mid.Z), es)) return false;
 	}
+	double clip = getDudeInfo(type)->fClipdist();
+	BloodStatIterator it(kStatDude);
+	while (auto d = it.Next())
+		if (d != a && Rooted(d) && InTheWay(d, p, fz, clip, height)) return false;
 	return true;
 }
 
@@ -217,9 +224,38 @@ DBloodActor* LivePlayer()
 	return pl && pl->hasX() && pl->xspr.health > 0 && pl->insector() ? pl : nullptr;
 }
 
-// Nothing holds the arrival: nobody stands where it would be (you, or a solid foe, within both clipdists and a margin,
-// at its height: a sleeping zombie, a waiting rift or a phantasm between attacks isn't solid), you aren't inside its
-// melee reach, and you aren't near it and facing away (or with it out of sight).
+// A dude that never leaves its spot: a gargoyle statue (until the map's wiring wakes it, as a gargoyle), a pod, a
+// tentacle. A rift held by one would wait for ever, so the plan keeps a zombie beside one a zombie, and the hold
+// doesn't wait on one (a wave's spot beside one: it arrives there, as SpawnWave's stock enemy would).
+bool Rooted(DBloodActor* d)
+{
+	switch (d->spr.type)
+	{
+	case kDudeGargoyleStatueFlesh: case kDudeGargoyleStatueStone:
+	case kDudePodGreen: case kDudePodFire: case kDudePodMother:
+	case kDudeTentacleGreen: case kDudeTentacleFire: case kDudeTentacleMother:
+		return true;
+	default:
+		return false;
+	}
+}
+
+// other is a live, solid body (you, or a foe that blocks: a sleeping zombie, a waiting rift or a phantasm between
+// attacks doesn't) standing where an arrival of this clipdist and height would be, at spot on the floor fz: within
+// both clipdists and a margin, and not over it or under it.
+bool InTheWay(DBloodActor* other, const DVector2& spot, double fz, double clip, double height)
+{
+	if (!other->hasX() || other->xspr.health <= 0 || (other->spr.flags & 32)) return false;
+	if (!other->IsPlayerActor() && !(other->spr.cstat & (CSTAT_SPRITE_BLOCK | CSTAT_SPRITE_BLOCK_HITSCAN))) return false;
+	double r = clip + other->clipdist + kMargin;
+	if ((other->spr.pos.XY() - spot).LengthSquared() >= r * r) return false;
+	double top, bottom;
+	GetActorExtents(other, &top, &bottom);
+	return bottom > fz - height && top < fz;
+}
+
+// Nothing holds the arrival: nobody stands where it would be (InTheWay; a rooted dude doesn't count, it would hold it
+// for ever), you aren't inside its melee reach, and you aren't near it and facing away (or with it out of sight).
 bool NothingHolds(DBloodActor* a)
 {
 	int type = PlanType(a->riftPlan);
@@ -231,16 +267,7 @@ bool NothingHolds(DBloodActor* a)
 	double clip = getDudeInfo(type)->fClipdist();
 	BloodStatIterator it(kStatDude);
 	while (auto other = it.Next())
-	{
-		if (other == a || !other->hasX() || other->xspr.health <= 0 || (other->spr.flags & 32)) continue;
-		if (!other->IsPlayerActor() && !(other->spr.cstat & (CSTAT_SPRITE_BLOCK | CSTAT_SPRITE_BLOCK_HITSCAN))) continue;
-		double r = clip + other->clipdist + kMargin;
-		if ((other->spr.pos.XY() - spot).LengthSquared() >= r * r) continue;
-		double top, bottom;
-		GetActorExtents(other, &top, &bottom);
-		if (bottom <= fz - height || top >= fz) continue; // over it or under it
-		return false;
-	}
+		if (other != a && !Rooted(other) && InTheWay(other, spot, fz, clip, height)) return false;
 	auto pl = LivePlayer();
 	if (!pl) return true;
 	DVector2 to = spot - pl->spr.pos.XY();

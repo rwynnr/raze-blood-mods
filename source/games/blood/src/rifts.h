@@ -27,8 +27,8 @@ namespace rogue
 	bool RiftSteady(DBloodActor* actor);                                   // RecoilDude, aiDamageSprite: true = a rift, or an arrival in its first 0.5 s: a hit
 	                                                                       // takes health and nothing more (no flinch, new target, wake, dodge or chase)
 	void RiftSprite(DBloodActor* owner, tspritetype* tspr);                // viewProcessSprites, a dude: an arrival fades in
-	// IsRift (below) is a hook too: aiActivateDude and aiSetTarget (a waiting rift doesn't wake, nor take a foe), the
-	// proximity triggers (it sets off nothing), Tchernobog's aim (it never bends to one).
+	// IsRift (below) is a hook too: aiActivateDude and aiSetTarget (a waiting rift doesn't wake, takes no foe and is
+	// no one's), the proximity triggers (it sets off nothing), Tchernobog's aim (it never bends to one).
 
 	// Called by the roguelite (roguelite.cpp).
 	void PlanRifts(uint32_t seed, int mapIndex, double depth);             // Remix: which zombies come through rifts, as what (its own random stream)
