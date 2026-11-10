@@ -2197,6 +2197,8 @@ OptionMenu "RogueliteMenu" protected
 	Option "Bloodrush: a meter your kills fill",	"rl_rush", "OnOff"
 	Option "Fever: three boons at once",	"rl_fever", "OnOff"
 	Option "Cleared: a map's foes dead, a reward",	"rl_cleared", "OnOff"
+	Option "Resupply: close, burning and multi-kills pay",	"rl_resupply", "OnOff"
+	Option "Stats: a line per map, to rl_stats.csv",	"rl_stats", "OnOff"
 	StaticText ""
 }
 

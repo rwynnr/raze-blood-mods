@@ -61,8 +61,8 @@
 // end with the map. With them on, the centre slot under the map's name shows
 // one line at a time: the curse's title, CLEARED, a tier reached, a Litany.
 //
-// The momentum (rl_omen_weights, rl_rush, rl_fever, rl_cleared; each 0 leaves its part as
-// before). A kill of yours adds boon time by the foe's size (its start health),
+// The momentum (rl_omen_weights, rl_rush, rl_fever, rl_cleared, rl_resupply; each 0 leaves its
+// part as before). A kill of yours adds boon time by the foe's size (its start health),
 // its champion tier, Bloodrush's tier, Fever and a multi-kill, at most 5 s, a
 // wave enemy half; Death's Grin and Bottomless never gain from kills, Mirror
 // Skin stops at 1.5x its time and the rest at 2x (without rl_omen_weights:
@@ -76,7 +76,13 @@
 // the boons 25% slower and turns their chips orange. Cleared, once a map when
 // 90% of the enemies it started with are dead (waves and spawns don't count),
 // gives every boon 5 s (up to its cap), slides the floor's Omens to you and
-// drops a rare one at your feet.
+// drops a rare one at your feet. Kill resupply (rl_resupply): a kill of yours
+// within 96 units of a foe that isn't fodder drops a Life Essence (one drop
+// every 2 s at most; two under 40 health), a burning one gives 5 body and 5
+// fire armour, and two or more in one tic drop a pickup of the ammo your gun
+// fires, at the last body. The stats line (rl_stats): at each map's exit, or
+// a death, one line of what the map's play measured, at the console and
+// appended to rl_stats.csv next to raze.exe.
 //
 // Dying ends the run: a "Run over" screen, then the main menu (no reload).
 // Finishing the last map wins it: "Run complete" at the menu, and the next
@@ -88,6 +94,8 @@
 //
 // Console:
 //   rl_newrun <episode|gauntlet> [seed]  start a run (episode = 1..N in the game's own list) at rl_skill
+//   rl_startat <map> [seed] [episode|gauntlet]  a run from map N of its order, with the kit only (testing a late map;
+//                                        the episode: the run in progress's, else the first)
 //   rl_status                            the run in progress and the meta progress
 //   rl_clearmap                          end the run's current map as cleared, as if its exit was used
 //   rl_ammo                              this map's ammo: what its enemies take, what you have, the supplies
@@ -104,7 +112,8 @@
 //   openmenu RogueliteMenu               the Roguelite menu (it is also on the main menu)
 // CVARs: rl_skill (0-4, set by the menu), rl_elite_pal (the champions' tint, a palette lookup number:
 // 0-14 in Blood, 0 = none), rl_ammo_target (the supplies' target, percent; 0 = no supplies), rl_omens (0: no Omens),
-// rl_omen_weights, rl_rush, rl_fever and rl_cleared (the momentum's parts), and the meta progress, kept in the config: rl_progress (per game, since
+// rl_omen_weights, rl_rush, rl_fever, rl_cleared and rl_resupply (the momentum's parts), rl_stats (the stats line),
+// and the meta progress, kept in the config: rl_progress (per game, since
 // Blood and Cryptic Passage share a config: episodes unlocked, the gauntlet won, the run whose saves can
 // still be continued) and, shared by both, rl_ichor, rl_runs, rl_wins.
 //
@@ -122,10 +131,13 @@
 #include <algorithm>
 #include <climits>
 #include <cmath>
+#include <cstdio>
+#include <ctime>
 #include <random>
 #include "build.h"
 #include "blood.h"
 #include "c_bind.h"
+#include "cmdlib.h"
 #include "c_cvars.h"
 #include "c_dispatch.h"
 #include "gamecontrol.h"
@@ -162,6 +174,8 @@ CVARD(Bool, rl_omen_weights, true, CVAR_ARCHIVE, "roguelite: a kill adds boon ti
 CVARD(Bool, rl_rush, true, CVAR_ARCHIVE, "roguelite: Bloodrush, a meter your kills fill and fights drain, with tiers Blooded, Savage and Ravening (0 = none)")
 CVARD(Bool, rl_fever, true, CVAR_ARCHIVE, "roguelite: Fever with 3 boons running (4 late in a run): kills add double time and boons run down slower (0 = none)")
 CVARD(Bool, rl_cleared, true, CVAR_ARCHIVE, "roguelite: Cleared, 90% of a map's starting enemies dead: 5 s more on every boon, the floor's Omens slide to you, a rare one drops (0 = none)")
+CVARD(Bool, rl_resupply, true, CVAR_ARCHIVE, "roguelite: kill resupply: a point-blank kill drops a Life Essence, a burning kill gives armour, a multi-kill in one tic drops ammo (0 = none)")
+CVARD(Bool, rl_stats, true, CVAR_ARCHIVE, "roguelite: at each map's exit (or a death) one stats line to the console and to rl_stats.csv next to raze.exe (0 = none)")
 
 // Meta progress, kept across runs. Blood and Cryptic Passage share a config, so what belongs to one game's episodes
 // is kept per game in rl_progress; the ichor bank and the run counts are shared.
@@ -1544,11 +1558,12 @@ double AmmoToKill(const AmmoProfile& p, int type, double health)
 	return health * p.perShot / (std::min(shot, health) * p.hit * p.targets); // a shot can't do more than kill
 }
 
-// The guns the player has; on the run's first map, the kit's too (it's handed over after the remix).
+// The guns the player has; on the run's first map (rl_startat: the map it starts on), the kit's too (it's handed over
+// after the remix).
 void OwnedGuns(DBloodPlayer* p, bool* owned)
 {
 	for (int w = 0; w < kWeapMax; w++) owned[w] = p && p->hasWeapon[w];
-	if (run.index == 0 && !run.kitGiven)
+	if (run.active && !run.kitGiven)
 		for (int i = 0; i < kNumKit; i++)
 			if (run.kit[i] > 0 && WeaponOf(kitItems[i].item)) owned[WeaponOf(kitItems[i].item)] = true;
 }
@@ -2206,7 +2221,7 @@ void Remix()
 		CountAmmo(ledger, p, false); // the map's own ammo, after the remix and Horde's count (what's carried isn't counted)
 		PlaceAmmo(rng, owned);
 	}
-	if (run.index == 0)
+	if (run.index == 0 || !run.kitGiven) // the run's first map (rl_startat: the map it starts on)
 	{
 		if (!run.kitGiven) GiveKit();
 		run.kitGiven = true;
@@ -2306,12 +2321,19 @@ void RunWon()
 	run = Run();
 }
 
-bool StartRun(int episode, uint32_t seed)
+// start: the map of the order it begins on (rl_startat, testing a late map: the kit is handed over there, and that map
+// has no reward choice), 0 as ever.
+bool StartRun(int episode, uint32_t seed, int start = 0)
 {
 	std::mt19937 rng(seed);
 	TArray<FString> order;
 	BuildOrder(episode, rng, order);
-	auto first = order.Size() ? FindMapByName(order[0].GetChars()) : nullptr;
+	if (start < 0 || (start > 0 && start >= int(order.Size())))
+	{
+		Printf("rl_startat: this run has %d maps\n", int(order.Size()));
+		return false;
+	}
+	auto first = order.Size() ? FindMapByName(order[start].GetChars()) : nullptr;
 	if (!first)
 	{
 		Printf("rl_newrun: no maps found for this run\n");
@@ -2341,7 +2363,7 @@ bool StartRun(int episode, uint32_t seed)
 	run.skill = rl_skill;
 	run.episode = episode;
 	run.maps = std::move(order);
-	run.pending = 0;
+	run.pending = start;
 	for (int i = 0; i < kNumKit; i++) run.kit[i] = *kitItems[i].cvar;
 	for (int c = 0; c < kNumConditions; c++) run.cov[c] = *conditions[c].cvar;
 	ForgeRecipe(run.forge);
@@ -2350,6 +2372,7 @@ bool StartRun(int episode, uint32_t seed)
 	startingRun = true;
 	saveConfig = true;
 	Printf(PRINT_NOTIFY, "Roguelite: %s, %d maps (run %d, seed %u)\n", RunName(episode).GetChars(), int(run.maps.Size()), run.id, seed);
+	if (start > 0) Printf(PRINT_NOTIFY, "Roguelite: starting at map %d, %s, with the kit only\n", start + 1, run.maps[start].GetChars());
 	M_ClearMenus();
 	DeferredStartGame(first, run.skill);
 	return true;
@@ -2526,18 +2549,11 @@ void LayDrop(DBloodActor* item, sectortype* sect, const DVector2& spot)
 	viewBackupSpriteLoc(item);
 }
 
-// A red champion drops body armour, a champion basic armour one time in four: the armour that stops bullets (fire and
-// spirit armour stop none), as on the hardest settings the champions' hitscan is what kills you. The roll is the
-// run's (its seed and the champion's number in the run), so a reload rolls the same. A dropped item has no xsprite
-// or mark, so the ammo ledger (counted as the map starts), the remix (the same) and the big pickups (marked, with an
-// xsprite) never take it for theirs. It lies where the champion fell if a pickup can lie there; else on a spot in
-// sight of that one, or else near you (a flyer shot over lava or a pit, a foe in a door or on a lift); if none
-// will do, where it fell, as a stock drop would (in water, say, where you can swim to it).
-void DropChampionArmour(DBloodActor* victim, bool red)
+// A dropped item (actDropObject's, at the body) stays where it fell if a pickup can lie there; else it goes to a spot in
+// sight of that one, or else near you (a flyer shot over lava or a pit, a foe in a door or on a lift); if none will do,
+// it stays where it fell, as a stock drop would (in water, say, where you can swim to it).
+void SettleDrop(DBloodActor* item, std::mt19937& rng)
 {
-	std::mt19937 rng(run.seed ^ (0x9E3779B9u * uint32_t(run.champions)) ^ 0x2545F491u);
-	if (!red && Rand01(rng) >= kChampionArmourChance) return;
-	auto item = actDropObject(victim, red ? kItemArmorBody : kItemArmorBasic);
 	if (!item || !item->insector() || SpotSectorOk(item->sector())) return;
 	TArray<DVector2> taken;
 	DVector2 spot;
@@ -2548,6 +2564,19 @@ void DropChampionArmour(DBloodActor* victim, bool red)
 	if (!found && pl && pl->insector()) found = FindItemSpot(rng, pl->sector(), FloorAt(pl), 24, 80, taken, spot, sect);
 	if (!found || !sect) return;
 	LayDrop(item, sect, spot);
+}
+
+// A red champion drops body armour, a champion basic armour one time in four: the armour that stops bullets (fire and
+// spirit armour stop none), as on the hardest settings the champions' hitscan is what kills you. The roll is the
+// run's (its seed and the champion's number in the run), so a reload rolls the same. A dropped item has no xsprite
+// or mark, so the ammo ledger (counted as the map starts), the remix (the same) and the big pickups (marked, with an
+// xsprite) never take it for theirs. It lies where the champion fell if a pickup can lie there, else nearby
+// (SettleDrop).
+void DropChampionArmour(DBloodActor* victim, bool red)
+{
+	std::mt19937 rng(run.seed ^ (0x9E3779B9u * uint32_t(run.champions)) ^ 0x2545F491u);
+	if (!red && Rand01(rng) >= kChampionArmourChance) return;
+	SettleDrop(actDropObject(victim, red ? kItemArmorBody : kItemArmorBasic), rng);
 }
 
 //---------------------------------------------------------------------------
@@ -2660,6 +2689,7 @@ const bmod::Effect* OmenEffect(int id) { return omenInfo[id].effect ? bmod::Find
 bool FeverOn();
 void RunDown(RunningOmen& r, DBloodPlayer* p, bool fever);
 double PlainOmenChance();
+void StatsOmen(int id, bool taken); // the stats line: an Omen or reliquary dropped, or taken
 PalEntry BoonChip();
 
 RunningOmen* RunningOf(int id)
@@ -2848,6 +2878,7 @@ DBloodActor* SpawnOmenItem(sectortype* s, const DVector2& p, int id)
 	a->basePoint = a->spr.pos;
 	a->interpolated = false;
 	viewBackupSpriteLoc(a);
+	StatsOmen(id, false);
 	return a;
 }
 
@@ -2995,6 +3026,7 @@ bool TakeReliquary(DBloodPlayer* p)
 	int id = a->xspr.data1;
 	auto& o = omenInfo[id];
 	if (!GrantOmen(id, o.seconds * kClock)) return false; // CanGrant said it could: it can't fail
+	StatsOmen(id, true);
 	sfxPlay3DSound(p->GetActor(), 463, -1, 0); // the voodoo doll's laugh
 	p->pickupEffect = 30;
 	viewSetMessage(FStringf("Cursed reliquary: %s, %d s: %s", o.name, bmod::SecondsLeft(RunningOf(id)->left), o.sentence).GetChars(),
@@ -3104,7 +3136,8 @@ void StackPowerPickup(DBloodActor* item)
 // at once (rl_fever), and Cleared, 90% of the enemies a map started with dead
 // (rl_cleared). Each has its own switch, and off it is as before. All of it
 // only in a live run, outside the Crypt. The centre slot's queue, the boons'
-// warning and the chips' order are the Omens' (rl_omens).
+// warning and the chips' order are the Omens' (rl_omens). Kill resupply
+// (rl_resupply) and the stats line (rl_stats) have their own section after.
 //
 //---------------------------------------------------------------------------
 
@@ -3174,6 +3207,31 @@ constexpr double kRushHeldAlpha = 0.6;
 constexpr int kBoonWarning = 3 * kClock;             // as the chip's blink
 constexpr int kBoonWarnSound = 284, kBoonWarnVolume = 40; // Blood's volume scale (80 a sound's usual; PING's own is 150)
 constexpr int kBoonWarnGap = kClock / 2;
+// Kill resupply (rl_resupply): your kills only.
+// - Point blank: a foe within kPointBlank of you (feet to feet), not fodder (KillWeight: a champion of a fodder kind
+//   counts), drops Blood's own Life Essence. Its stock pickup heals 20 up to 100 (gPowerUpInfo, through actHealDude,
+//   so the Covenant's Famine heals less), with the heal sound (780). At most one drop every 2 s; under 40 health the
+//   drop is two Life Essences.
+// - Burning: a foe of a burning kind, or with burn time left as it dies, gives 5 body armour (armor[0], which bullets
+//   wear down) and 5 fire armour (armor[1], burns and blasts; spirit armour is armor[2]: damageInfo, player.cpp), each
+//   as the stock body and fire armour pickups add theirs (only below their 100, and up to it), with the pickup flash and
+//   the stock armour pickup's own sound (PICKARMR, 779, which nothing else plays) when either grew.
+// - Two kills or more in one tic (a blast, both barrels): a stock pickup of the ammo the gun in your hand fires, the
+//   smallest one of that ammo (resupplyAmmo), at the last body: it moves on to each further body that tic. None for a
+//   gun without ammo (the pitchfork).
+constexpr double kPointBlank = 96;
+constexpr int kEssenceGap = 2 * kClock;
+constexpr int kEssenceLow = 40 << 4;                 // health is in sixteenths
+constexpr int kBurnArmour = 5 << 4;                  // armour too
+constexpr int kArmourSound = 779;
+const int resupplyAmmo[kAmmoTypes] = { 0, kItemAmmoFlares, kItemAmmoSawedoffFew, kItemAmmoTommygunFew, kItemAmmoGasolineCan,
+	kItemAmmoTNTBundle, kItemAmmoSprayCan, kItemAmmoTeslaCharge, kItemAmmoTrappedSoul, kItemAmmoVoodooDoll,
+	kItemAmmoProxBombBundle, kItemAmmoRemoteBombBundle }; // by ammo type (gAmmoItemData's type)
+// The stats line (rl_stats): one line per map at its exit (or your death), to the console and appended to kStatsFile
+// in raze.exe's folder (progdir), with a header when the file is new. Writing it can fail (a read-only folder): it is
+// said once at the console, and the game goes on.
+constexpr const char* kStatsFile = "rl_stats.csv";
+constexpr int kStatsPairs = 3;                       // the boons that ran together longest: this many pairs
 
 // The momentum's part of the run: saved (SerializeMomentum), and started afresh with each new run (Mo).
 struct Momentum
@@ -3192,6 +3250,13 @@ int alertScanIn;              // tics to the next scan
 int rushTier;                 // the meter's tier as last seen (a rise is cued)
 int rushCuedAt[kNumTiers] = { INT_MIN / 2, INT_MIN / 2, INT_MIN / 2, INT_MIN / 2 };
 bool feverWas;                // Fever ran as the last tic ended
+
+// Kill resupply and the stats line (their section follows the momentum's).
+void Resupply(DBloodActor* victim);
+void StatsKill(DBloodActor* victim, int added, int clipped);
+void StatsCleared();
+void StatsTick();
+void ResupplyRestart();
 
 Momentum& Mo()
 {
@@ -3542,7 +3607,10 @@ void YourKill(DBloodActor* victim)
 	if (!victim || !MomentumLive()) return;
 	bool multi = PlayClock >= lastKillAt && PlayClock - lastKillAt <= kMultiKillWindow;
 	lastKillAt = PlayClock;
-	AddKillTime(KillTime(victim, multi));
+	int clipped = 0;
+	int added = AddKillTime(KillTime(victim, multi), &clipped);
+	StatsKill(victim, added, clipped); // rl_stats
+	Resupply(victim);                  // rl_resupply
 	if (!RushLive()) return;
 	auto& m = Mo();
 	m.rush = std::min(m.rush + RushFill(victim, multi), kRushMax);
@@ -3651,6 +3719,7 @@ void Cleared(DBloodPlayer* p)
 	if (id >= 0) SpawnOmenItem(pl->sector(), pl->spr.pos.XY(), id);
 	sfxPlay3DSound(pl, kClearedSound, -1, 0);
 	ShowCentre(kCentreCleared, "CLEARED", CR_GOLD);
+	StatsCleared(); // rl_stats: when it came
 }
 
 // Each tic: the slides, then whether Cleared comes (once a map, with the Omens on).
@@ -3694,11 +3763,12 @@ void MomentumTick()
 	feverWas = fever;
 	CentreAdvance();
 	ClearedTick();
+	StatsTick();
 }
 
 // A level start or a load: no kill is recent (PlayClock starts again, or is the save's), nothing is alerted until the
 // first scan, and the meter's tier and Fever stand as they are, uncued. The centre slot starts afresh (with the curse's
-// title as a map starts), no Omen slides, and no boon has just been warned of.
+// title as a map starts), no Omen slides, no boon has just been warned of, and resupply's clocks start afresh.
 void MomentumRestart()
 {
 	lastKillAt = INT_MIN / 2;
@@ -3710,6 +3780,7 @@ void MomentumRestart()
 	boonWarnedAt = INT_MIN / 2;
 	rushTier = TierOf(Mo().rush);
 	feverWas = FeverOn();
+	ResupplyRestart();
 }
 
 // The map's exit taken (LevelEnd): half the meter goes on, held until an enemy on the next map is alerted to you.
@@ -3742,6 +3813,367 @@ void MomentumFromSave(const Momentum& m)
 
 //---------------------------------------------------------------------------
 //
+// kill resupply (rl_resupply): a kill of yours that pays out at once (the
+// constants above say how), and the stats line (rl_stats): what a map's
+// play measured, for the momentum's verdict. Both only in a live run,
+// outside the Crypt.
+//
+//---------------------------------------------------------------------------
+
+// Not saved: a level start and a load set them afresh.
+int essenceAt = INT_MIN / 2;  // PlayClock of the last point-blank drop
+int ticKillsAt = INT_MIN / 2; // the tic (its PlayClock) of your last kills, and how many there were in it
+int ticKills;
+DBloodActor* ticDrop;         // the ammo that tic's kills dropped (compared, and followed only once found lying)
+void StatsResupply(int kind); // below: 0 a Life Essence, 1 armour, 2 ammo
+
+// The stock pickup of the ammo the gun in your hand fires (0: it fires none, as the pitchfork).
+int AmmoInHand(DBloodPlayer* p)
+{
+	int ammo = p->curWeapon > 0 ? p->weaponAmmo : -1;
+	return ammo > 0 && ammo < kAmmoTypes ? resupplyAmmo[ammo] : 0;
+}
+
+// A second drop beside the first, not on it (with no room there, on it).
+void BesideDrop(DBloodActor* item, DBloodActor* first, std::mt19937& rng)
+{
+	if (!item || !first || !first->insector()) return;
+	TArray<DVector2> taken;
+	taken.Push(first->spr.pos.XY());
+	DVector2 spot;
+	sectortype* sect = nullptr;
+	if (!FindItemSpot(rng, first->sector(), FloorAt(first), 24, 48, taken, spot, sect) || !sect)
+	{
+		spot = first->spr.pos.XY();
+		sect = first->sector();
+	}
+	LayDrop(item, sect, spot);
+}
+
+// A burning kill's armour, as the stock body and fire armour pickups add theirs (PickupItem: each only below its
+// pickup's cap, and up to it). True: either grew.
+bool BurnArmour(DBloodPlayer* p)
+{
+	auto& body = armorData[kItemArmorBody - kItemArmorBasic];
+	auto& fire = armorData[kItemArmorFire - kItemArmorBasic];
+	bool grew = false;
+	if (p->armor[0] < body.armor0max)
+	{
+		p->armor[0] = ClipHigh(p->armor[0] + kBurnArmour, body.armor0max);
+		grew = true;
+	}
+	if (p->armor[1] < fire.armor1max)
+	{
+		p->armor[1] = ClipHigh(p->armor[1] + kBurnArmour, fire.armor1max);
+		grew = true;
+	}
+	return grew;
+}
+
+// A kill of yours (from YourKill): the point-blank Life Essence, the burning kill's armour, and a tic's multi-kill ammo.
+// Drops come out of the stock actDropObject at the body, so they are stock items (no xsprite, no mark): the remix, the
+// ammo ledger, the big pickups and the secret caches (all as the map starts) and the Omens' claim and slide (marked
+// items only) never take them for theirs. Where one lies is the run's roll (its seed and the kills so far).
+void Resupply(DBloodActor* victim)
+{
+	if (!rl_resupply || !MomentumLive() || !victim || !victim->insector()) return;
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !pl->hasX() || pl->xspr.health <= 0 || !pl->insector()) return;
+	std::mt19937 rng(run.seed ^ (0x9E3779B9u * uint32_t(run.kills)) ^ 0x1F83D9ABu);
+	bool due = !(PlayClock >= essenceAt && PlayClock - essenceAt < kEssenceGap);
+	if (due && KillWeight(victim) > 0 && (victim->spr.pos - pl->spr.pos).Length() <= kPointBlank)
+	{
+		essenceAt = PlayClock;
+		int n = pl->xspr.health < unsigned(kEssenceLow) ? 2 : 1;
+		DBloodActor* first = nullptr;
+		for (int i = 0; i < n; i++)
+		{
+			auto item = actDropObject(victim, kItemHealthLifeEssense);
+			if (!item) continue;
+			if (first) BesideDrop(item, first, rng);
+			else SettleDrop(first = item, rng);
+			StatsResupply(0);
+		}
+	}
+	if ((IsBurningDude(victim) || (victim->hasX() && victim->xspr.burnTime > 0)) && BurnArmour(p))
+	{
+		p->pickupEffect = 30;                                   // Blood's pickup flash
+		sfxPlay3DSound(pl->spr.pos, kArmourSound, pl->sector()); // where you stand, as the stock pickup plays it
+		StatsResupply(1);
+	}
+	// Your kills in one tic share its PlayClock (whether a blast, a shot or the Forge made them).
+	if (PlayClock != ticKillsAt)
+	{
+		ticKillsAt = PlayClock;
+		ticKills = 0;
+		ticDrop = nullptr;
+	}
+	if (++ticKills < 2) return;
+	int type = AmmoInHand(p);
+	if (!type) return;
+	if (!ticDrop)
+	{
+		ticDrop = actDropObject(victim, type);
+		if (!ticDrop) return;
+		SettleDrop(ticDrop, rng);
+		StatsResupply(2);
+		return;
+	}
+	// A further body this tic: the drop goes on to it, if it still lies there (not taken this tic).
+	bool lying = false;
+	BloodStatIterator it(kStatItem);
+	while (auto a = it.Next())
+		if (a == ticDrop && a->spr.type == type && !(a->spr.flags & 32)) lying = true;
+	if (!lying) return;
+	auto s = victim->sector();
+	auto pos = victim->spr.pos;
+	updatesector(pos, &s);
+	if (!s) s = victim->sector(); // blasted outside every sector (as actSpawnFloor has it)
+	LayDrop(ticDrop, s, pos.XY());
+	SettleDrop(ticDrop, rng);
+}
+
+// The stats line's numbers for the map being played: saved with the run (SerializeStats), started afresh as each map
+// starts (StatsStart). Counted only with rl_stats on (StatsLive).
+struct MapStats
+{
+	int start = 0;                        // the enemies the map started with (as Cleared counts them, whatever rl_cleared says)
+	int kills = 0, waveKills = 0;         // your kills: wave enemies apart (the rest are the map's own and its spawners')
+	int clearedAt = -1;                   // PlayClock units into the map as Cleared came (-1: it didn't)
+	int boonsMost = 0;                    // the most boons running at once (gambles aren't boons)
+	int tics2 = 0, tics3 = 0;             // tics with 2 or more, and 3 or more, running
+	int feverTics = 0;
+	int tierTics[kNumTiers] = {};         // tics at each of Bloodrush's tiers (rl_rush on)
+	int added = 0, clipped = 0;           // kill time your kills put on the boons, and the caps cut off (PlayClock units, all boons)
+	int dropped = 0, taken = 0;           // Omens (boons): on the floor (a death's, Cleared's, the console's), and taken
+	int reliqDropped = 0, reliqTaken = 0; // cursed reliquaries
+	int damage = 0;                       // health you lost, in sixteenths
+	int resupply[3] = {};                 // Life Essences dropped, armour given, ammo dropped
+	int pairs[kNumOmens][kNumOmens] = {}; // tics two boons ran together: [the lower id][the higher]
+	bool lined = false;                   // its line was given (not saved)
+};
+MapStats mapStats;
+int healthWas = -1;     // your health at the last tic (sixteenths; -1: not seen yet)
+bool statsUnwritten;    // writing rl_stats.csv failed once this session (and was said)
+
+bool StatsLive() { return rl_stats && MomentumLive(); }
+
+void ResupplyRestart()
+{
+	essenceAt = INT_MIN / 2;
+	ticKillsAt = INT_MIN / 2;
+	ticKills = 0;
+	ticDrop = nullptr;
+	healthWas = -1;
+}
+
+// As the level starts (after the remix): the counts start again, and the enemies the map starts with are counted.
+void StatsStart()
+{
+	mapStats = MapStats();
+	if (!MomentumLive()) return;
+	BloodStatIterator it(kStatDude);
+	while (auto a = it.Next())
+		if (!a->IsPlayerActor() && a->hasX() && a->xspr.health > 0 && AllowedKillType(a)) mapStats.start++; // as ClearedStart
+}
+
+void StatsKill(DBloodActor* victim, int added, int clipped)
+{
+	if (!StatsLive()) return;
+	(IsWaveEnemy(victim) ? mapStats.waveKills : mapStats.kills)++;
+	mapStats.added += added;
+	mapStats.clipped += clipped;
+}
+
+void StatsOmen(int id, bool taken)
+{
+	if (!StatsLive() || id < 0 || id >= kNumOmens) return;
+	bool reliquary = omenInfo[id].tier == kOmenGamble;
+	(reliquary ? (taken ? mapStats.reliqTaken : mapStats.reliqDropped) : (taken ? mapStats.taken : mapStats.dropped))++;
+}
+
+void StatsCleared()
+{
+	if (StatsLive()) mapStats.clearedAt = PlayClock - run.levelClock;
+}
+
+void StatsResupply(int kind)
+{
+	if (StatsLive() && kind >= 0 && kind < 3) mapStats.resupply[kind]++;
+}
+
+// The health you lost since the last tic (none if you healed: a tic of both counts the difference).
+void StatsHealth()
+{
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !pl->hasX()) return;
+	int h = int(pl->xspr.health);
+	if (healthWas >= 0 && h < healthWas) mapStats.damage += healthWas - h;
+	healthWas = h;
+}
+
+// Each tic (from MomentumTick, after the Omens' clocks): the boons running, together and in pairs, Fever, Bloodrush's
+// tier, and the health you lost.
+void StatsTick()
+{
+	if (!StatsLive()) return;
+	auto& s = mapStats;
+	int ids[kNumOmens], n = 0;
+	for (auto& r : omens)
+		if (omenInfo[r.id].tier != kOmenGamble && r.left > 0 && n < kNumOmens) ids[n++] = r.id;
+	s.boonsMost = std::max(s.boonsMost, n);
+	if (n >= 2) s.tics2++;
+	if (n >= 3) s.tics3++;
+	for (int i = 0; i < n; i++)
+		for (int j = i + 1; j < n; j++)
+			s.pairs[std::min(ids[i], ids[j])][std::max(ids[i], ids[j])]++;
+	if (FeverOn()) s.feverTics++;
+	if (RushLive()) s.tierTics[TierOf(Mo().rush)]++;
+	StatsHealth();
+}
+
+// The line appended to kStatsFile, with its header first when the file is new. A failure (no file, a full disk) is
+// said once a session, at the console; nothing else depends on it.
+void AppendStats(const char* header, const FString& row)
+{
+	FString path = progdir + kStatsFile;
+#ifdef _WIN32
+	FILE* f = _wfopen(path.WideString().c_str(), L"ab");
+#else
+	FILE* f = fopen(path.GetChars(), "ab");
+#endif
+	bool ok = f != nullptr;
+	if (f)
+	{
+		if (fseek(f, 0, SEEK_END) == 0 && ftell(f) == 0) ok = fputs(header, f) >= 0;
+		ok = fputs(row.GetChars(), f) >= 0 && ok;
+		ok = fclose(f) == 0 && ok;
+	}
+	if (!ok && !statsUnwritten)
+	{
+		statsUnwritten = true;
+		Printf("rl_stats: couldn't write %s (the line is at the console only)\n", path.GetChars());
+	}
+}
+
+// The map's stats line (rl_stats), once, as its exit is taken ("exit", from NextLevel: before the Omens end and half the
+// meter goes on) or as you die ("died"): to the console, and to kStatsFile.
+void StatsLine(const char* how)
+{
+	auto& s = mapStats;
+	if (!StatsLive() || !currentLevel || s.lined) return;
+	s.lined = true;
+	StatsHealth(); // this tic's too (a death comes before the ticker)
+	auto secs = [](int clocks) { return clocks / double(kClock); };
+	auto ticSecs = [](int tics) { return tics * double(kTicsPerFrame) / kClock; };
+	int lying[2] = {}; // Omens and reliquaries still on the floor
+	BloodStatIterator it(kStatItem);
+	while (auto a = it.Next())
+		if (IsOmenItem(a) && !(a->spr.flags & 32)) lying[omenInfo[a->xspr.data1].tier == kOmenGamble]++;
+	struct Pair { int a, b, tics; };
+	TArray<Pair> pairs;
+	for (int a = 0; a < kNumOmens; a++)
+		for (int b = a + 1; b < kNumOmens; b++)
+			if (s.pairs[a][b] > 0) pairs.Push({ a, b, s.pairs[a][b] });
+	std::stable_sort(pairs.begin(), pairs.end(), [](const Pair& x, const Pair& y) { return x.tics > y.tics; });
+	auto& m = Mo();
+	int dead = m.clearStart > 0 ? m.clearStart - OriginAlive() : -1; // Cleared's count (all deaths), when there is one
+	double mapTime = secs(PlayClock - run.levelClock), rush = rl_rush ? m.rush : 0.;
+	char when[32] = "";
+	time_t now = time(nullptr);
+	if (auto t = localtime(&now)) strftime(when, sizeof(when), "%Y-%m-%d %H:%M", t);
+
+	FString line;
+	line.Format("rl_stats %s (map %d of %d) %s at %.0fs: kills %d of %d (+%d wave)", currentLevel->labelName.GetChars(), run.index + 1,
+		int(run.maps.Size()), how, mapTime, s.kills, s.start, s.waveKills);
+	if (dead >= 0) line.AppendFormat(", %d dead", dead);
+	if (s.clearedAt >= 0) line.AppendFormat(", Cleared at %.0fs", secs(s.clearedAt));
+	line.AppendFormat("; boons: most %d, 2+ %.0fs, 3+ %.0fs; Fever %.0fs; Blooded %.0fs, Savage %.0fs, Ravening %.0fs; meter %.0f",
+		s.boonsMost, ticSecs(s.tics2), ticSecs(s.tics3), ticSecs(s.feverTics), ticSecs(s.tierTics[kTierBlooded]),
+		ticSecs(s.tierTics[kTierSavage]), ticSecs(s.tierTics[kTierRavening]), rush);
+	line.AppendFormat("; kill time +%.1fs, clipped %.1fs; Omens %d dropped, %d taken, %d left; reliquaries %d dropped, %d taken, %d left",
+		secs(s.added), secs(s.clipped), s.dropped, s.taken, lying[0], s.reliqDropped, s.reliqTaken, lying[1]);
+	line += "; pairs";
+	for (int i = 0; i < int(pairs.Size()) && i < kStatsPairs; i++)
+		line.AppendFormat("%s %s+%s %.0fs", i ? "," : "", omenInfo[pairs[i].a].name, omenInfo[pairs[i].b].name, ticSecs(pairs[i].tics));
+	if (!pairs.Size()) line += " none";
+	line.AppendFormat("; damage %d; resupply %d essences, %d armour, %d ammo", (s.damage + 8) >> 4, s.resupply[0], s.resupply[1], s.resupply[2]);
+	Printf(PRINT_HIGH | PRINT_NONOTIFY, "%s\n", line.GetChars());
+
+	static const char* const header = "when,run,seed,skill,map,index,maps,how,time_s,omens,weights,rush,fever,cleared,resupply,"
+		"start,kills,wave_kills,dead,cleared_s,boons_most,boons2_s,boons3_s,fever_s,blooded_s,savage_s,ravening_s,meter,"
+		"killtime_s,clipped_s,omens_dropped,omens_taken,omens_left,reliq_dropped,reliq_taken,reliq_left,"
+		"pair1,pair1_s,pair2,pair2_s,pair3,pair3_s,damage,essences,armour,ammo\n";
+	FString row;
+	row.Format("%s,%d,%u,%d,%s,%d,%d,%s,%.1f,%d,%d,%d,%d,%d,%d,", when, run.id, run.seed, run.skill, currentLevel->labelName.GetChars(),
+		run.index + 1, int(run.maps.Size()), how, mapTime, (int)rl_omens, (int)rl_omen_weights, (int)rl_rush, (int)rl_fever,
+		(int)rl_cleared, (int)rl_resupply);
+	row.AppendFormat("%d,%d,%d,", s.start, s.kills, s.waveKills);
+	row += dead >= 0 ? FStringf("%d,", dead) : FString(",");
+	row += s.clearedAt >= 0 ? FStringf("%.1f,", secs(s.clearedAt)) : FString(",");
+	row.AppendFormat("%d,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,", s.boonsMost, ticSecs(s.tics2), ticSecs(s.tics3), ticSecs(s.feverTics),
+		ticSecs(s.tierTics[kTierBlooded]), ticSecs(s.tierTics[kTierSavage]), ticSecs(s.tierTics[kTierRavening]), rush);
+	row.AppendFormat("%.1f,%.1f,%d,%d,%d,%d,%d,%d,", secs(s.added), secs(s.clipped), s.dropped, s.taken, lying[0], s.reliqDropped,
+		s.reliqTaken, lying[1]);
+	for (int i = 0; i < kStatsPairs; i++)
+		row += i < int(pairs.Size()) ? FStringf("%s+%s,%.1f,", omenInfo[pairs[i].a].name, omenInfo[pairs[i].b].name, ticSecs(pairs[i].tics))
+			: FString(",,");
+	row.AppendFormat("%d,%d,%d,%d\n", (s.damage + 8) >> 4, s.resupply[0], s.resupply[1], s.resupply[2]);
+	AppendStats(header, row);
+}
+
+// The stats' keys, under "stats" in the run's save block, written and read alike (written with rl_stats on; a save
+// without them, older or made with it off, starts the map's counts from nothing). The pairs are three numbers each: the
+// two boons and their tics together.
+void SerializeStats(FSerializer& arc, MapStats& s)
+{
+	if (!arc.BeginObject("stats")) return;
+	arc("start", s.start)
+		("kills", s.kills)
+		("wavekills", s.waveKills)
+		("clearedat", s.clearedAt)
+		("boonsmost", s.boonsMost)
+		("tics2", s.tics2)
+		("tics3", s.tics3)
+		("fevertics", s.feverTics)
+		("added", s.added)
+		("clipped", s.clipped)
+		("dropped", s.dropped)
+		("taken", s.taken)
+		("reliqdropped", s.reliqDropped)
+		("reliqtaken", s.reliqTaken)
+		("damage", s.damage);
+	arc.Array("tiertics", s.tierTics, kNumTiers);
+	arc.Array("resupply", s.resupply, 3);
+	TArray<int> pairs;
+	if (arc.isWriting())
+		for (int a = 0; a < kNumOmens; a++)
+			for (int b = a + 1; b < kNumOmens; b++)
+				if (s.pairs[a][b] > 0)
+				{
+					pairs.Push(a);
+					pairs.Push(b);
+					pairs.Push(s.pairs[a][b]);
+				}
+	arc("pairs", pairs);
+	if (arc.isReading())
+		for (unsigned i = 0; i + 2 < pairs.Size(); i += 3)
+			if (pairs[i] >= 0 && pairs[i] < pairs[i + 1] && pairs[i + 1] < kNumOmens && pairs[i + 2] > 0)
+				s.pairs[pairs[i]][pairs[i + 1]] = pairs[i + 2];
+	arc.EndObject();
+}
+
+// A loaded save's stats, once its run is the run.
+void StatsFromSave(const MapStats& s)
+{
+	mapStats = s;
+	mapStats.lined = false;
+}
+
+//---------------------------------------------------------------------------
+//
 // events and the ticker
 //
 //---------------------------------------------------------------------------
@@ -3761,6 +4193,7 @@ void OnEvent(const bmod::EventInfo& ev)
 		LevelStarted();
 		MomentumRestart(); // after the run's checks: a map warp leaves the run, and its meter
 		ClearedStart(); // after the remix: the enemies the map starts with
+		StatsStart(); // the stats line's counts, and its start count
 		break;
 	case bmod::Event::SaveLoaded:
 		LitaniesLoaded();
@@ -3792,7 +4225,11 @@ void OnEvent(const bmod::EventInfo& ev)
 		}
 		break;
 	case bmod::Event::PlayerDeath:
-		if (ev.player == getPlayer(myconnectindex)) RunOver();
+		if (ev.player == getPlayer(myconnectindex))
+		{
+			StatsLine("died"); // rl_stats: the map's line, as the run ends
+			RunOver();
+		}
 		break;
 	default:
 		break;
@@ -4449,6 +4886,7 @@ MapRecord* NextLevel(MapRecord* stockNext)
 	if (run.exiting) // a second exit in the same tic: the same answer
 		return run.pending >= 0 && run.pending < int(run.maps.Size()) ? FindMapByName(run.maps[run.pending].GetChars()) : nullptr;
 	run.exiting = true;
+	StatsLine("exit"); // rl_stats: the map's line (before the last map's exit ends the run)
 	run.cleared++;
 	run.ichor += kIchorMap;
 	if (run.index == 0)
@@ -4588,6 +5026,7 @@ bool ClaimPickup(DBloodPlayer* pPlayer, DBloodActor* item)
 	}
 	bool chimed = false;
 	if (!GrantOmen(id, o.seconds * kClock, &chimed)) return true; // it can't take hold now (CanGrant): it stays
+	StatsOmen(id, true);
 	if (!chimed) sfxPlay3DSound(pPlayer->GetActor(), 776, -1, 0); // Blood's powerup chime (powerupActivate plays it)
 	pPlayer->pickupEffect = 30;
 	viewSetMessage(FStringf("Omen: %s, %d s: %s", o.name, bmod::SecondsLeft(RunningOf(id)->left), o.sentence).GetChars(),
@@ -6235,6 +6674,7 @@ void Serialize(FSerializer& arc)
 			}
 			arc("omens", running);
 			SerializeMomentum(arc, Mo()); // the momentum's keys (Bloodrush)
+			if (rl_stats) SerializeStats(arc, mapStats); // the stats line's counts so far
 			arc.EndObject();
 		}
 		return;
@@ -6248,6 +6688,7 @@ void Serialize(FSerializer& arc)
 	Run loaded;
 	TArray<int> running;
 	Momentum loadedMomentum;
+	MapStats loadedStats;
 	bool has = false;
 	if (arc.BeginObject("roguelite"))
 	{
@@ -6278,6 +6719,7 @@ void Serialize(FSerializer& arc)
 		arc("litanies", loaded.litanies);
 		arc("omens", running);
 		SerializeMomentum(arc, loadedMomentum);
+		SerializeStats(arc, loadedStats);
 		arc.EndObject();
 		has = true;
 	}
@@ -6293,6 +6735,7 @@ void Serialize(FSerializer& arc)
 	run.active = true;
 	run.curseClock = INT_MIN / 2;
 	MomentumFromSave(loadedMomentum);
+	StatsFromSave(loadedStats);
 	for (unsigned i = 0; i + 3 < running.Size(); i += 4) // the save's Omens (OmensLoaded starts their effects)
 		if (running[i] >= 0 && running[i] < kNumOmens && running[i + 1] > 0 && running[i + 2] > 0 && !RunningOf(running[i]))
 			omens.Push({ running[i], running[i + 1], running[i + 2], std::max(running[i + 3], running[i + 1]), false });
@@ -6311,6 +6754,37 @@ void OnMenuOpened()
 //
 //---------------------------------------------------------------------------
 
+// An episode named at the console (1..N in the game's own list, or "gauntlet") that a run can be started in: else -1,
+// once it has said why.
+static int ConsoleEpisode(const char* command, const char* name)
+{
+	TArray<Episode> eps;
+	GetEpisodes(eps);
+	int count = int(eps.Size()), unlocked = Unlocked(count);
+	if (!isBlood() || numplayers > 1)
+	{
+		Printf("%s: Blood single player only\n", command);
+		return -1;
+	}
+	int episode = !stricmp(name, "gauntlet") ? 0 : atoi(name);
+	if (count == 0 || episode < 0 || episode > count || (episode == 0 && stricmp(name, "gauntlet")))
+	{
+		Printf("%s: no episode '%s' (1-%d or gauntlet)\n", command, name, count);
+		return -1;
+	}
+	if (episode == 0 && unlocked < count)
+	{
+		Printf(PRINT_NOTIFY, "The gauntlet opens once every episode is unlocked\n");
+		return -1;
+	}
+	if (episode > unlocked)
+	{
+		Printf(PRINT_NOTIFY, "%s is locked: win a run of %s first\n", eps[episode - 1].name.GetChars(), eps[episode - 2].name.GetChars());
+		return -1;
+	}
+	return episode;
+}
+
 CCMD(rl_newrun)
 {
 	TArray<Episode> eps;
@@ -6323,29 +6797,28 @@ CCMD(rl_newrun)
 		Printf("  gauntlet  every episode in one run%s\n", count > 0 && unlocked >= count ? "" : " (locked)");
 		return;
 	}
-	if (!isBlood() || numplayers > 1)
-	{
-		Printf("rl_newrun: Blood single player only\n");
-		return;
-	}
-	int episode = !stricmp(argv[1], "gauntlet") ? 0 : atoi(argv[1]);
-	if (count == 0 || episode < 0 || episode > count || (episode == 0 && stricmp(argv[1], "gauntlet")))
-	{
-		Printf("rl_newrun: no episode '%s' (1-%d or gauntlet)\n", argv[1], count);
-		return;
-	}
-	if (episode == 0 && unlocked < count)
-	{
-		Printf(PRINT_NOTIFY, "The gauntlet opens once every episode is unlocked\n");
-		return;
-	}
-	if (episode > unlocked)
-	{
-		Printf(PRINT_NOTIFY, "%s is locked: win a run of %s first\n", eps[episode - 1].name.GetChars(), eps[episode - 2].name.GetChars());
-		return;
-	}
+	int episode = ConsoleEpisode("rl_newrun", argv[1]);
+	if (episode < 0) return;
 	uint32_t seed = argv.argc() >= 3 ? uint32_t(strtoul(argv[2], nullptr, 10)) : uint32_t(std::random_device{}());
 	StartRun(episode, seed);
+}
+
+// A run begun at map N of its order (testing a late map: the order is the seed's, and the map is remixed at its own
+// depth with the run's seed, its pickups leaning to the kit's guns; you have only the kit). The episode: the one named,
+// else the run in progress's, else the first.
+CCMD(rl_startat)
+{
+	if (argv.argc() < 2 || atoi(argv[1]) < 1)
+	{
+		Printf("usage: rl_startat <map> [seed] [episode|gauntlet]   (a run from map N of its order, with the kit only; skill: rl_skill)\n");
+		return;
+	}
+	FString named = argv.argc() >= 4 ? FString(argv[3]) : run.active && run.episode == 0 ? FString("gauntlet")
+		: FStringf("%d", run.active ? run.episode : 1);
+	int episode = ConsoleEpisode("rl_startat", named.GetChars());
+	if (episode < 0) return;
+	uint32_t seed = argv.argc() >= 3 ? uint32_t(strtoul(argv[2], nullptr, 10)) : uint32_t(std::random_device{}());
+	StartRun(episode, seed, atoi(argv[1]) - 1);
 }
 
 CCMD(rl_status)
