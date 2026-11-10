@@ -36,8 +36,11 @@ namespace rogue
 	//   would take for a Corpse-Candle). Forged missiles never carry 128, and kModKicked is only set on explosions.
 	// - kModOmen (8): on a kStatItem, an Omen's pickup or a cursed reliquary (its Omen in xspr.data1). Every reader of
 	//   kModForged looks at projectiles, flares, decorations, things or explosions only, and no item is ever forged.
+	// - kModWave (16): on a dude, a wave enemy (SpawnWave's; set in WaveSpawned, kept through RetypeDude, burning and
+	//   death): it counts half toward the momentum. Every reader of kModOffspring (16, 32) checks kModForged first, which
+	//   no dude ever carries.
 	enum { kModChampion = 1, kModBigPickup = 2, kModRedChampion = 4, kModForged = 8, kModOffspring = 48, kModBloodBought = 64, kModKicked = 128 };
-	enum { kModSpareYou = kModBloodBought, kModPyreMark = kModKicked, kModOmen = kModForged };
+	enum { kModSpareYou = kModBloodBought, kModPyreMark = kModKicked, kModOmen = kModForged, kModWave = 16 };
 
 	MapRecord* NextLevel(MapRecord* stockNext);                            // levelEndLevel: a run picks its own next map (null: the run is won)
 	bool OnDeathRestart();                                                 // playerProcess, Use while dead in single player: true = handled

@@ -53,9 +53,23 @@
 // champion sometimes leaves a cursed reliquary (it falls with a bell, and
 // Blood's atom motes circle it), which names both its halves when you come
 // near or walk into it, and is taken with Use. A kill of yours while a boon runs
-// adds a second to it (up to twice its time); taking one again adds its whole
+// adds time to it (the momentum, below); taking one again adds its whole
 // time (up to three times). They show in the shared chip row, last through a
 // save and load, and end with the map.
+//
+// The momentum (rl_omen_weights, rl_rush, rl_fever; each 0 leaves its part as
+// before). A kill of yours adds boon time by the foe's size (its start health),
+// its champion tier, Bloodrush's tier, Fever and a multi-kill, at most 5 s, a
+// wave enemy half; Death's Grin and Bottomless never gain from kills, Mirror
+// Skin stops at 1.5x its time and the rest at 2x (without rl_omen_weights:
+// 1 s a kill times Bloodrush's and Fever's factors, up to 2x). Bloodrush is a
+// meter, 0-100, that your kills fill: it drains while an enemy is alerted to
+// you (faster at higher tiers) and otherwise holds at its tier's floor;
+// Blooded (25) makes kills add 1.5x the time, Savage (50) has plain enemies
+// drop Omens 1 in 12, Ravening (75) raises the 2x caps to 3x. Half of it goes
+// on to the next map, held until an enemy there is alerted to you. Fever, 3
+// boons running at once (4 from a run's halfway map), doubles kill time, runs
+// the boons 25% slower and turns their chips orange.
 //
 // Dying ends the run: a "Run over" screen, then the main menu (no reload).
 // Finishing the last map wins it: "Run complete" at the menu, and the next
@@ -76,11 +90,14 @@
 //   rl_omen list                         the Omens and the gambles, numbered, with what runs now and the drop odds
 //   rl_omen <name|number> [seconds]      grant an Omen (or a gamble) at once, e.g. "rl_omen twin", "rl_omen 9 30" (testing)
 //   rl_omen_drop / rl_reliquary <name|number>  an Omen's pickup / a gamble's cursed reliquary in front of you (testing)
+//   rl_rush [0|1]                        Bloodrush's meter, tier, drain and enemies alerted, and Fever (an argument sets rl_rush)
+//   rl_rush_set <0-100>                  set Bloodrush's meter (testing)
 //   rl_unlock <count|all>                set how many of this game's episodes are unlocked (testing)
 //   rl_resetprogress                     lock this game's episodes again; empty the ichor bank and the wins
 //   openmenu RogueliteMenu               the Roguelite menu (it is also on the main menu)
 // CVARs: rl_skill (0-4, set by the menu), rl_elite_pal (the champions' tint, a palette lookup number:
-// 0-14 in Blood, 0 = none), rl_ammo_target (the supplies' target, percent; 0 = no supplies), rl_omens (0: no Omens), and the meta progress, kept in the config: rl_progress (per game, since
+// 0-14 in Blood, 0 = none), rl_ammo_target (the supplies' target, percent; 0 = no supplies), rl_omens (0: no Omens),
+// rl_omen_weights, rl_rush and rl_fever (the momentum's parts), and the meta progress, kept in the config: rl_progress (per game, since
 // Blood and Cryptic Passage share a config: episodes unlocked, the gauntlet won, the run whose saves can
 // still be continued) and, shared by both, rl_ichor, rl_runs, rl_wins.
 //
@@ -133,6 +150,10 @@ CVARD(Int, rl_elite_pal, 10, CVAR_ARCHIVE, "roguelite: palette lookup that tints
 CVARD(Int, rl_elite_red_pal, 2, CVAR_ARCHIVE, "roguelite: palette lookup that tints red champions (0 = none; 2 red)")
 CVARD(Int, rl_ammo_target, 150, CVAR_ARCHIVE, "roguelite: each map's pickups hold this percent of the ammo your guns need for its enemies (150 = 1.5x; 0 = stock amounts)")
 CVARD(Bool, rl_omens, true, CVAR_ARCHIVE, "roguelite: the dead drop Omens (timed boons) and champions cursed reliquaries (0 = none)")
+// The momentum (docs/roguelite.md, "Momentum and rifts"): each part has its own switch, and 0 leaves it as before.
+CVARD(Bool, rl_omen_weights, true, CVAR_ARCHIVE, "roguelite: a kill adds boon time by the foe's size, champion tier and streak, up to 5 s, and Death's Grin and Bottomless never gain from kills (0 = 1 s a kill, up to 2x)")
+CVARD(Bool, rl_rush, true, CVAR_ARCHIVE, "roguelite: Bloodrush, a meter your kills fill and fights drain, with tiers Blooded, Savage and Ravening (0 = none)")
+CVARD(Bool, rl_fever, true, CVAR_ARCHIVE, "roguelite: Fever with 3 boons running (4 late in a run): kills add double time and boons run down slower (0 = none)")
 
 // Meta progress, kept across runs. Blood and Cryptic Passage share a config, so what belongs to one game's episodes
 // is kept per game in rl_progress; the ichor bank and the run counts are shared.
@@ -1288,6 +1309,7 @@ double RedSpeed(DBloodActor* a)
 // the copy keeps the stock look.
 void WaveSpawned(DBloodActor* spawned, DBloodActor* kind)
 {
+	if (spawned && run.active && !run.over) spawned->modFlags |= kModWave; // it counts half toward the momentum (below)
 	if (!spawned || !kind || !(kind->modFlags & kModChampion)) return;
 	spawned->spr.scale /= (kind->modFlags & kModRedChampion) ? kRedSize : kChampionSize;
 }
@@ -2544,6 +2566,8 @@ struct OmenInfo
 	bool bloodlust;       // your hits heal you
 	int look;             // the stock item it's drawn as (its picture and size), in its tier's palette
 	const char* sentence; // what it does
+	double killCap = 2;   // kills (and "to cap" effects) extend it up to this many times its time, with the brakes on
+	                      // (rl_omen_weights; 0: never); Bloodrush's Ravening raises a 2 to 3 (the momentum, BoonCap)
 };
 
 // The pool: mostly Blood's own powerups on short timers. Hollow Bones is drawn as the feather fall, Bottomless as the
@@ -2551,14 +2575,15 @@ struct OmenInfo
 const OmenInfo omenInfo[] =
 {
 	{ "Hollow Bones", kOmenCommon, 20, -1, "lowgrav", 1, false, kItemFeatherFall, "low gravity" },
-	{ "Bottomless", kOmenCommon, 10, -1, "infammo", 1, false, 133, "infinite ammo" },
+	{ "Bottomless", kOmenCommon, 10, -1, "infammo", 1, false, 133, "infinite ammo", 0 }, // kills never feed it (the brakes)
 	{ "Dread", kOmenCommon, 10, -1, "slowmo", 1, false, 136, "enemies at half speed" },
 	{ "Shroud", kOmenCommon, 12, kPwUpShadowCloak, nullptr, 1, false, kItemShadowCloak, "a shadow cloak: enemies can't see you" },
 	{ "Twin Vessel", kOmenRare, 15, kPwUpTwoGuns, nullptr, 1, false, kItemTwoGuns, "guns akimbo, the forged gun too" },
 	{ "Bloodlust", kOmenRare, 15, -1, nullptr, 1, true, 134, "your hits heal you" },
 	{ "Fury", kOmenRare, 10, -1, nullptr, 2, false, 127, "you deal 2x" },
-	{ "Mirror Skin", kOmenRelic, 10, kPwUpReflectShots, nullptr, 1, false, kItemReflectShots, "reflective shots: a foe's bullets hit the foe" },
-	{ "Death's Grin", kOmenRelic, 4, kPwUpDeathMask, nullptr, 1, false, kItemDeathMask, "invulnerable" },
+	// Mirror Skin stops at 1.5x: against cultists, hitscan immunity is most of Death's Grin. Kills never feed Death's Grin.
+	{ "Mirror Skin", kOmenRelic, 10, kPwUpReflectShots, nullptr, 1, false, kItemReflectShots, "reflective shots: a foe's bullets hit the foe", 1.5 },
+	{ "Death's Grin", kOmenRelic, 4, kPwUpDeathMask, nullptr, 1, false, kItemDeathMask, "invulnerable", 0 },
 	// The gambles, only ever in a cursed reliquary: both halves run together for the time. Frenzy's 3x is the run's own.
 	{ "Glass Cannon", kOmenGamble, 20, -1, "glasscannon", 1, false, 137, "deal 4x, take 2x" },
 	{ "Frenzy", kOmenGamble, 15, -1, "fast", 3, false, 137, "enemies twice as fast, you deal 3x" },
@@ -2585,6 +2610,7 @@ constexpr int kOmenItem = 132;
 constexpr int omenPal[] = { 0, 10, 2, 9 };
 constexpr int kOmenShade = -128;
 constexpr int kOmenKillTime = kClock;                // a kill of yours adds this to each boon running, up to 2x its time
+                                                     // (without rl_omen_weights: KillTime, below)
 constexpr double kReliquaryRange = 96;               // Use takes a reliquary this near (to the eye)
 constexpr double kReliquaryCone = 25;                // and this close to where you look, up and down too (degrees)
 constexpr double kReliquaryNameRange = 160;          // it names itself this near (along the floor)
@@ -2622,6 +2648,11 @@ int omenPowerBefore;        // that timer as the pickup began
 
 bool OmensLive() { return rl_omens && run.active && !run.over && !crypt.in; }
 const bmod::Effect* OmenEffect(int id) { return omenInfo[id].effect ? bmod::FindEffect(omenInfo[id].effect) : nullptr; }
+// The momentum's say on the Omens (its section follows theirs): Fever, an Omen's clock each tic, Savage's drops.
+bool FeverOn();
+void RunDown(RunningOmen& r, DBloodPlayer* p, bool fever);
+double PlainOmenChance();
+PalEntry BoonChip();
 
 RunningOmen* RunningOf(int id)
 {
@@ -2757,20 +2788,7 @@ bool GrantOmen(int id, int clocks, bool* chimed = nullptr)
 	return true;
 }
 
-// A kill of yours: a second more on each boon running, up to twice its time. A gamble's time stays as it said.
-void ExtendOmens()
-{
-	auto p = getPlayer(myconnectindex);
-	if (!p || !OmensLive()) return;
-	for (auto& r : omens)
-	{
-		if (omenInfo[r.id].tier == kOmenGamble || r.left >= 2 * r.base) continue;
-		int left = std::min(r.left + kOmenKillTime, 2 * r.base);
-		AddPowerTime(p, omenInfo[r.id].powerup, left - r.left);
-		r.left = left;
-		r.peak = std::max(r.peak, left);
-	}
-}
+// A kill of yours adds time to each boon running: the momentum's AddKillTime (below).
 
 // Bloodlust: a quarter of the health your hit took from a live foe (taken, so none past its death), at most 15 health a
 // second and never above 100, and less under the Covenant's Famine. Its cap is its own, apart from the cleavers'. The
@@ -2867,7 +2885,7 @@ void DropOmens(DBloodActor* victim, bool champion, bool red)
 	double r = Rand01(rng);
 	if (red) tier = r < kOmenRedRelic ? kOmenRelic : kOmenRare;
 	else if (champion) tier = r < kOmenBlueRare ? kOmenRare : kOmenCommon;
-	else if (r < kOmenPlain)
+	else if (r < PlainOmenChance()) // 1 in 25, 1 in 12 at Bloodrush's Savage
 	{
 		double t = Rand01(rng);
 		tier = t < kOmenPlainRelic ? kOmenRelic : t < kOmenPlainRelic + kOmenPlainRare ? kOmenRare : kOmenCommon;
@@ -2992,11 +3010,12 @@ void OmenTick()
 	}
 	auto p = getPlayer(myconnectindex);
 	if (!p || !p->GetActor()) return;
+	bool fever = FeverOn(); // as the tic began: the boons' clocks run slower in it
 	for (int i = int(omens.Size()) - 1; i >= 0; i--)
 	{
 		auto& r = omens[i];
 		auto& o = omenInfo[r.id];
-		r.left -= kTicsPerFrame;
+		RunDown(r, p, fever);
 		bool lost = o.powerup >= 0 && p->pwUpTime[o.powerup] <= 0;
 		auto e = OmenEffect(r.id);
 		if (e && !bmod::IsActive(e))
@@ -3071,6 +3090,413 @@ void StackPowerPickup(DBloodActor* item)
 
 //---------------------------------------------------------------------------
 //
+// the momentum (docs/roguelite.md, "Momentum and rifts"): what a kill of
+// yours is worth to the boons running (rl_omen_weights), Bloodrush, a meter
+// your kills fill and fights drain (rl_rush), and Fever, three boons running
+// at once (rl_fever). Each has its own switch, and off it is as before. All
+// of it only in a live run, outside the Crypt.
+//
+//---------------------------------------------------------------------------
+
+// Kill time (rl_omen_weights): 1 s x the kind's weight x the champion's factor (blue 3, red 5) x Bloodrush's (1.5 from
+// Blooded) x Fever's (2), +0.5 s for each body after the first in a multi-kill (your kills 1.5 s or less apart), at most
+// 5 s; a wave enemy's is half. A kind's weight is the square root of its start health (dudeInfo) over a cultist's 40, at
+// most 2.5; a kind of 25 health or less is fodder (0); a champion weighs at least 1.
+constexpr double kKillSeconds = 1, kKillCeiling = 5, kMultiKillSeconds = 0.5;
+constexpr double kBlueFactor = 3, kRedFactor = 5, kBloodedFactor = 1.5, kFeverFactor = 2, kWaveShare = 0.5;
+constexpr int kMultiKillWindow = kClock * 3 / 2;
+constexpr double kWeightHealth = 40, kWeightMax = 2.5;
+constexpr int kFodderHealth = 25;
+constexpr double kRavenCap = 3;                      // Ravening: a boon that stops at 2x stops at 3x
+// Bloodrush (rl_rush): 0-100, its tiers every 25. It fills with your kills only: 6 x the kind's weight, rounded (fodder
+// 1), a blue champion 15 and a red one 30 whatever its kind, +4 for each body after the first in a multi-kill, a wave
+// enemy's half. It drains 2.5 a second while an enemy is alerted to you, times the tier's rate; with none, at 2.5 a
+// second down to its tier's floor. Getting hit costs nothing. Half of it goes on to the next map, held as it is until an
+// enemy there is alerted to you.
+enum { kTierNone, kTierBlooded, kTierSavage, kTierRavening, kNumTiers };
+const char* const rushTierNames[kNumTiers] = { "no tier", "Blooded", "Savage", "Ravening" };
+constexpr double kRushMax = 100, kRushTierStep = 25;
+constexpr double kRushPerWeight = 6, kRushFodder = 1, kRushBlue = 15, kRushRed = 30, kRushMulti = 4;
+constexpr double kRushDrain = 2.5;
+const double rushRate[kNumTiers] = { 1, 1.25, 1.5, 2 };
+constexpr double kRushCarry = 0.5;
+constexpr double kSavageOmen = 1. / 12;              // Savage: a plain enemy drops an Omen this often (else kOmenPlain)
+// Alerted to you: an enemy alive and after you (its target), in sight of you or this near (world units, along the
+// floor). Scanned every 8 tics. Critters and innocents, which aren't kills, don't count.
+constexpr double kAlertRange = 1024;
+constexpr int kAlertScanTics = 8;
+// The cue as a tier is reached: Tchernobog's second laugh (TBLAUGH2, 2.1 s). No stock code, SEQ, QAV or map-placed sound
+// plays it (his own lines are 2350-2356 and his pains 2370-2371, ai.cpp; of his laughs only TBLAUGH4, 2363, is on a
+// map: one sound generator on E4M8, his own map), and nothing else in the mode does. Ravening's word shows with it in
+// the centre slot. A tier reached again within kRushCueGap of its last cue stays quiet: in a fight the meter crosses a
+// tier's floor back and forth.
+constexpr int kRushTierSound = 2361;
+constexpr int kRushCueGap = 5 * kClock;
+// Fever (rl_fever): 3 boons running at once, 4 from a run's halfway map on (gambles don't count). Kills add 2x the time
+// (above), and the boons' clocks run 25% slower: 3 of a tic's 4. Its chips turn from gold to a hotter orange. Entering
+// it plays BST_FLSH (745, 2.1 s), which no stock code, SEQ, QAV or map-placed sound plays, nor the mode, with one of
+// Caleb's kill lines (actor.cpp's gPlayerGibThingComments, as he says them gibbing a body). No screen shake.
+constexpr int kFeverNeed = 3, kFeverNeedLate = 4;
+constexpr double kFeverLate = 0.5;
+constexpr int kFeverStep = kTicsPerFrame * 3 / 4;
+constexpr uint32_t kFeverChip = 0xffff7a1e;
+constexpr int kFeverSound = 745;
+const int calebKillLines[] = { 734, 735, 736, 737, 738, 739, 740, 741, 3038, 3049 };
+
+// The momentum's part of the run: saved (SerializeMomentum), and started afresh with each new run (Mo).
+struct Momentum
+{
+	int runId = 0;     // the run it belongs to
+	double rush = 0;   // Bloodrush, 0-100
+	bool held = false; // carried from the last map: held as it is until an enemy there is alerted to you
+};
+Momentum mo;
+// Not saved: a level start and a load set them afresh.
+int lastKillAt = INT_MIN / 2; // PlayClock of your last kill (it starts again each level)
+int alerted;                  // enemies alerted to you at the last scan
+int alertScanIn;              // tics to the next scan
+int rushTier;                 // the meter's tier as last seen (a rise is cued)
+int rushCuedAt[kNumTiers] = { INT_MIN / 2, INT_MIN / 2, INT_MIN / 2, INT_MIN / 2 };
+bool feverWas;                // Fever ran as the last tic ended
+
+Momentum& Mo()
+{
+	if (mo.runId != run.id)
+	{
+		mo = Momentum();
+		mo.runId = run.id;
+	}
+	return mo;
+}
+
+bool MomentumLive() { return run.active && !run.over && !crypt.in; }
+bool RushLive() { return rl_rush && MomentumLive(); }
+double RunDepth() { return run.maps.Size() > 1 ? double(run.index) / double(run.maps.Size() - 1) : 0.; } // as Remix has it
+
+// The centre slot, under the map's name, where the curse and the Litanies announce themselves. The momentum's line shows
+// one at a time, the newest, and gives way to the curse's title. (Part M1b orders every line through a queue, curse
+// title > CLEARED > tier reached > Litany, in place of this; the priorities below are its.)
+enum { kCentreLitany, kCentreTier, kCentreCleared, kCentreCurse };
+constexpr int kCentreTime = 2 * kClock;              // as long as a Litany's title
+struct CentreLine { FString text; int color = CR_GOLD; int priority = kCentreLitany; int at = INT_MIN / 2; };
+CentreLine centreLine;
+
+void ShowCentre(int priority, const char* text, int color)
+{
+	centreLine.text = text;
+	centreLine.color = color;
+	centreLine.priority = priority;
+	centreLine.at = PlayClock;
+}
+
+bool CurseTitleShowing()
+{
+	int age = PlayClock - run.curseClock;
+	return CurseEffect() && age >= 0 && age < kCurseTitle;
+}
+
+// In the 320x200 space the map's name uses, where the curse's title goes, in BigFont, fading over its last half second.
+void DrawCentreLine()
+{
+	int age = PlayClock - centreLine.at;
+	if (centreLine.text.IsEmpty() || age < 0 || age >= kCentreTime || CurseTitleShowing()) return;
+	double alpha = std::clamp((kCentreTime - age) / (0.5 * kClock), 0., 1.);
+	double w = BigFont->StringWidth(centreLine.text.GetChars());
+	double s = w > 300 ? 300 / w : 1.;
+	DrawText(twod, BigFont, centreLine.color, 160 - w * s / 2, 50 + BigFont->GetHeight() + 6, centreLine.text.GetChars(),
+		DTA_FullscreenScale, FSMode_Fit320x200, DTA_ScaleX, s, DTA_ScaleY, s, DTA_Alpha, alpha, TAG_DONE);
+}
+
+// A prone or burning kind counts as the kind standing (every cultist burns as one kind; all weigh 40), a buried or laying
+// zombie as the axe zombie, a gargoyle statue as the gargoyle it wakes as.
+int StandingKind(int type)
+{
+	switch (type)
+	{
+	case kDudeCultistTommyProne: return kDudeCultistTommy;
+	case kDudeCultistShotgunProne: return kDudeCultistShotgun;
+	case kDudeBurningCultist: return kDudeCultistTommy;
+	case kDudeBurningZombieAxe: case kDudeZombieAxeBuried: case kDudeZombieAxeLaying: return kDudeZombieAxeNormal;
+	case kDudeBurningZombieButcher: return kDudeZombieButcher;
+	case kDudeBurningTinyCaleb: return kDudeTinyCaleb;
+	case kDudeBurningBeast: return kDudeBeast;
+	case kDudeBurningInnocent: return kDudeInnocent;
+	case kDudeGargoyleStatueFlesh: return kDudeGargoyleFlesh;
+	case kDudeGargoyleStatueStone: return kDudeGargoyleStone;
+	default: return type;
+	}
+}
+
+// A kind's weight (start health from dudeInfo): 0 for fodder; Cerberus and Tchernobog weigh the most.
+double KindWeight(int type)
+{
+	type = StandingKind(type);
+	if (type == kDudeCerberusTwoHead || type == kDudeCerberusOneHead || type == kDudeTchernobog) return kWeightMax;
+	if (type < kDudeBase || type >= kDudeMax || (type >= kDudePlayer1 && type <= kDudePlayer8)) return 0;
+	int health = getDudeInfo(type)->startHealth;
+	return health <= kFodderHealth ? 0 : std::min(sqrt(health / kWeightHealth), kWeightMax);
+}
+
+// A victim's weight: its kind's, at least 1 for a champion (a champion spider still pays).
+double KillWeight(DBloodActor* victim)
+{
+	double w = KindWeight(victim->spr.type);
+	return (victim->modFlags & kModChampion) ? std::max(w, 1.) : w;
+}
+
+// A wave enemy (Horde's, Hourglass's: SpawnWave's, marked by WaveSpawned) counts half.
+bool IsWaveEnemy(DBloodActor* a) { return a && (a->modFlags & kModWave); }
+
+int TierOf(double rush) { return std::clamp(int(rush / kRushTierStep), int(kTierNone), int(kTierRavening)); }
+int RushTier() { return RushLive() ? TierOf(Mo().rush) : kTierNone; } // the tier, for its effects (none with rl_rush off)
+double TierFactor() { return RushTier() >= kTierBlooded ? kBloodedFactor : 1.; }
+double PlainOmenChance() { return RushTier() >= kTierSavage ? kSavageOmen : kOmenPlain; }
+
+// The boons running (Fever counts them; gambles don't), and how many make Fever on this map.
+int BoonsRunning()
+{
+	int n = 0;
+	for (auto& r : omens) if (omenInfo[r.id].tier != kOmenGamble && r.left > 0) n++;
+	return n;
+}
+
+int FeverNeed() { return RunDepth() >= kFeverLate ? kFeverNeedLate : kFeverNeed; }
+bool FeverOn() { return rl_fever && OmensLive() && BoonsRunning() >= FeverNeed(); }
+PalEntry BoonChip() { return PalEntry(FeverOn() ? kFeverChip : kBoonChip); }
+
+// The most time kills give a boon, in PlayClock units (0: kills never feed it). With the brakes (rl_omen_weights) the
+// boon's own killCap: Death's Grin and Bottomless none, Mirror Skin 1.5x its time, the rest 2x; without, 2x for all, as
+// before. Bloodrush's Ravening raises every boon of a 2x killCap to 3x (never the braked three). A gamble: none (kills
+// don't extend it).
+int BoonCap(const RunningOmen& r, bool brakes)
+{
+	auto& o = omenInfo[r.id];
+	if (o.tier == kOmenGamble) return 0;
+	double times = brakes ? o.killCap : 2.;
+	if (o.killCap == 2. && RushTier() >= kTierRavening) times = kRavenCap;
+	return int(times * r.base) / kTicsPerFrame * kTicsPerFrame; // whole tics, so a stock powerup's timer keeps in step
+}
+
+int KillCap(const RunningOmen& r) { return BoonCap(r, rl_omen_weights); }
+// A "to cap" effect's (Cleared, The Hunger) cap: the brakes always hold for those, whatever rl_omen_weights says.
+int ToCap(const RunningOmen& r) { return BoonCap(r, true); }
+
+// A boon gets more time, up to cap (never less than it has: one taken again may hold more). Its stock powerup's timer
+// gets the same. Returns the time it got.
+int ExtendBoon(RunningOmen& r, DBloodPlayer* p, int clocks, int cap)
+{
+	int left = std::max(std::min(r.left + clocks, cap), r.left);
+	int add = left - r.left;
+	if (add <= 0) return 0;
+	AddPowerTime(p, omenInfo[r.id].powerup, add);
+	r.left = left;
+	r.peak = std::max(r.peak, left);
+	return add;
+}
+
+// Kill time on each boon running, each up to its kill cap (a gamble's time stays as it said). *clipped: the time the
+// caps cut off, over all the boons. Returns the time added over all of them.
+int AddKillTime(int clocks, int* clipped = nullptr)
+{
+	int added = 0, cut = 0;
+	auto p = getPlayer(myconnectindex);
+	if (p && OmensLive() && clocks > 0)
+		for (auto& r : omens)
+		{
+			if (omenInfo[r.id].tier == kOmenGamble) continue;
+			int add = ExtendBoon(r, p, clocks, KillCap(r));
+			added += add;
+			cut += clocks - add;
+		}
+	if (clipped) *clipped = cut;
+	return added;
+}
+
+// A "to cap" effect: each boon running gets clocks more (clocks < 0: all the way), up to ToCap; Death's Grin and
+// Bottomless get none. Returns the time added over all of them.
+int ExtendToCap(int clocks)
+{
+	int added = 0;
+	auto p = getPlayer(myconnectindex);
+	if (!p || !OmensLive() || clocks == 0) return 0;
+	for (auto& r : omens)
+	{
+		int cap = ToCap(r);
+		if (cap > 0) added += ExtendBoon(r, p, clocks < 0 ? cap : clocks, cap);
+	}
+	return added;
+}
+
+// What a kill of yours adds to each boon (before the caps), in whole tics. Bloodrush's and Fever's factors are their
+// own parts': without rl_omen_weights a kill adds 1 s times those two only (1 s as before, with them off too).
+int KillTime(DBloodActor* victim, bool multi)
+{
+	double s = kKillSeconds * TierFactor() * (FeverOn() ? kFeverFactor : 1.);
+	if (rl_omen_weights)
+	{
+		double champion = (victim->modFlags & kModRedChampion) ? kRedFactor : (victim->modFlags & kModChampion) ? kBlueFactor : 1.;
+		s = std::min(s * KillWeight(victim) * champion + (multi ? kMultiKillSeconds : 0.), kKillCeiling);
+		if (IsWaveEnemy(victim)) s *= kWaveShare;
+	}
+	return int(s * kClock / kTicsPerFrame + 0.5) * kTicsPerFrame;
+}
+
+// What a kill of yours puts in Bloodrush.
+double RushFill(DBloodActor* victim, bool multi)
+{
+	double pts;
+	if (victim->modFlags & kModRedChampion) pts = kRushRed;
+	else if (victim->modFlags & kModChampion) pts = kRushBlue;
+	else
+	{
+		double w = KindWeight(victim->spr.type);
+		pts = w > 0 ? std::round(kRushPerWeight * w) : kRushFodder;
+	}
+	if (multi) pts += kRushMulti;
+	return IsWaveEnemy(victim) ? pts * kWaveShare : pts;
+}
+
+// A tier reached: its cue (see kRushTierSound), unless it was cued just now; Ravening's word in the centre slot with it.
+void TierReached(int tier)
+{
+	if (tier <= kTierNone || tier >= kNumTiers) return;
+	if (PlayClock >= rushCuedAt[tier] && PlayClock - rushCuedAt[tier] < kRushCueGap) return;
+	rushCuedAt[tier] = PlayClock;
+	auto p = getPlayer(myconnectindex);
+	if (p && p->GetActor()) sfxPlay3DSound(p->GetActor(), kRushTierSound, -1, 0);
+	if (tier == kTierRavening) ShowCentre(kCentreTier, "RAVENING", CR_FIRE);
+}
+
+// The meter moved: a tier higher than it was is reached (a drop shows nothing).
+void RushChanged()
+{
+	int tier = TierOf(Mo().rush);
+	if (RushLive() && tier > rushTier) TierReached(tier);
+	rushTier = tier;
+}
+
+// Enemies alerted to you now (see kAlertRange).
+int CountAlerted()
+{
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl || !pl->hasX() || pl->xspr.health <= 0 || !pl->insector()) return 0;
+	int n = 0;
+	BloodStatIterator it(kStatDude);
+	while (auto a = it.Next())
+	{
+		if (a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0 || (a->spr.flags & 32) || a->GetTarget() != pl || !AllowedKillType(a))
+			continue;
+		if ((a->spr.pos.XY() - pl->spr.pos.XY()).Length() <= kAlertRange) n++;
+		else if (a->insector() && cansee(pl->spr.pos, pl->sector(), a->spr.pos.plusZ(-getDudeInfo(a->spr.type)->eyeHeight * a->spr.scale.Y), a->sector()))
+			n++; // in sight, from its eyes as the AI looks (aiThinkTarget)
+	}
+	return n;
+}
+
+// Fever begins: one sound and one of Caleb's kill lines (on his voice's channel, as stock plays them).
+void FeverEntered()
+{
+	auto p = getPlayer(myconnectindex);
+	auto pl = p ? p->GetActor() : nullptr;
+	if (!pl) return;
+	sfxPlay3DSound(pl, kFeverSound, -1, 0);
+	sfxPlay3DSound(pl, calebKillLines[rand() % countof(calebKillLines)], 0, FX_SoundMatch);
+}
+
+// An Omen's clock this tic (from OmenTick): a boon's runs 25% slower in Fever. Its stock powerup's timer, which Blood's
+// powerupProcess ran down by a whole tic just before, gets back what the Omen's own time didn't lose (on its last tic
+// too), so the two stay in step and a map's own powerup time on that timer never changes. Without Fever an Omen's time
+// stays whole tics (grants, kill time and the caps are), so nothing ever comes back, as before.
+void RunDown(RunningOmen& r, DBloodPlayer* p, bool fever)
+{
+	int step = fever && omenInfo[r.id].tier != kOmenGamble ? kFeverStep : kTicsPerFrame;
+	int spent = std::clamp(r.left, 0, step);
+	r.left -= step;
+	int n = omenInfo[r.id].powerup;
+	if (n >= 0 && spent < kTicsPerFrame && p->pwUpTime[n] > 0) p->pwUpTime[n] += kTicsPerFrame - spent;
+}
+
+// A kill of yours (from the Kill event): time on the boons running, then Bloodrush's fill (so this kill's time has the
+// tier it was made in).
+void YourKill(DBloodActor* victim)
+{
+	if (!victim || !MomentumLive()) return;
+	bool multi = PlayClock >= lastKillAt && PlayClock - lastKillAt <= kMultiKillWindow;
+	lastKillAt = PlayClock;
+	AddKillTime(KillTime(victim, multi));
+	if (!RushLive()) return;
+	auto& m = Mo();
+	m.rush = std::min(m.rush + RushFill(victim, multi), kRushMax);
+	RushChanged();
+}
+
+// Each tic, after the Omens': the alert scan and Bloodrush's drain, then Fever's entry.
+void MomentumTick()
+{
+	if (!MomentumLive()) return;
+	if (rl_rush)
+	{
+		auto& m = Mo();
+		if (--alertScanIn <= 0)
+		{
+			alerted = CountAlerted();
+			alertScanIn = kAlertScanTics;
+		}
+		if (m.held && alerted > 0) m.held = false;
+		if (!m.held)
+		{
+			int tier = TierOf(m.rush);
+			double drain = kRushDrain * kTicsPerFrame / kClock;
+			if (alerted > 0) m.rush = std::max(m.rush - drain * rushRate[tier], 0.);
+			else m.rush = std::max(m.rush - drain, tier * kRushTierStep);
+		}
+		RushChanged();
+	}
+	bool fever = FeverOn();
+	if (fever && !feverWas) FeverEntered();
+	feverWas = fever;
+}
+
+// A level start or a load: no kill is recent (PlayClock starts again, or is the save's), nothing is alerted until the
+// first scan, and the meter's tier and Fever stand as they are, uncued.
+void MomentumRestart()
+{
+	lastKillAt = INT_MIN / 2;
+	alerted = 0;
+	alertScanIn = 0;
+	for (auto& at : rushCuedAt) at = INT_MIN / 2;
+	centreLine = CentreLine();
+	rushTier = TierOf(Mo().rush);
+	feverWas = FeverOn();
+}
+
+// The map's exit taken (LevelEnd): half the meter goes on, held until an enemy on the next map is alerted to you.
+void MomentumLevelEnd()
+{
+	if (!run.active || run.over || !run.exiting) return;
+	auto& m = Mo();
+	m.rush *= kRushCarry;
+	m.held = m.rush > 0;
+}
+
+// The momentum's keys in the run's save block, written and read alike (an older save has none: the meter is empty).
+void SerializeMomentum(FSerializer& arc, Momentum& m)
+{
+	arc("rush", m.rush)
+		("rushheld", m.held);
+}
+
+// A loaded save's momentum, once its run is the run.
+void MomentumFromSave(const Momentum& m)
+{
+	mo = m;
+	mo.runId = run.id;
+	mo.rush = mo.rush >= 0 ? std::min(mo.rush, kRushMax) : 0; // not a number: 0 too
+}
+
+//---------------------------------------------------------------------------
+//
 // events and the ticker
 //
 //---------------------------------------------------------------------------
@@ -3088,6 +3514,7 @@ void OnEvent(const bmod::EventInfo& ev)
 		if (IsCryptLevel()) SetupCrypt();
 		else crypt.in = false;
 		LevelStarted();
+		MomentumRestart(); // after the run's checks: a map warp leaves the run, and its meter
 		break;
 	case bmod::Event::SaveLoaded:
 		LitaniesLoaded();
@@ -3100,9 +3527,11 @@ void OnEvent(const bmod::EventInfo& ev)
 		else crypt.in = false;
 		if (run.active && !run.over) StartCurse(); // effects aren't saved: the curse comes back on
 		OmensLoaded(); // and the Omens' (after the curse, so one the curse runs is the curse's)
+		MomentumRestart(); // after the Omens: Fever as it stands
 		break;
 	case bmod::Event::LevelEnd:
 		EndOmens(true, true); // the Omens end with the map (a map's own powerup keeps its time)
+		MomentumLevelEnd(); // half of Bloodrush goes on
 		break;
 	case bmod::Event::Kill:
 		if (run.active && !run.over && AllowedKillType(ev.actor))
@@ -3113,7 +3542,7 @@ void OnEvent(const bmod::EventInfo& ev)
 			run.ichor += red ? kIchorRed : champion ? kIchorChampion : kIchorKill;
 			if (champion && !crypt.in) DropChampionArmour(ev.actor, red);
 			if (!crypt.in) DropOmens(ev.actor, champion, red);
-			if (ByYou(ev.other)) ExtendOmens();
+			if (ByYou(ev.other)) YourKill(ev.actor); // the momentum: time on the boons, Bloodrush
 		}
 		break;
 	case bmod::Event::PlayerDeath:
@@ -3138,6 +3567,7 @@ void OnTick()
 	}
 	bmod::modeEnemyTimeScale = run.active && !run.over ? 1. + 0.15 * run.cov[kHaste] : 1.; // the Covenant's Haste lasts the run
 	OmenTick(); // before the curse's retry, which then finds a rival an Omen just let go
+	MomentumTick(); // after the Omens' clocks: Fever's entry
 	if (crypt.in)
 	{
 		CryptTick();
@@ -3270,7 +3700,7 @@ void DrawOmens()
 		auto& o = omenInfo[r.id];
 		bmod::Chip c;
 		c.text.Format("%s %ds", o.name, bmod::SecondsLeft(r.left));
-		c.color = PalEntry(o.tier == kOmenGamble ? kGambleChip : kBoonChip);
+		c.color = o.tier == kOmenGamble ? PalEntry(kGambleChip) : BoonChip(); // a boon's gold, orange in Fever
 		c.frac = double(r.left) / std::max({ r.base, r.peak, 1 });
 		c.alpha = r.left <= 3 * kClock && (PlayClock / 15) % 2 ? 0.3 : 1.;
 		bmod::AddChip(c);
@@ -3388,6 +3818,7 @@ void OnDraw(DBloodPlayer* pPlayer)
 	}
 	DrawCurseTitle(); // even under the "No HUD" curse, which must announce itself too
 	DrawLitanyTitle();
+	DrawCentreLine(); // the momentum's (Ravening reached)
 	DrawOmens(); // the chip row isn't the HUD: chaos's chips show under "No HUD" too
 	if (bmod::mods.hideHud) return; // the "No HUD" effect hides the run line
 	DrawRunLine(sc);
@@ -5493,6 +5924,7 @@ void Serialize(FSerializer& arc)
 				running.Push(r.peak);
 			}
 			arc("omens", running);
+			SerializeMomentum(arc, Mo()); // the momentum's keys (Bloodrush)
 			arc.EndObject();
 		}
 		return;
@@ -5505,6 +5937,7 @@ void Serialize(FSerializer& arc)
 	reliquaryHint = "";
 	Run loaded;
 	TArray<int> running;
+	Momentum loadedMomentum;
 	bool has = false;
 	if (arc.BeginObject("roguelite"))
 	{
@@ -5534,6 +5967,7 @@ void Serialize(FSerializer& arc)
 		arc.Array("forge", loaded.forge, kForgeSlots);
 		arc("litanies", loaded.litanies);
 		arc("omens", running);
+		SerializeMomentum(arc, loadedMomentum);
 		arc.EndObject();
 		has = true;
 	}
@@ -5548,6 +5982,7 @@ void Serialize(FSerializer& arc)
 	run = std::move(loaded);
 	run.active = true;
 	run.curseClock = INT_MIN / 2;
+	MomentumFromSave(loadedMomentum);
 	for (unsigned i = 0; i + 3 < running.Size(); i += 4) // the save's Omens (OmensLoaded starts their effects)
 		if (running[i] >= 0 && running[i] < kNumOmens && running[i + 1] > 0 && running[i + 2] > 0 && !RunningOf(running[i]))
 			omens.Push({ running[i], running[i + 1], running[i + 2], std::max(running[i + 3], running[i + 1]), false });
@@ -5986,6 +6421,49 @@ CCMD(rl_reliquary)
 		return;
 	}
 	if (OmenReady("rl_reliquary")) SpawnOmenAhead("rl_reliquary", id);
+}
+
+// Bloodrush and Fever as they stand. It has the switch's name (a command comes before a CVAR at the console), so an
+// argument sets the switch: "rl_rush 0" still turns Bloodrush off.
+CCMD(rl_rush)
+{
+	if (argv.argc() > 1) rl_rush->CmdSet(argv[1]);
+	Printf("rl_rush %d: Bloodrush is %s (rl_rush_set <0-100> sets the meter)\n", (int)rl_rush, rl_rush ? "on" : "off");
+	if (!MomentumLive() || gamestate != GS_LEVEL)
+	{
+		Printf("  no run in progress (or this is the Crypt)\n");
+		return;
+	}
+	auto& m = Mo();
+	int tier = TierOf(m.rush), seen = CountAlerted();
+	FString drain;
+	if (m.held) drain = "held as it is until an enemy here is alerted to you";
+	else if (seen > 0) drain.Format("%.3g a second", kRushDrain * rushRate[tier]);
+	else if (m.rush > tier * kRushTierStep) drain.Format("%.3g a second, down to %d", kRushDrain, int(tier * kRushTierStep));
+	else drain = "none (at its tier's floor)";
+	Printf("  meter %.1f of %d, %s; drain %s; %d %s alerted to you\n", m.rush, int(kRushMax), rushTierNames[tier], drain.GetChars(),
+		seen, seen == 1 ? "enemy" : "enemies");
+	Printf("  kill time x%g, a plain enemy's Omen 1 in %d, the 2x kill caps %s; rl_omen_weights %d\n", TierFactor(),
+		int(1 / PlainOmenChance() + 0.5), RushTier() >= kTierRavening ? "at 3x" : "as they are", (int)rl_omen_weights);
+	Printf("rl_fever %d: Fever %s, %d of %d boons running\n", (int)rl_fever, FeverOn() ? "on" : "off", BoonsRunning(), FeverNeed());
+}
+
+CCMD(rl_rush_set)
+{
+	if (argv.argc() < 2)
+	{
+		Printf("usage: rl_rush_set <0-100>   (Bloodrush's meter; tiers at 25 Blooded, 50 Savage, 75 Ravening; rl_rush: as it stands)\n");
+		return;
+	}
+	if (!MomentumLive() || gamestate != GS_LEVEL)
+	{
+		Printf("rl_rush_set: no run in progress (or this is the Crypt)\n");
+		return;
+	}
+	auto& m = Mo();
+	m.rush = std::clamp(atof(argv[1]), 0., kRushMax);
+	RushChanged(); // a tier reached is cued, as from a kill
+	Printf(PRINT_NOTIFY, "Bloodrush: %.0f, %s%s\n", m.rush, rushTierNames[TierOf(m.rush)], rl_rush ? "" : " (rl_rush is 0: no effect)");
 }
 
 CCMD(rl_clearmap)
