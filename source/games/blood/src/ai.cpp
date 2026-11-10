@@ -351,6 +351,7 @@ void aiMoveDodge(DBloodActor* actor)
 void aiActivateDude(DBloodActor* actor)
 {
 	assert(actor->spr.type >= kDudeBase && actor->spr.type < kDudeMax);
+	if (rogue::IsRift(actor)) return; // blood2d roguelite: a waiting rift wakes only as its foe arrives (rifts.cpp)
 	if (!actor->xspr.state)
 	{
 		aiChooseDirection(actor, (actor->xspr.TargetPos - actor->spr.pos).Angle());
@@ -910,6 +911,7 @@ void aiSetTarget(DBloodActor* actor, const DVector3& pos)
 
 void aiSetTarget(DBloodActor* actor, DBloodActor* target)
 {
+	if (target && rogue::IsRift(actor)) return; // blood2d roguelite: a waiting rift takes no foe (rifts.cpp)
 	if (target == nullptr)
 	{
 		actor->SetTarget(nullptr);
@@ -939,6 +941,7 @@ int aiDamageSprite(DBloodActor* source, DBloodActor* actor, DAMAGE_TYPE nDmgType
 		return 0;
 	actor->xspr.health = ClipLow(actor->xspr.health - nDamage, 0);
 	actor->cumulDamage += nDamage;
+	if (rogue::RiftSteady(actor)) return source == actor ? 0 : nDamage; // blood2d roguelite: a hit on a rift, or its arrival's first 0.5 s, takes health only (no new foe, wake, dodge, chase)
 	DUDEINFO* pDudeInfo = getDudeInfo(actor->spr.type);
 
 	if (source)

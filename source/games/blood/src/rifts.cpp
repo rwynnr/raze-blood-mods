@@ -36,14 +36,34 @@
 // reach it: it loses health but can't die, flinch or burn, and the share it
 // lost carries over to what arrives (a champion's and the Covenant's Flesh
 // health too, which the base's RetypeDude would clamp away). A kind that no
-// longer fits the spot as the zombie wakes: the stock rise.
+// longer fits the spot as the zombie wakes: the stock rise. So does a zombie
+// waking while a giant or tiny effect runs (the base keeps each enemy's size
+// to put back, and would put a retyped one back at the zombie's).
+//
+// Nothing takes a waiting rift for a foe: it targets no one and nothing wakes
+// it (it comes on its own), it sets off no proximity trigger, shows no flames,
+// the enemies' aim never bends to it, and the run's Forge (its homing, the
+// Larder's knives, Witchfire, the Pyre) and Bloodlust pass it by. A hit on
+// its arrival in its first 0.5 s takes health and nothing more (no flinch, no
+// dodge, no chase: a flesh gargoyle doesn't come at once).
+//
+// Waves. Horde's and Hourglass's wave enemies (the roguelite's Pressure, through
+// its WaveSpawned) come through the same rift at the spot SpawnWave picked
+// behind you, with SpawnWave's own teleporter sound (201) as their cue in place
+// of 350: the same sparkles, timing (a 0-0.5 s stagger of their own) and holds,
+// and each arrives as the kind, look and health SpawnWave gave it. Chaos's
+// waves and the maps' spawners stay stock.
 //
 // Hooks into stock code (one-liners, marked "blood2d roguelite:"):
-// aiActivateDude (the wake), actDamageSprite (a rift can't die), actBurnSprite
-// (nor burn), RecoilDude (nor flinch), viewProcessSprites (the fade), the save
-// list of AI states (five states, appended) and DBloodActor's save (the plan,
-// written only when set). The roguelite calls PlanRifts from Remix and
-// RiftLedger from CountAmmo, and keeps the run's side (RiftRunLive...).
+// aiActivateDude (the wake; and a waiting rift doesn't wake), aiSetTarget (nor
+// take a foe), aiDamageSprite (a hit takes health only), actDamageSprite (a
+// rift can't die), actBurnSprite and fxFlameLick (nor burn, nor show flames),
+// RecoilDude (nor flinch), the proximity triggers (actProcessSprites), Tchernobog's
+// aim, viewProcessSprites (the fade), the save list of AI states (five states,
+// appended) and DBloodActor's save (the plan, written only when set). The
+// roguelite calls PlanRifts from Remix, RiftLedger from CountAmmo, RiftWaves
+// from Pressure and RiftWave from WaveSpawned, skips rifts in its Forge and
+// Bloodlust (IsRift), and keeps the run's side (RiftRunLive...).
 //
 //---------------------------------------------------------------------------
 
@@ -56,7 +76,7 @@
 #include "blood.h"
 #include "c_cvars.h"
 
-CVARD(Bool, rl_rifts, true, CVAR_ARCHIVE, "roguelite: a woken buried or laying zombie opens a rift and the map's plan sends another foe through (0 = the stock rise)")
+CVARD(Bool, rl_rifts, true, CVAR_ARCHIVE, "roguelite: a woken buried or laying zombie opens a rift and the map's plan sends another foe through; Horde's and Hourglass's waves come through rifts too (0 = the stock rise and waves)")
 
 BEGIN_BLD_NS
 
@@ -79,12 +99,14 @@ constexpr double kViewCone = 45;       // facing it: within this many degrees of
 constexpr double kMargin = 4;          // the room it needs past both bodies' clipdists
 constexpr double kSparkPerHeight = 24; // the sparkle's size: the arrival's height over this, from 2x to 3x
 
-// The plan, packed in DBloodActor::riftPlan: the type - kDudeBase (0: no plan), a blue champion, the stagger's steps.
-constexpr uint16_t kPlanType = 0xFF, kPlanChampion = 0x100;
+// The plan, packed in DBloodActor::riftPlan: the type - kDudeBase (0: no plan), a blue champion, the stagger's steps,
+// and a wave enemy (its own kind: it comes as it is).
+constexpr uint16_t kPlanType = 0xFF, kPlanChampion = 0x100, kPlanWave = 0x2000;
 constexpr int kPlanStaggerShift = 9;
 
 int PlanType(uint16_t plan) { return (plan & kPlanType) ? kDudeBase + (plan & kPlanType) : 0; }
 bool PlanChampion(uint16_t plan) { return (plan & kPlanChampion) != 0; }
+bool PlanWave(uint16_t plan) { return (plan & kPlanWave) != 0; }
 int PlanStagger(uint16_t plan) { return ((plan >> kPlanStaggerShift) & 15) * kStaggerStep; }
 
 // What can come through, from which part of the run (0 its first third, 1 the middle, 2 the last third). Gunmen
@@ -110,21 +132,35 @@ double TypeHeight(int type)
 	return tex->GetDisplayHeight() * (frame.scaley ? frame.scaley : 64) * REPEAT_SCALE;
 }
 
-// How near you must be for its first attack to be a melee one (the distances its AI tests, in world units).
+// How near you must be for its first attack to be a melee one (the distances its AI tests, in world units). The rifts'
+// kinds, and the other kinds a wave can copy (the base's shuffle rules: axe zombies, gill beasts, Tiny Caleb).
 double MeleeReach(int type)
 {
 	switch (type)
 	{
 	case kDudeSpiderBrown:
 	case kDudeSpiderBlack: return 115.1875; // the leap (aispid.cpp), past the bite's 57.5625
-	case kDudeSpiderRed: return 57.5625;    // the bite only
+	case kDudeSpiderRed:
+	case kDudeGillBeast: return 57.5625;    // the bite only (a gill beast's on land, aigilbst.cpp: a wave lands on dry floor)
 	case kDudeHellHound: return 38.375;     // the bite (its fire breath is ranged)
+	case kDudeTinyCaleb: return 89.5625;    // his bite (aicaleb.cpp)
+	case kDudeZombieAxeNormal:              // the axe (aizomba.cpp)
 	case kDudeZombieButcher:
 	case kDudeGargoyleFlesh:
 	case kDudeGargoyleStone:
 	case kDudePhantasm: return 64;          // the cleaver, the claws
 	default: return 0;                      // the cultists: no melee
 	}
+}
+
+// A giant or tiny effect runs (chaos's, or the map's curse). It keeps each enemy's size to put back as it ends or a game
+// is saved, so a zombie retyped under it would be put back at the zombie's size and clipdist: the base never runs its
+// shuffles with them for that reason, and a rift doesn't retype then either (the zombie rises as Blood has it).
+bool SizesOn()
+{
+	for (auto name : { "giant", "tiny" })
+		if (auto e = bmod::FindEffect(name); e && bmod::IsActive(e)) return true;
+	return false;
 }
 
 bool Champion(DBloodActor* a) { return (a->modFlags & kModChampion) || PlanChampion(a->riftPlan); }
@@ -248,11 +284,29 @@ void SparkAt(DBloodActor* a, bool sound)
 	if (sound) sfxPlay3DSound(a, 350, -1, 0);
 }
 
-// A rift with no plan left (a save from another build): the zombie rises as Blood has it.
+// A wave enemy's own kind back as SpawnWave made it (RetypeDude does nothing for the kind it has): its SEQ, whose
+// frames show it and make it solid, hittable and aimed at again, and its AI and flags (aiInitSprite: its idle state,
+// no target, blasts move it again). Its health, look and modFlags stay as they are.
+void Restore(DBloodActor* a)
+{
+	a->SetTarget(nullptr);
+	seqSpawn(getDudeInfo(a->spr.type)->seqStartID, a, -1);
+	aiInitSprite(a);
+}
+
+// A rift that can't bring its foe: a zombie with no plan left (a save from another build), or one whose kind can't be
+// retyped now (SizesOn). The zombie rises as Blood has it, from where it lay (its rise's SEQ shows it again). Any other
+// kind (a wave enemy's plan lost) just comes as it is.
 void RiseStock(DBloodActor* a)
 {
 	a->riftPlan = 0;
-	aiNewState(a, a->spr.type == kDudeZombieAxeLaying ? &zombie13AC2C : &zombieEUp);
+	if (a->spr.type == kDudeZombieAxeBuried || a->spr.type == kDudeZombieAxeLaying)
+	{
+		aiNewState(a, a->spr.type == kDudeZombieAxeLaying ? &zombie13AC2C : &zombieEUp);
+		return;
+	}
+	Restore(a);
+	aiActivateDude(a);
 }
 
 // The map's own look for a kind (its palette and size), as the remix keeps it; else stock (its SEQ sets its own).
@@ -270,25 +324,30 @@ void LookOf(int type, int& pal, DVector2& scale)
 		}
 }
 
-// The foe comes through: the zombie retyped in place, on the floor where it lay, facing you.
+// The foe comes through: the zombie retyped in place, on the floor where it lay, facing you (or a wave enemy, as it is).
 void Arrive(DBloodActor* a)
 {
 	int type = PlanType(a->riftPlan);
-	if (!type)
+	bool wave = PlanWave(a->riftPlan);
+	if (!type || (!wave && SizesOn()))
 	{
 		RiseStock(a);
 		return;
 	}
-	bool champion = Champion(a), red = (a->modFlags & kModRedChampion) != 0;
-	int health = int(ArrivalHealth(a, type, false));
-	a->modFlags &= ~(kModChampion | kModRedChampion); // RiftMakeChampion sets them again; every other bit stays
-	a->SetTarget(nullptr); // with a target RetypeDude would wake it at once, past the hold
-	int pal;
-	DVector2 scale;
-	LookOf(type, pal, scale);
-	bmod::RetypeDude(a, type, pal, scale);
-	a->xspr.health = health;
-	if (champion) RiftMakeChampion(a, red);
+	if (wave) Restore(a);
+	else
+	{
+		bool champion = Champion(a), red = (a->modFlags & kModRedChampion) != 0;
+		int health = int(ArrivalHealth(a, type, false));
+		a->modFlags &= ~(kModChampion | kModRedChampion); // RiftMakeChampion sets them again; every other bit stays
+		a->SetTarget(nullptr); // with a target RetypeDude would wake it at once, past the hold
+		int pal;
+		DVector2 scale;
+		LookOf(type, pal, scale);
+		bmod::RetypeDude(a, type, pal, scale);
+		a->xspr.health = health;
+		if (champion) RiftMakeChampion(a, red);
+	}
 	a->riftPlan = 0;
 	if (auto sect = a->sector())
 	{
@@ -315,8 +374,9 @@ bool TryArrive(DBloodActor* a)
 	return true;
 }
 
-// riftOpen's entry: the zombie vanishes (no frame of it shows, nothing but a blast reaches it, and a blast doesn't move
-// it), and the first sparkle opens.
+// riftOpen's entry: the zombie (or the wave enemy just placed) vanishes (no frame of it shows, nothing but a blast
+// reaches it, and a blast doesn't move it), and the first sparkle opens: with the respawn sound for a zombie's rift (one
+// to a group), silent for a wave's (SpawnWave sounds its teleporter, 201, as it places each).
 void OpenEnter(DBloodActor* a)
 {
 	seqKill(a);
@@ -326,7 +386,7 @@ void OpenEnter(DBloodActor* a)
 	a->vel.X = a->vel.Y = 0;
 	a->xspr.burnTime = 0;
 	a->SetTarget(nullptr);
-	SparkAt(a, ShouldSound(a->spr.pos.XY()));
+	SparkAt(a, !PlanWave(a->riftPlan) && ShouldSound(a->spr.pos.XY()));
 }
 
 // riftSpark's entry: the second sparkle, back to back with the first; the foe is due at 1.5 s and its stagger.
@@ -475,13 +535,29 @@ bool Wake(DBloodActor* zombie)
 {
 	if (!zombie || !zombie->hasX() || !zombie->riftPlan) return false;
 	int type = PlanType(zombie->riftPlan);
-	if (!rl_rifts || !RiftRunLive() || !type || !Fits(zombie, type, ArrivalHeight(zombie)))
+	if (!rl_rifts || !RiftRunLive() || !type || PlanWave(zombie->riftPlan) || SizesOn() || !Fits(zombie, type, ArrivalHeight(zombie)))
 	{
 		zombie->riftPlan = 0; // the stock rise, from now on
 		return false;
 	}
 	aiNewState(zombie, &riftOpen);
 	return true;
+}
+
+// Waves: the RiftWaves living now (Pressure's), so a wave spawned meanwhile is the roguelite's, not chaos's.
+int waveScopes = 0;
+
+// A wave enemy SpawnWave just placed (RiftWave): it vanishes into a rift of its own kind, its stagger hashed from the
+// actor and the clock (no game random drawn). SpawnWave's last steps then find a waiting rift: it takes no target
+// (aiSetTarget) and doesn't wake (aiActivateDude), and its teleporter sound is the rift's cue.
+void WaveRift(DBloodActor* a)
+{
+	if (waveScopes <= 0 || !rl_rifts || !RiftRunLive() || !a || a->IsPlayerActor() || !a->hasX() || a->xspr.health <= 0) return;
+	int kind = a->spr.type - kDudeBase;
+	if (kind <= 0 || kind > kPlanType || a->riftPlan || !a->sector()) return;
+	uint32_t hash = (uint32_t(a->GetIndex()) * 2654435761u) ^ (uint32_t(PlayClock) * 40503u);
+	a->riftPlan = uint16_t(kind | kPlanWave | (((hash >> 16) & 15) << kPlanStaggerShift));
+	aiNewState(a, &riftOpen);
 }
 
 void RiftEvent(const bmod::EventInfo& ev)
@@ -529,10 +605,18 @@ bool RiftWake(DBloodActor* zombie)
 
 void RiftLedger(DBloodActor* a, int& type, double& health)
 {
-	int planned = a && a->hasX() ? rifts::PlanType(a->riftPlan) : 0;
-	if (!planned) return;
+	int planned = a && a->hasX() && !rifts::PlanWave(a->riftPlan) ? rifts::PlanType(a->riftPlan) : 0;
+	if (!planned || rifts::SizesOn()) return; // a wave enemy comes as it is; under a size effect the zombies rise as zombies
 	health = rifts::ArrivalHealth(a, planned, true) / 16.;
 	type = planned;
+}
+
+RiftWaves::RiftWaves() { rifts::waveScopes++; }
+RiftWaves::~RiftWaves() { rifts::waveScopes--; }
+
+void RiftWave(DBloodActor* spawned)
+{
+	rifts::WaveRift(spawned);
 }
 
 int RiftDamage(DBloodActor* target, DAMAGE_TYPE damageType, int damage)

@@ -39,6 +39,7 @@ BEGIN_BLD_NS
 void fxFlameLick(DBloodActor* actor, sectortype*) // 0
 {
 	if (!actor) return;
+	if (rogue::RiftFireproof(actor)) return; // blood2d roguelite: no flames on a rift (callers post this before actBurnSprite)
 	double top, bottom;
 	GetActorExtents(actor, &top, &bottom);
 	auto tex = TexMan.GetGameTexture(actor->spr.spritetexture());

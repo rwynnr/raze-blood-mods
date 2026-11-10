@@ -5544,6 +5544,7 @@ static void actCheckProximity()
 					auto nextdude = it1.Peek();
 
 					if (dudeactor->spr.flags & 32 || !dudeactor->hasX()) continue;
+					if (rogue::IsRift(dudeactor)) continue; // blood2d roguelite: a waiting rift sets off nothing (rifts.cpp)
 
 					if ((unsigned int)dudeactor->xspr.health > 0)
 					{
