@@ -4253,8 +4253,9 @@ void StatsFromSave(const MapStats& s)
 // drops at your feet (as Cleared's does). Then its clock runs, 10 s (its time), and each kill of yours sets it back to
 // 10 s at least, 15 s for a champion (1.5x its time). Run out, it takes 25 health and ends; 12 kills end it, sated.
 // Rampage, 20 s: each kill of yours is a stack, +0.5x damage (OmenDeal, inside its 6x) and +1 s (up to 3x its time, the
-// ceiling every Omen's time has). 3 s without a kill, from its take or your last kill, is a lapse: the stacks go and
-// it takes 10 health, once, until your next kill starts the 3 s again. It runs on to its end.
+// ceiling every Omen's time has). 3 s without a kill, from your last kill (or a take while it runs with a stack), is a
+// lapse: the stacks go and it takes 10 health, once, until your next kill starts the 3 s again. No kill since its take
+// or the last lapse: no stack to lose, no lapse. It runs on to its end.
 // Corpse Fire: taking it takes 20 health. For 20 s each kill of yours bursts where the body fell: a TNT stick's blast
 // to see and hear, its size (explodeInfo's radius, 75), forged and marked kModSpareYou as the Larder's are (so it
 // spares you, ScaleDamage; Brimstone Leap throws you, as any forged blast does), dealing about 30 itself: 25 at the
@@ -4349,9 +4350,11 @@ bool BeginGamble(RunningOmen& r, int clocks)
 		break;
 	}
 	case kOmenRampage:
+		// A lapse needs a stack to lose: from none, only a kill arms it (GambleKill). A fresh take also clears the flag an
+		// earlier Rampage, run out within 3 s of a kill, left set.
 		if (fresh) gambles.stacks = 0;
-		gambles.armed = true;
-		gambles.lapseAt = PlayClock + kRampageLapse;
+		gambles.armed = gambles.stacks > 0;
+		if (gambles.armed) gambles.lapseAt = PlayClock + kRampageLapse;
 		break;
 	case kOmenCorpseFire:
 		GamblePrice(p, kCorpseFirePrice);
@@ -4398,11 +4401,14 @@ void GambleTick(DBloodPlayer* p)
 	if (RunningOf(kOmenRampage) && gambles.armed && PlayClock >= gambles.lapseAt)
 	{
 		gambles.armed = false;
-		gambles.stacks = 0;
-		int took = GamblePrice(p, kRampagePrice);
-		StatsGamble(kStatLapses);
-		FString text = took > 0 ? FStringf("Rampage lapses: back to 1x, %d health", (took + 8) >> 4) : FString("Rampage lapses: back to 1x");
-		viewSetMessage(text.GetChars(), TEXTCOLOR_PURPLE);
+		if (gambles.stacks > 0) // nothing to lose (a save from before BeginGamble armed only with a stack): no lapse
+		{
+			gambles.stacks = 0;
+			int took = GamblePrice(p, kRampagePrice);
+			StatsGamble(kStatLapses);
+			FString text = took > 0 ? FStringf("Rampage lapses: back to 1x, %d health", (took + 8) >> 4) : FString("Rampage lapses: back to 1x");
+			viewSetMessage(text.GetChars(), TEXTCOLOR_PURPLE);
+		}
 	}
 	if (!gambleBursts.Size()) return;
 	auto due = std::move(gambleBursts);
@@ -4457,7 +4463,7 @@ void GambleKill(DBloodActor* victim)
 }
 
 // A gamble's chip: its own clock and what it counts ("Hunger 7s 5/12", "Rampage 14s x2.5", "Corpse Fire 18s"). The
-// fill: The Hunger's drains over its last 10 s; Rampage's is the 3 s before a lapse (empty once lapsed); Corpse Fire's
+// fill: The Hunger's drains over its last 10 s; Rampage's is the 3 s before a lapse (empty with no stack); Corpse Fire's
 // measures toward its 2x, as a boon's toward its cap.
 void GambleChip(const RunningOmen& r, bmod::Chip& c)
 {
@@ -5443,7 +5449,7 @@ int ScaleDamage(DBloodActor* source, DBloodActor* target, DAMAGE_TYPE damageType
 		{
 			forgeExplosionNow->modFlags |= kModKicked;
 			DVector2 away = target->spr.pos.XY() - forgeExplosionNow->spr.pos.XY();
-			if (away.LengthSquared() > 1) target->vel.XY() += away.Unit() * 4.;
+			if (away.LengthSquared() > 1) target->vel += away.Unit() * 4.; // X and Y (vel.XY() is a copy)
 			target->vel.Z = std::min(target->vel.Z, kLeapKick); // a little over a jump (-11.7): a 64-unit ledge from your feet
 			LitanyFired(kLitLeap);
 		}

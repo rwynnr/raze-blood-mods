@@ -38,7 +38,8 @@
 // health too, which the base's RetypeDude would clamp away). A kind that no
 // longer fits the spot as the zombie wakes: the stock rise. So does a zombie
 // waking while a giant or tiny effect runs (the base keeps each enemy's size
-// to put back, and would put a retyped one back at the zombie's).
+// to put back, and would put a retyped one back at the zombie's). Such a
+// zombie, still asleep, takes blasts and fire as stock: no last point kept.
 //
 // Nothing takes a waiting rift for a foe: it targets no one and nothing wakes
 // it (it comes on its own), it sets off no proximity trigger, shows no flames,
@@ -469,12 +470,21 @@ bool Plannable(DBloodActor* a)
 	return a->sector() && !IsUnderwaterSector(a->sector());
 }
 
-// A zombie asleep whose wake opens a rift (this very hit may wake it), or a waiting rift: it can't die or burn.
+// A planned zombie's wake would open its rift now (Wake's tests): its kind still fits, and no giant or tiny effect runs.
+bool Opens(DBloodActor* zombie)
+{
+	int type = PlanType(zombie->riftPlan);
+	return rl_rifts && RiftRunLive() && type && !PlanWave(zombie->riftPlan) && !SizesOn() && Fits(zombie, type, ArrivalHeight(zombie));
+}
+
+// A zombie asleep whose wake opens a rift (this very hit may wake it), or a waiting rift: it can't die or burn. One
+// whose wake would be the stock rise (Opens) takes its hits and fire as stock.
 bool Shielded(DBloodActor* a)
 {
 	if (IsRift(a)) return true;
-	if (!a || !a->hasX() || !a->riftPlan || !rl_rifts || !RiftRunLive()) return false;
-	return (a->spr.type == kDudeZombieAxeBuried && a->xspr.aiState == &zombieEIdle) || (a->spr.type == kDudeZombieAxeLaying && a->xspr.aiState == &zombieSIdle);
+	if (!a || !a->hasX() || !a->riftPlan) return false;
+	bool asleep = (a->spr.type == kDudeZombieAxeBuried && a->xspr.aiState == &zombieEIdle) || (a->spr.type == kDudeZombieAxeLaying && a->xspr.aiState == &zombieSIdle);
+	return asleep && Opens(a);
 }
 
 // The map's plan (PlanRifts).
@@ -561,8 +571,7 @@ void Plan(uint32_t seed, int mapIndex, double depth)
 bool Wake(DBloodActor* zombie)
 {
 	if (!zombie || !zombie->hasX() || !zombie->riftPlan) return false;
-	int type = PlanType(zombie->riftPlan);
-	if (!rl_rifts || !RiftRunLive() || !type || PlanWave(zombie->riftPlan) || SizesOn() || !Fits(zombie, type, ArrivalHeight(zombie)))
+	if (!Opens(zombie))
 	{
 		zombie->riftPlan = 0; // the stock rise, from now on
 		return false;
